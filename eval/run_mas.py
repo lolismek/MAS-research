@@ -62,88 +62,112 @@ def run_python(code: str) -> str:
 
 
 # ---------------------------------------------------------------- MAF wiring
+def make_client():
+    """OpenAIChatClient pointed at Perplexity. Verified API (MAF 1.8.0):
+    OpenAIChatClient(model=..., api_key=..., base_url=...). Perplexity's
+    OpenAI-compatible base is https://api.perplexity.ai (no /v1 suffix needed by
+    the SDK -> it appends /chat/completions)."""
+    from agent_framework.openai import OpenAIChatClient
+    return OpenAIChatClient(
+        model=C.MAS_MODEL,
+        api_key=C.api_key(),
+        base_url=C.PPLX_BASE_URL,
+    )
+
+
 def build_workflow():
     # Lazy imports so the module parses without agent-framework installed.
     from agent_framework import Agent
-    from agent_framework.openai import OpenAIChatClient        # TODO confirm import/params
-    from agent_framework.orchestrations import MagenticBuilder
+    from agent_framework.orchestrations import MagenticBuilder, StandardMagenticManager
 
-    client = OpenAIChatClient(
-        api_key=C.api_key(),
-        base_url=C.PPLX_BASE_URL + "/v1",
-        model_id=C.MAS_MODEL,
-    )
+    client = make_client()
     researcher = Agent(
+        client,
         name="ResearcherAgent",
         description="Finds information from the web.",
         instructions="You research facts using web_search. Report findings; do not compute.",
-        client=client, tools=[web_search])
+        tools=[web_search])
     coder = Agent(
+        client,
         name="CoderAgent",
         description="Writes and runs Python for calculations and data parsing.",
         instructions="You solve quantitative subtasks with run_python. Show your work.",
-        client=client, tools=[run_python])
+        tools=[run_python])
     filer = Agent(
+        client,
         name="FileAgent",
         description="Reads and reasons over provided text.",
-        instructions="You extract and summarize relevant details from provided content.",
-        client=client)
-    manager = Agent(
+        instructions="You extract and summarize relevant details from provided content.")
+    # The Magentic manager wraps a plain agent and adds the plan + progress-ledger
+    # loop. Round/stall/reset caps cap cost & runaway loops.
+    manager_agent = Agent(
+        client,
         name="MagenticManager",
         description="Coordinates the team to answer the task.",
-        instructions=("Coordinate the team to fully answer the task, then give a final answer "
-                      "on a line starting exactly with 'FINAL ANSWER:' followed by the answer only."),
-        client=client)
-    return MagenticBuilder(
-        participants=[researcher, coder, filer],
-        manager_agent=manager,
-        enable_plan_review=False,
+        instructions=("Coordinate the team to fully answer the task. When the task is solved, "
+                      "give the final answer on a line starting exactly with 'FINAL ANSWER:' "
+                      "followed by the answer only."))
+    manager = StandardMagenticManager(
+        agent=manager_agent,
         max_round_count=C.MAX_ROUND_COUNT,
         max_stall_count=C.MAX_STALL_COUNT,
         max_reset_count=C.MAX_RESET_COUNT,
+    )
+    return MagenticBuilder(
+        participants=[researcher, coder, filer],
+        manager=manager,
+        enable_plan_review=False,
+        intermediate_output_from="all",     # capture every agent's output for the transcript
     ).build()
 
 
+def _as_text(obj) -> str:
+    """Best-effort text extraction from an output item (AgentResponse/Message/str)."""
+    t = getattr(obj, "text", None)
+    if t:
+        return t if isinstance(t, str) else str(t)
+    return str(obj)
+
+
 async def run_one(workflow, task_prompt: str):
-    """Run the workflow; return (transcript_text, events, final_answer, usage)."""
-    from agent_framework import AgentResponse, AgentResponseUpdate
+    """Run the workflow non-streamed; return (transcript, events, final_answer, usage).
 
-    events, buf, order = [], {}, []          # buf: msg_id -> [executor, text]
-    final_answer = None
+    Uses WorkflowRunResult.get_intermediate_outputs() (per-agent responses, enabled
+    via intermediate_output_from='all') + get_outputs() (final). This is far more
+    robust than guessing streamed event-type strings.
+    """
+    result = await workflow.run(task_prompt)        # -> WorkflowRunResult (list-like)
 
-    async for event in workflow.run(task_prompt, stream=True):
-        try:
-            events.append({"type": getattr(event, "type", None),
-                           "executor": getattr(event, "executor_id", None),
-                           "data": str(getattr(event, "data", ""))[:2000]})
-        except Exception:
-            pass
-        et = getattr(event, "type", None)
-        data = getattr(event, "data", None)
-        if et == "output" and isinstance(data, AgentResponseUpdate):
-            mid = getattr(data, "message_id", None) or id(data)
-            if mid not in buf:
-                buf[mid] = [getattr(event, "executor_id", "?"), ""]
-                order.append(mid)
-            buf[mid][1] += str(data)
-        elif et == "magentic_orchestrator":
-            order.append(("orch", str(getattr(data, "event_type", "")), str(getattr(data, "content", ""))[:3000]))
-        elif et == "output" and isinstance(data, AgentResponse):
-            final_answer = data.messages[-1].text if getattr(data, "messages", None) else None
+    inter = []
+    try:
+        inter = result.get_intermediate_outputs()
+    except Exception as e:
+        inter = []
+        print("  (get_intermediate_outputs failed:", repr(e), ")")
+    outs = []
+    try:
+        outs = result.get_outputs()
+    except Exception as e:
+        print("  (get_outputs failed:", repr(e), ")")
 
-    # flatten transcript
+    # transcript: each intermediate agent output as a labelled block, then final.
     lines = []
-    for o in order:
-        if isinstance(o, tuple) and o[0] == "orch":
-            lines.append(f"\n---------- ORCHESTRATOR [{o[1]}] ----------\n{o[2]}")
-        elif o in buf:
-            who, txt = buf[o]
-            lines.append(f"\n---------- {who} ----------\n{txt}")
+    for o in inter:
+        who = (getattr(o, "author_name", None) or getattr(o, "executor_id", None)
+               or type(o).__name__)
+        lines.append(f"\n---------- {who} ----------\n{_as_text(o)}")
+    final_answer = _as_text(outs[-1]) if outs else None
     if final_answer:
-        lines.append(f"\nFINAL ANSWER: {final_answer}")
-    transcript = "".join(lines)
+        lines.append(f"\n---------- FINAL OUTPUT ----------\n{final_answer}")
+    transcript = "".join(lines) if lines else "(empty transcript)"
 
-    # usage: MAF may not expose it -> rough estimate (flagged)
+    # debug events: light dump for inspection
+    events = [{"kind": "intermediate", "type": type(o).__name__, "text": _as_text(o)[:2000]}
+              for o in inter]
+    events += [{"kind": "output", "type": type(o).__name__, "text": _as_text(o)[:2000]}
+               for o in outs]
+
+    # usage: MAF may not expose it here -> rough char/4 estimate (flagged approximate)
     approx_tok = max(1, len(transcript) // 4)
     pin, pout = C.PRICES.get(C.MAS_MODEL, (0, 0))
     usage = {"input_tokens": approx_tok, "output_tokens": approx_tok // 4,
@@ -176,11 +200,16 @@ def do_run(workflow, task, run_idx):
     print(f"ran {task['uuid']} run {run_idx} ({meta['wall_clock_s']}s) err={meta.get('error')}")
 
 
-def main(smoke=False):
+def main(smoke=False, level=None):
     tasks = [json.loads(l) for l in open(C.TASKS_JSONL)]
     workflow = build_workflow()
     if smoke:
-        do_run(workflow, tasks[0], 0); return
+        pool = [t for t in tasks if level is None or t.get("level") == level]
+        if not pool:
+            print(f"no task at level {level}; falling back to first task"); pool = tasks
+        t = pool[0]
+        print(f"smoke: task {t['uuid']} (level {t.get('level')})")
+        do_run(workflow, t, 0); return
     for t in tasks:
         for r in range(C.RUNS_PER_TASK):
             do_run(workflow, t, r)
@@ -189,4 +218,6 @@ def main(smoke=False):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", action="store_true")
-    main(smoke=ap.parse_args().smoke)
+    ap.add_argument("--level", type=int, default=None, help="restrict --smoke to this GAIA level")
+    a = ap.parse_args()
+    main(smoke=a.smoke, level=a.level)
