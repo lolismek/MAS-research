@@ -64,18 +64,24 @@ def build_judge_prompt(trace_text: str, definitions: str, examples: str) -> str:
 
 
 # --- parser (regex cascade ported from parse_responses) ---
+# IMPORTANT: every (yes|no) is \b-bounded. Two mode NAMES contain those substrings
+# — "Ig(no)red Other Agent's Input" (2.5) and "(No) or Incorrect Verification" (3.3)
+# — so an unbounded `(yes|no)` matched the letters inside the name and silently
+# forced 2.5/3.3 to "no". The bounded patterns below also consume the name via
+# [^:\n]* and read the answer AFTER the colon, so the name can never be mistaken
+# for the verdict.
 def _find_mode(text: str, mode: str):
+    me = re.escape(mode)
     patterns = [
-        rf"C\..*?{re.escape(mode)}.*?(yes|no)",
-        rf"C{re.escape(mode)}\s+(yes|no)",
-        rf"{re.escape(mode)}\s*[:]\s*(yes|no)",
-        rf"{re.escape(mode)}\s+(yes|no)",
-        rf"{re.escape(mode)}\s*\n\s*(yes|no)",
-        rf"C\.{re.escape(mode)}\s*\n\s*(yes|no)",
-        rf"(?:C\.)?{re.escape(mode)}.*?(yes|no)",
+        # "2.5 Ignored Other Agent's Input: yes"  (code, name up to colon, then answer)
+        rf"(?:^|\n)\s*(?:C\.?\s*)?{me}\b[^:\n]*:\s*\**\s*\b(yes|no)\b",
+        # "C.2.5 yes" / "2.5 yes" on one line (no colon), bounded answer
+        rf"(?:^|\n)\s*(?:C\.?\s*)?{me}\b[^\n]*?\b(yes|no)\b",
+        # "2.5\nyes" (answer on the next line)
+        rf"(?:^|\n)\s*(?:C\.?\s*)?{me}\s*\n\s*\b(yes|no)\b",
     ]
     for pat in patterns:
-        m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
+        m = re.search(pat, text, re.IGNORECASE)
         if m:
             return 1 if m.group(1).lower() == "yes" else 0
     return 0  # default: not flagged (matches notebook fallback)

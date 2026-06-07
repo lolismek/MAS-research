@@ -17,10 +17,10 @@
 | 2.2 | Fail to Ask for Clarification | 1 | 0% | 0% |
 | 2.3 | Task Derailment | 3 | 0% | 0% |
 | 2.4 ⭐ | Information Withholding | 0 | - | - |
-| 2.5 ⭐ | Ignored Other Agent's Input | 0 | - | - |
+| 2.5 ⭐ | Ignored Other Agent's Input | 2 | 50% | 0% |
 | 2.6 (control) | Action-Reasoning Mismatch | 13 | 54% | 31% |
 | 3.1 | Premature Termination | 11 | 64% | 55% |
 | 3.2 | Weak Verification | 14 | 100% | 93% |
-| 3.3 | No or Incorrect Verification | 0 | - | - |
+| 3.3 | No or Incorrect Verification | 13 | 69% | 54% |
 
 _⭐ = structural-core target (expect to persist); 2.6 = capability control (expect to drop)._
