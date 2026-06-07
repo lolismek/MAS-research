@@ -14,21 +14,22 @@ ROOT = Path(__file__).resolve().parent.parent          # MAS-memory-research/
 
 
 def _load_dotenv() -> None:
-    """Load KEY=VALUE lines from .env.local (gitignored) into os.environ.
+    """Load KEY=VALUE lines from .env.local / .env (gitignored) into os.environ.
 
     Lets the user hand off the Perplexity key via a file instead of pasting the
     secret into chat. Existing env vars take precedence (don't clobber).
     """
-    f = ROOT / ".env.local"
-    if not f.exists():
-        return
-    for line in f.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    for fname in (".env.local", ".env"):
+        f = ROOT / fname
+        if not f.exists():
             continue
-        k, _, v = line.partition("=")
-        k, v = k.strip(), v.strip().strip('"').strip("'")
-        os.environ.setdefault(k, v)
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            os.environ.setdefault(k, v)
 
 
 _load_dotenv()

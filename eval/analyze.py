@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as C
-from grade import grade
+from grade import grade, extract_final_answer
 
 
 def _load(p):
@@ -34,8 +34,10 @@ def main():
             jr = _load(C.JUDGED_DIR / u / f"run_{r}.json")
             fa_p = C.RUNS_DIR / u / str(r) / "final_answer.txt"
             meta = _load(C.RUNS_DIR / u / str(r) / "meta.json")
-            new_answer = fa_p.read_text(errors="ignore").strip() if fa_p.exists() else None
-            new_pass = grade(new_answer, t["expected_answer"]) if new_answer is not None else None
+            raw = fa_p.read_text(errors="ignore").strip() if fa_p.exists() else None
+            # strip a leading "FINAL ANSWER:" if present (same extractor used on originals)
+            new_answer = (extract_final_answer(raw) or raw) if raw else None
+            new_pass = grade(new_answer, t["expected_answer"]) if new_answer else None
             if meta and meta.get("usage"):
                 cost["mas_usd"] += meta["usage"].get("cost_usd", 0.0)
             if jr and jr.get("usage"):

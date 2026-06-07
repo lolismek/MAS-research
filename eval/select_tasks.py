@@ -21,6 +21,32 @@ def norm(s: str) -> str:
     return WS.sub(" ", s.strip().lower())
 
 
+# ---- modality filter: drop tasks that need audio/video we can't access ----
+# (Perplexity has no audio/vision; markitdown can't transcribe audio.) These would
+# fail for a MODALITY reason, not inter-agent misalignment, so they're excluded so
+# the structural-vs-capability signal isn't muddied. Visual tasks whose answer
+# lives in TEXT (PDF/HTML/page explanations) are intentionally kept.
+AV_EXT = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac",
+          ".mp4", ".mov", ".avi", ".mkv", ".webm"}
+AUDIO_KW = re.compile(r"voice memo|listen to the|audio recording|\.mp3|\.wav", re.I)
+VIDEO_WATCH_KW = re.compile(r"\b360\b|VR video|shown in the video|watch the video|"
+                            r"frame of the video", re.I)
+
+
+def modality_blocked(task):
+    """Return a reason string if the task needs inaccessible audio/video, else None."""
+    d = C.GAIA_LEVEL_DIRS.get(task["level"])
+    if d:
+        for f in (d / task["uuid"] / "0").glob(task["uuid"] + ".*"):
+            if f.suffix.lower() in AV_EXT:
+                return f"av-attachment({f.suffix})"
+    if AUDIO_KW.search(task["prompt"]):
+        return "audio-prompt"
+    if VIDEO_WATCH_KW.search(task["prompt"]):
+        return "video-watch-prompt"
+    return None
+
+
 def load_local_tasks():
     tasks = []
     for level, d in C.GAIA_LEVEL_DIRS.items():
@@ -132,6 +158,13 @@ def main():
             failed.append(t)
     from collections import Counter  # noqa
     print(f"matched & ORIGINAL-FAILED: {len(failed)} | pool by level:",
+          dict(Counter(t['level'] for t in failed)))
+
+    # drop modality-blocked (audio/video) tasks from the pool before stratifying
+    blocked = [(t["uuid"][:8], modality_blocked(t)) for t in failed if modality_blocked(t)]
+    failed = [t for t in failed if not modality_blocked(t)]
+    print(f"excluded {len(blocked)} modality-blocked tasks: {blocked}")
+    print(f"text-solvable pool: {len(failed)} | by level:",
           dict(Counter(t['level'] for t in failed)))
 
     sel = stratify(failed)
