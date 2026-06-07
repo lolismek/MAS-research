@@ -65,10 +65,9 @@ def api_key() -> str:
 # ---------------------------------------------------------------- models
 # MAS arm (confirmed available on Perplexity Agent API):
 MAS_MODEL = "openai/gpt-5.4-mini"
-# Judge: o4-mini (chosen) is NOT on Perplexity. User opted to reuse the MAS model.
-# NOTE: same-model self-judging is a known weak spot -> swap to a stronger/cross-
-# provider id (e.g. anthropic/claude-sonnet-4-6) to re-judge a subset as a check.
-JUDGE_MODEL = "openai/gpt-5.4-mini"
+# Judge: pure gpt-5.4 (stronger than the MAS model -> avoids same-model self-judging,
+# more trustworthy labels). Verified on Perplexity at $2.50/$15.00 per 1M (in/out).
+JUDGE_MODEL = "openai/gpt-5.4"
 JUDGE_TEMPERATURE = 0.0              # deviates from paper's 1.0 for label determinism
 
 # Approx per-1M-token prices (USD, in/out). Perplexity = first-party, no markup;

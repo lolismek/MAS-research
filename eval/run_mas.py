@@ -368,7 +368,7 @@ def task_prompt(task) -> str:
     return p
 
 
-def do_run(workflow, task, run_idx):
+def do_run(task, run_idx):
     out_dir = C.RUNS_DIR / task["uuid"] / str(run_idx)
     if (out_dir / "transcript.txt").exists():
         print("skip (exists):", out_dir); return
@@ -376,6 +376,9 @@ def do_run(workflow, task, run_idx):
     t0 = time.time()
     try:
         _reset_usage()
+        # A MAF workflow instance is SINGLE-USE (errors on a 2nd run), so build a
+        # fresh one for every run.
+        workflow = build_workflow()
         transcript, events, final, usage = asyncio.run(
             asyncio.wait_for(run_one(workflow, task_prompt(task)), RUN_TIMEOUT_S))
         meta = {"rounds": None, "error": None, "usage": usage,
@@ -395,17 +398,16 @@ def do_run(workflow, task, run_idx):
 
 def main(smoke=False, level=None):
     tasks = [json.loads(l) for l in open(C.TASKS_JSONL)]
-    workflow = build_workflow()
     if smoke:
         pool = [t for t in tasks if level is None or t.get("level") == level]
         if not pool:
             print(f"no task at level {level}; falling back to first task"); pool = tasks
         t = pool[0]
         print(f"smoke: task {t['uuid']} (level {t.get('level')})")
-        do_run(workflow, t, 0); return
+        do_run(t, 0); return
     for t in tasks:
         for r in range(C.RUNS_PER_TASK):
-            do_run(workflow, t, r)
+            do_run(t, r)
 
 
 if __name__ == "__main__":
