@@ -291,41 +291,66 @@ def _author(obj) -> str:
     return getattr(obj, "agent_id", None) or type(obj).__name__
 
 
-async def run_one(workflow, task_prompt: str):
-    """Run the workflow non-streamed; return (transcript, events, final_answer, usage).
+def _render_ledger(led) -> str:
+    """Render a MagenticProgressLedger (the manager's per-round self-assessment +
+    the exact instruction it sends the chosen agent) as readable lines."""
+    fields = ["is_request_satisfied", "is_in_loop", "is_progress_being_made",
+              "next_speaker", "instruction_or_question"]
+    out = []
+    for f in fields:
+        item = getattr(led, f, None)
+        if item is None:
+            continue
+        ans = getattr(item, "answer", "")
+        reason = getattr(item, "reason", "")
+        out.append(f"  {f}: {ans}" + (f"  — {reason}" if reason else ""))
+    return "\n".join(out)
 
-    Uses WorkflowRunResult.get_intermediate_outputs() (per-agent responses, enabled
-    via intermediate_output_from='all') + get_outputs() (final). This is far more
-    robust than guessing streamed event-type strings.
+
+def _render_orchestrator(data):
+    """(label, text) for a MagenticOrchestratorEvent: PLAN_CREATED / REPLANNED carry
+    the task ledger (a Message); PROGRESS_LEDGER_UPDATED carries the progress ledger."""
+    et = getattr(data, "event_type", None)
+    et_name = getattr(et, "name", str(et))
+    content = getattr(data, "content", None)
+    if hasattr(content, "instruction_or_question"):          # progress ledger
+        return f"MANAGER · {et_name} (progress ledger)", _render_ledger(content)
+    return f"MANAGER · {et_name} (task ledger)", _as_text(content)   # Message
+
+
+async def run_one(workflow, task_prompt: str):
+    """Run the workflow and capture the FULL event stream in order.
+
+    Earlier this used only get_intermediate_outputs()+get_outputs(), which keep ONLY
+    the specialist replies and final answer and SILENTLY DROP every
+    `magentic_orchestrator` event — the manager's plan, re-plans, and per-round
+    progress ledgers (incl. the exact instruction sent to each agent). Those are the
+    most important evidence for coordination/verification failure modes, so we now
+    iterate the whole result (WorkflowRunResult is the complete event list).
     """
     result = await workflow.run(task_prompt)        # -> WorkflowRunResult (list-like)
 
-    inter = []
-    try:
-        inter = result.get_intermediate_outputs()
-    except Exception as e:
-        inter = []
-        print("  (get_intermediate_outputs failed:", repr(e), ")")
-    outs = []
-    try:
-        outs = result.get_outputs()
-    except Exception as e:
-        print("  (get_outputs failed:", repr(e), ")")
-
-    # transcript: each intermediate agent output as a labelled block, then final.
-    lines = []
-    for o in inter:
-        lines.append(f"\n---------- {_author(o)} ----------\n{_as_text(o)}")
-    final_answer = _as_text(outs[-1]) if outs else None
-    if final_answer:
-        lines.append(f"\n---------- FINAL OUTPUT ----------\n{final_answer}")
+    lines, events = [], []
+    final_answer = None
+    for ev in result:                               # full event stream, in order
+        etype = getattr(ev, "type", None)
+        data = getattr(ev, "data", None)
+        if etype == "magentic_orchestrator":
+            label, text = _render_orchestrator(data)
+            lines.append(f"\n========== {label} ==========\n{text}")
+            events.append({"kind": etype, "author": "MagenticManager",
+                           "type": getattr(getattr(data, "event_type", None), "name", ""),
+                           "text": text[:4000]})
+        elif etype == "intermediate":
+            lines.append(f"\n---------- {_author(data)} ----------\n{_as_text(data)}")
+            events.append({"kind": etype, "author": _author(data),
+                           "type": type(data).__name__, "text": _as_text(data)[:4000]})
+        elif etype == "output":
+            final_answer = _as_text(data)
+            lines.append(f"\n---------- FINAL OUTPUT ----------\n{final_answer}")
+            events.append({"kind": etype, "author": _author(data),
+                           "type": type(data).__name__, "text": _as_text(data)[:4000]})
     transcript = "".join(lines) if lines else "(empty transcript)"
-
-    # debug events: light dump for inspection
-    events = [{"kind": "intermediate", "author": _author(o), "type": type(o).__name__,
-               "text": _as_text(o)[:2000]} for o in inter]
-    events += [{"kind": "output", "author": _author(o), "type": type(o).__name__,
-                "text": _as_text(o)[:2000]} for o in outs]
 
     # usage: real token counts + Perplexity's exact cost from the client tap.
     if USAGE_ACC["calls"] > 0:
