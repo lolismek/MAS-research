@@ -181,6 +181,7 @@ def main():
     ap.add_argument('--smoke', help='judge one trace file and print result')
     ap.add_argument('--original', action='store_true')
     ap.add_argument('--new', action='store_true')
+    ap.add_argument('--only', help='comma-separated id prefixes to include')
     ap.add_argument('--parallel', type=int, default=1)
     args = ap.parse_args()
 
@@ -193,6 +194,9 @@ def main():
     items = [c for c in corpus()
              if (c[0] == 'original' and args.original)
              or (c[0] == 'new' and args.new)]
+    if args.only:
+        pres = args.only.split(',')
+        items = [c for c in items if any(c[2].startswith(p) for p in pres)]
     print(f'{len(items)} traces to judge with {JUDGE_MODEL}')
     if args.parallel > 1:
         from concurrent.futures import ThreadPoolExecutor

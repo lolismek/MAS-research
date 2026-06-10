@@ -171,7 +171,7 @@ def to_responses_body(body):
 
 
 # ------------------------------------------------------ response mapping ----
-def from_responses_body(j, req_model):
+def from_responses_body(j, req_model, max_out=None):
     texts, tool_calls = [], []
     for o in j.get('output', []):
         if o.get('type') == 'message':
@@ -182,14 +182,19 @@ def from_responses_body(j, req_model):
                                    function=dict(name=o.get('name'),
                                                  arguments=o.get('arguments', '{}'))))
     msg = dict(role='assistant', content=('\n'.join(texts) if texts else None))
+    u = j.get('usage') or {}
     if tool_calls:
         msg['tool_calls'] = tool_calls
         finish = 'tool_calls'
     elif (j.get('incomplete_details') or {}).get('reason') == 'max_output_tokens':
         finish = 'length'
+    elif max_out is not None and (u.get('output_tokens') or 0) >= max_out:
+        # Perplexity reports status=completed/incomplete_details=None even
+        # when max_output_tokens truncates the response (verified 2026-06-10),
+        # so detect cap-hits from the token count ourselves.
+        finish = 'length'
     else:
         finish = 'stop'
-    u = j.get('usage') or {}
     usage = dict(prompt_tokens=u.get('input_tokens', 0),
                  completion_tokens=u.get('output_tokens', 0),
                  total_tokens=u.get('total_tokens', 0))
@@ -253,7 +258,8 @@ async def chat(req: Request, tag: str = ''):
                             content=dict(error=dict(
                                 message=f'upstream {status}: {j}',
                                 type='upstream_error', code=status)))
-    resp = from_responses_body(j, body.get('model', TARGET_MODEL))
+    resp = from_responses_body(j, body.get('model', TARGET_MODEL),
+                               rbody.get('max_output_tokens'))
     with _raw_lock, open(RAW, 'a') as f:
         f.write(json.dumps(dict(
             ts=t0, tag=tag, messages=_redact_images(body.get('messages', [])),

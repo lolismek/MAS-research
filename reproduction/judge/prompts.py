@@ -71,6 +71,18 @@ or fix — is received but not acted upon, e.g. a reviewer repeating an \
 identical comment because the fix was never applied, or an orchestrator \
 discarding a sub-agent's correct answer). Check for these as rigorously as \
 the rest: require evidence, but do not skip them because they are subtle.
+- OMISSION-type modes (2.1, 2.2, 3.3, and sometimes 1.5) have no "smoking \
+gun" utterance — the failure is something that did NOT happen. Their \
+evidence is the moment the omission becomes visible in the trace. For 2.2 \
+(Fail to Ask for Clarification): quote the ambiguous, underspecified, or \
+surprising requirement TOGETHER WITH the agent proceeding on an unverified \
+assumption about it (e.g. silently inventing a 26-word dictionary, or \
+implementing "check mistakes" without ever pinning down what counts as a \
+mistake). For 2.1 (Conversation Reset): quote where a phase or dialogue \
+restarts from scratch, repeats an already-completed exchange, or visibly \
+discards previously established context. For 3.3 (Weak Verification): quote \
+the superficial check that was performed in place of a real one. Such \
+quotes count as valid evidence for these modes.
 - A mode can be present even if the task ultimately succeeded.
 
 Respond with a JSON object, and nothing else:
