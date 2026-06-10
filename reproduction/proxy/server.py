@@ -198,8 +198,11 @@ def from_responses_body(j, req_model, max_out=None):
     usage = dict(prompt_tokens=u.get('input_tokens', 0),
                  completion_tokens=u.get('output_tokens', 0),
                  total_tokens=u.get('total_tokens', 0))
+    # echo the dated snapshot name AutoGen resolves "gpt-4o" to, else every
+    # run starts with repeated "Resolved model mismatch" warnings in the trace
+    echo_model = 'gpt-4o-2024-08-06' if req_model == 'gpt-4o' else req_model
     return dict(id='chatcmpl-' + j.get('id', 'x'), object='chat.completion',
-                created=int(time.time()), model=req_model,
+                created=int(time.time()), model=echo_model,
                 choices=[dict(index=0, message=msg, finish_reason=finish,
                               logprobs=None)],
                 usage=usage)
