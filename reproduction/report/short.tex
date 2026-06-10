@@ -1,74 +1,96 @@
 \documentclass[10pt]{article}
-\usepackage[margin=0.75in]{geometry}
+\usepackage[top=0.6in,bottom=0.6in,left=0.72in,right=0.72in]{geometry}
 \usepackage{booktabs}
 \usepackage{amssymb,amsmath}
 \usepackage[hidelinks]{hyperref}
 \usepackage{parskip}
+\usepackage{microtype}
 \usepackage{titlesec}
-\titlespacing*{\section}{0pt}{6pt}{2pt}
+\titlespacing*{\section}{0pt}{5pt}{1pt}
 \titlespacing*{\subsection}{0pt}{4pt}{1pt}
-\setlength{\parskip}{3pt}
-
-\title{\vspace{-1.5em}Reproducing Multi-Agent System Failures:\\
-ChatDev~1.0 and Magentic-One under gpt-5.4-mini \textnormal{\large (2-page summary)}\vspace{-0.5em}}
-\author{MAS memory research --- working report}
-\date{June 10, 2026}
+\setlength{\parskip}{2pt}
+\pagestyle{empty}
 
 \begin{document}
-\maketitle
-\vspace{-2.5em}
+
+\begin{center}
+{\large\bfseries Reproducing Multi-Agent System Failures:
+ChatDev~1.0 and Magentic-One under gpt-5.4-mini}\\[2pt]
+MAS memory research --- 2-page summary --- June 10, 2026
+\end{center}
+
+\textbf{Question.} MAST (``Why Do Multi-Agent LLM Systems Fail?'',
+arXiv:2503.13657) groups multi-agent failures into three categories;
+category~2, \emph{inter-agent misalignment}, covers failures of communication
+between agents --- information withheld, input ignored, conversations reset.
+We ask whether these are \emph{capability} failures (they fade with a
+stronger model) or \emph{structural} failures (built into how the systems
+communicate and remember). This report covers step one: re-run a sample of
+MAST's tasks with a two-generation-newer model and re-label the runs with a
+better judge.
 
 \section{Dataset construction}
-\textbf{The 30-task dataset is deliberately biased toward inter-agent
-misalignment and is not a representative benchmark sample.} The public
-per-trace MAST annotations (HF \texttt{mcemri/MAD}) are a misjoin (206 unique
-rows for 1{,}242 traces), so we recovered ChatDev human annotations from a
-deleted file in the MAST repo's git history and computed Magentic-One outcomes
-against GAIA gold answers (120/165 original runs failed). Each candidate's
-\emph{original GPT-4o trace} was then close-read and kept only if its failure
-had a category-2 (inter-agent) surface. Final composition: 15 ChatDev game
-tasks (4 high / 4 medium / 4 low cat-2 prior, 3 solved controls) and 15
-Magentic-One GAIA tasks (1/9/3 + 2 controls).
+\textbf{The 30-task dataset was deliberately selected to maximize the chance
+of observing inter-agent misalignment; it is not a representative sample, and
+absolute failure rates should not be read as benchmark scores.} MAST's public
+per-trace labels turned out to be unusable (a join error assigns labels by
+row position), so we rebuilt ground truth: ChatDev human annotations
+recovered from the MAST repo's git history, and Magentic-One outcomes
+computed against the GAIA gold answers. We then read each candidate's
+\emph{original GPT-4o trace} and kept it only if the original failure
+involved agent-to-agent communication (rather than one agent simply getting
+the answer wrong). Final set: 15 ChatDev game-building tasks
+and 15 Magentic-One GAIA questions, each mixing high/medium/low-likelihood
+cases plus originally-\emph{solved} controls (3 and 2 respectively).
 
 \section{The two architectures}
-\textbf{ChatDev 1.0} is a waterfall ``software company'': a fixed phase chain
-(DemandAnalysis $\rightarrow$ Coding $\rightarrow$ CodeReview$\times$3
-$\rightarrow$ Test $\rightarrow$ docs), each phase a two-agent role-played
-dialogue. Inter-phase memory is a \emph{shared code store} filled by a regex
-extractor over chat messages. Two load-bearing flaws: completion budgets are
-$4096-\mathrm{prompt}$ tokens (long emissions truncate mid-file, the
-truncation signal is never checked), and the extractor silently drops
-unterminated code blocks. \textbf{Magentic-One} is a star topology: an
-orchestrator keeps task/progress ledgers and delegates single steps to four
-specialists (multimodal WebSurfer, FileSurfer, Coder, ComputerTerminal),
-rewriting the ledger from its own summary when progress stalls.
+\textbf{ChatDev 1.0} simulates a software company: a fixed ``waterfall'' of
+phases (requirements $\rightarrow$ coding $\rightarrow$ three review rounds
+$\rightarrow$ testing $\rightarrow$ docs), each phase a dialogue between two
+role-prompted copies of the model (CEO, Programmer, Reviewer, Tester).
+What passes from one phase to the next is \emph{only the project's code
+files} --- and those files are created indirectly: when the Programmer
+``writes code'', it types it into a chat message as filename-tagged code
+blocks, and after the message a parser extracts each block and saves it to
+the named file. Two details are load-bearing: (i)~each reply has a hard
+length cap ($4096$ tokens minus the prompt), so a long file gets cut off
+mid-line, and nothing checks for that; (ii)~the parser only saves properly
+closed code blocks --- a cut-off block is \emph{silently skipped}. So an
+agent can ``write a file'', see no error, and the file never comes to
+exist. \textbf{Magentic-One} is a hub-and-spoke system for web research:
+an Orchestrator holds a ``ledger'' (collected facts + current plan),
+delegates one step at a time to four specialists (a screenshot-based
+WebSurfer, FileSurfer, Coder, ComputerTerminal), and when progress stalls it
+rewrites the ledger from its own summary of history --- a built-in reset.
 
 \emph{Reproduction setup.} Both systems run their official, unmodified code
-(ChatDev v1.1.6; Magentic-One via the MAST authors' agbench scenarios with
-AutoGen 0.4.8). The only swap is the model: a local proxy translates their
-chat-completions calls to Perplexity's Responses API serving
-\texttt{gpt-5.4-mini} (tool calls, JSON mode, and screenshot vision verified
-passing through). Deviations: host-local execution instead of Docker; GAIA
-web drift since 2024.
+(ChatDev v1.1.6; Magentic-One via the MAST authors' own harness, AutoGen
+0.4.8). The single change is the model behind the API: a local proxy
+transparently serves \texttt{gpt-5.4-mini} where the systems believe they
+are calling GPT-4o (tool calls, JSON mode, and screenshot vision verified
+working). Deviations: code runs on the host rather than in Docker, and some
+GAIA answers have drifted since 2024 because the live web changed.
 
 \section{Outcomes vs.\ the original GPT-4o runs}
-Magentic-One: $2/15 \rightarrow 3/15$ solved (one flip to pass, no
-regressions, both controls reproduce). ChatDev: $3/15 \rightarrow 5/15$ (two
-flips; all three controls reproduce; caveat: original grades are human,
-reproduction grades are our judge). \textbf{The selected failure set largely
-survives a two-generation model upgrade}, consistent with structural rather
-than capability-bound causes.
+Magentic-One: $2/15$ solved originally $\rightarrow$ $3/15$ now (one failure
+flipped to pass, no regressions, both controls still pass). ChatDev: $3/15
+\rightarrow 5/15$ (two flips; all three controls still pass; caveat: original
+grades are human annotations, ours come from the judge). \textbf{The
+selected failure set largely survives the model upgrade}, which is what the
+structural hypothesis predicts.
 
 \section{MAST taxonomy statistics}
-A two-tier gpt-5.5 judge (temp.~0) labels every trace: tier~1 reads with no
-taxonomy and emits open-ended findings; tier~2 emits per-mode binary flags,
-each requiring a verbatim quote. Calibration on four ground-truth anchors:
-commission modes (2.3--2.6, 3.x) reliable --- including 2.4/2.5, which both
-MAST's o1 judge and our earlier gpt-5.4 judge emitted \emph{zero} times ---
-omission modes (2.1/2.2) $\approx$50\% recall, so their counts are lower
-bounds.
+Every trace is labeled by a two-tier gpt-5.5 judge: tier~1 reads the full
+trace with \emph{no taxonomy} and reports anything problematic in free form;
+tier~2 then assigns the 14 MAST modes, and every flag must carry a verbatim
+quote from the trace or it is dropped. Calibrating against the
+human-annotated traces: modes where an agent visibly does the wrong thing
+(2.3--2.6, 3.x) are detected reliably --- including 2.4 and 2.5, which
+MAST's own o1-based judge had emitted \emph{zero} times --- while modes
+defined by an \emph{absence} of action (2.1, 2.2) are caught only about half
+the time, so those two rows below are lower bounds.
 
-\begin{center}\small
+\begin{center}\small\renewcommand{\arraystretch}{0.95}%
 \begin{tabular}{llcc}\toprule
 Mode & Name & ChatDev (n=15) & Magentic-One (n=15)\\\midrule
 2.1 & Conversation Reset & 7 & 4\\
@@ -82,81 +104,95 @@ Mode & Name & ChatDev (n=15) & Magentic-One (n=15)\\\midrule
 \end{tabular}
 \end{center}
 
-The category-2 profiles are opposite and match the topologies: ChatDev flags
-2.4 in \emph{every} run --- including the three that produced working
-software --- because the code-persistence channel loses artifacts in every
-run; success depends only on \emph{which} artifacts are lost. Magentic-One is
-2.5-heavy but 2.4-light: the hub sees every message (little to withhold) but
-routinely discards or overrides specialist input. Rubber-stamp verification
-is near-universal in both.
+The two systems show \emph{opposite} category-2 profiles, each matching its
+architecture. ChatDev flags Information Withholding in all 15 runs ---
+including the three that produced working software --- because its
+code-persistence channel loses files in every run; whether the task succeeds
+depends only on \emph{which} files are lost. Magentic-One shows little
+withholding (the hub sees every message, so information rarely fails to
+arrive) but pervasive ignored input (the hub or a specialist receives
+information and doesn't act on it). That incidence tracks topology rather
+than model is the core evidence for the structural reading.
 
 \section{Open-ended judge trends}
-Tier-1 produced $\sim$650 free-form findings; after excluding
-reproduction-harness artifacts, three mechanism chains dominate.
-(1)~\emph{ChatDev's lossy persistence chain}: budget-truncated code emission
-$\rightarrow$ extractor silently drops the file $\rightarrow$ store goes
-stale $\rightarrow$ reviewer repeats an identical comment three cycles
-$\rightarrow$ tester rubber-stamps $\rightarrow$ manual documents features
-that don't exist (clusters: truncated output 17, state corruption 10, scope
-drift 11, lost artifact 5). (2)~\emph{ChatDev error masking}: when a missing
-artifact finally breaks the build, the programmer patches \emph{around} it
-(try/except, installing an unrelated PyPI package matching the module name)
-instead of re-emitting it. (3)~\emph{Magentic-One unsupported finals}: the
-orchestrator answers from prior knowledge or partial evidence (7 traces),
-skips planned delegation (unused tools, 5), and drops working state at ledger
-re-plans.
+The taxonomy-free tier produced $\sim$650 findings; three mechanism chains
+dominate. (1)~\emph{ChatDev's lossy persistence chain}: code truncated
+$\rightarrow$ file silently dropped $\rightarrow$ reviewer repeats the
+identical complaint $\rightarrow$ tester approves anyway (the loss step
+appears in the first case below; full chain in the DouDizhuPoker brief of
+\texttt{main.pdf}). (2)~\emph{ChatDev error masking}: when a missing
+file finally crashes the build, the Programmer patches \emph{around} the
+crash (try/except fallbacks) instead of regenerating the file it already
+wrote once. (3)~\emph{Magentic-One unsupported finals}: the Orchestrator
+answers from memory or partial evidence instead of completing its own plan
+(7 traces), and ledger rewrites discard progress already made.
 
-\section{Four case briefs (selected for inter-agent misalignment relevance)}
+\section{Four case briefs (chosen for inter-agent misalignment relevance)}
+\small
 
-\subsection*{ChatDev: DouDizhuPoker (failed; modes 2.4, 2.5, 2.6, 3.x)}
-Task: build a playable Dou Dizhu card game with a GUI. The Programmer emitted
-\texttt{gui.py} repeatedly, but every emission hit the token budget
-mid-statement and the extractor silently dropped it --- only
-\texttt{main.py} and \texttt{game\_logic.py} ever reached the shared store
-(2.4). The reviewer correctly demanded \texttt{gui.py} for three consecutive
-cycles; the Programmer kept ``complying'' while producing the same two files
-(2.5), claiming a complete GUI implementation each time (2.6). Testing hit
-the inevitable \texttt{ModuleNotFoundError} and masked it with a CLI
-fallback; a launch-only test then passed (3.3). The full chain --- truncation
-$\rightarrow$ silent drop $\rightarrow$ ignored review $\rightarrow$ masked
-error $\rightarrow$ rubber stamp --- in one trace.
+\subsection*{ChatDev: Gomoku --- \emph{succeeded}, yet the communication channel failed}
+Gomoku (five-in-a-row) is a \emph{control}: the original GPT-4o run also
+solved it, and ours does too. Even so, the file-saving channel of \S2 failed
+mid-run: the Programmer produced three correct files, but the parser
+attached the wrong block to one of them, saving the board-logic file
+\texttt{board.py} with the literal one-line content ``\texttt{python
+main.py}'' (a shell command from the same message). A correct implementation
+was produced and destroyed in transit --- Information Withholding (2.4)
+without any agent deciding to withhold anything. Recovery succeeded here:
+the Reviewer flagged the garbage file, and the regenerated \texttt{board.py}
+was short enough to survive, so the finished game works. This is why 2.4
+appears in all 15 ChatDev runs including the successful ones: the loss
+mechanism fires regardless, and the task outcome depends only on whether the
+lost piece happens to be recoverable in the remaining rounds.
 
-\subsection*{ChatDev: Gomoku (control, \emph{succeeded}; modes 2.4, 2.5, 2.6)}
-A solved control that still exhibits the channel failure: the extractor
-mis-captured \texttt{board.py} as the literal shell command \texttt{python
-main.py}, losing a correct Board implementation (2.4). Review caught it and
-the file was regenerated, but later cycles ignored a ``no changes needed''
-signal (2.5) and a reviewer alleged a coordinate bug while simultaneously
-stating the coordinates were consistent (2.6). Misalignment fired; the task
-survived only because the lost artifact happened to be recoverable ---
-evidence that 2.4 is a property of the channel, not of task failure.
+\subsection*{ChatDev: Wordle --- failed; behavioral misalignment, no truncation involved}
+The task: a terminal Wordle clone (guess a daily five-letter word in six
+tries, with colored feedback). In contrast to the case above, nothing here
+is lost in transit --- each failure is an agent's own decision, and the run
+still fails. (1)~The prompt explicitly demands a terminal game, but
+ChatDev's pipeline injects a boilerplate instruction that the software
+``should be equipped with graphical user interface''; facing two
+contradictory requirements, the Programmer silently picked one and moved on
+rather than asking which was meant (2.2 Fail to Ask for Clarification ---
+the same mode the MAST human annotators marked on the original GPT-4o run
+of this task). (2)~The Reviewer gave a concrete, correct instruction: the
+word list contains the six-letter word ``debate'', remove it. The
+Programmer went through the modification round, yet the shipped code still
+contains ``debate'' --- feedback received and not acted on (2.5), leaving
+the delivered game in violation of the five-letter spec. (3)~Another review
+round declared the duplicate-letter scoring the highest-priority bug while
+recommending, as the fix, the exact code already present (2.6
+Action--Reasoning Mismatch: the reviewer's diagnosis and proposal
+contradict each other), sending the Programmer to churn on a non-bug.
+(4)~The automated test ran the interactive game with no keyboard attached
+and crashed on \texttt{EOFError}; the ``fix'' made the program exit
+immediately whenever input is unavailable, after which the test passed
+\emph{because gameplay was never reached} (3.3): the system made the test
+pass rather than the game work.
 
-\subsection*{Magentic-One 5a0c1adf (GAIA, failed; modes 2.5, 2.6, 3.x)}
-Task: find which post-1977 Malko Competition winner's recorded nationality is
-a now-defunct country. The orchestrator's plan was sound and it issued
-correct, specific navigation instructions (open the winners archive on
-\texttt{malkocompetition.dk}); WebSurfer repeatedly ignored them, re-running
-dead-end searches and never opening the archive (2.5). After the loop stalled,
-the orchestrator violated its own stated ``do not guess before exhaustive
-filtering'' rule and returned an unsupported answer (2.6, 3.1). Hub-spoke
-signature: information flowed, but the spoke didn't execute and the hub
-didn't verify.
+\subsection*{Magentic-One 5a0c1adf --- failed; correct plan, specialist doesn't execute}
+A GAIA web-research question: among winners of the Malko conducting
+competition after 1977, find the one whose recorded nationality is a country
+that no longer exists. The Orchestrator planned correctly and gave WebSurfer
+specific, correct instructions --- open the winners archive on the
+competition's official site. WebSurfer instead kept re-running general web
+searches that hit CAPTCHAs and dead ends, and never opened the archive page
+it was pointed to: the instruction arrived and was ignored (2.5). After the
+loop stalled, the Orchestrator broke its own stated rule (``do not guess
+before filtering all winners'') and submitted an unsupported guess (2.6).
+The information flow worked; execution and verification did not.
 
-\subsection*{Magentic-One 72e110e7 (GAIA, failed; modes 2.1, 2.4, 2.5, 2.6)}
-Task: a BASE (DDC 633) bibliographic lookup. The target page rendered blank;
-WebSurfer only ``waited'' despite explicit instructions to inspect source or
-pivot (2.5). The orchestrator then entered a re-planning loop, repeatedly
-rewriting its fact sheet and restarting the task framing instead of executing
-(2.1) --- and although its rewritten plans correctly named the fix (archived
-copies, source inspection), it never delegated those steps to any agent
-(2.4: the hub withheld its own recovery plan from execution) before answering
-``unknown'' (2.6). The ledger-reset mechanism converting a recoverable tool
-failure into task failure.
-
-\vspace{2pt}
-{\small Full 34-page version with per-task outcome table, all 14 modes,
-trend-cluster table, and 30 case briefs: \texttt{main.pdf} in the same
-directory. M.~Cemri et al., ``Why Do Multi-Agent LLM Systems Fail?''
-arXiv:2503.13657 (2025).}
+\subsection*{Magentic-One 72e110e7 --- failed; reset loop replaces recovery}
+A bibliographic lookup in BASE, an academic search engine. The needed page
+rendered blank in the browser --- a recoverable tool failure. WebSurfer
+responded only by waiting, despite explicit instructions to inspect the page
+source or try another route (2.5). The Orchestrator then fell into
+Magentic-One's built-in reset behavior: it kept rewriting its fact sheet and
+plan from scratch (2.1 Conversation Reset) --- and although the rewritten
+plans correctly named the fix (use an archived copy of the page), it never
+delegated that step to any agent (2.4: the hub kept its own recovery plan to
+itself) before answering ``unknown''. A minor tool hiccup became task
+failure because the recovery mechanism resets instead of acting. \emph{(All
+30 case briefs: \texttt{main.pdf}.)}
 
 \end{document}
