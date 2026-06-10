@@ -84,6 +84,11 @@ memory + Perplexity rate limits; proxy retries 429s with backoff).
    isolation.
 3. Responses API is stateless (no server-side conversation state) — semantics
    identical since chat.completions resends full history anyway.
+3b. Proxy drops `max_tokens` when ChatDev computes it <= 0 (its hardcoded
+   4096-token gpt-4o budget minus a too-long prompt; gpt-5.4-mini writes
+   longer code than GPT-4o, so review prompts outgrow the budget more often).
+   Original behavior would be a fatal 400-retry loop, i.e. an infra crash,
+   not a research-relevant failure mode.
 4. GAIA web drift: answers are time-anchored to ~2024; judge pass must
    separate web-decay failures from coordination failures (noted in
    task_selection/README.md).

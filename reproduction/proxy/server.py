@@ -131,6 +131,11 @@ def to_responses_body(body):
                      ('parallel_tool_calls', 'parallel_tool_calls')):
         if body.get(src) is not None:
             out[dst] = body[src]
+    # ChatDev computes max_tokens = 4096 - tiktoken(prompt) for "gpt-4o"; once
+    # the prompt outgrows that budget the value goes <= 0 and the API rejects
+    # every retry. Drop the param instead (upstream default applies).
+    if out.get('max_output_tokens') is not None and out['max_output_tokens'] < 16:
+        del out['max_output_tokens']
     tools = []
     for t in body.get('tools') or []:
         if t.get('type') == 'function':

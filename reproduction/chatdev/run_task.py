@@ -37,7 +37,10 @@ def run_one(task):
     os.makedirs(rundir)
 
     base, v1 = PROXY.rsplit('/', 1)
+    # shim/ on PYTHONPATH guards `import utils` against ChatDev's own
+    # auto-pip-installs shadowing ecl/utils.py — see shim/utils.py docstring.
     env = dict(os.environ, OPENAI_API_KEY='dummy',
+               PYTHONPATH=os.path.join(HERE, 'shim'),
                BASE_URL=f'{base}/t/cd_{slug}_run{n}/{v1}')
     print(f'[{slug}] run_{n} starting', flush=True)
     t0 = time.time()
@@ -52,13 +55,22 @@ def run_one(task):
             rc = 'timeout'
     dur = time.time() - t0
 
-    # archive the WareHouse dir this run produced
+    # archive the WareHouse dir this run produced (a crashed ChatDev run can
+    # also leave a stray top-level .log FILE matching the glob — dirs only)
     produced = [d for d in glob.glob(
         os.path.join(REPO, 'WareHouse', f'{name}_DefaultOrganization_*'))
-        if os.path.getmtime(d) >= t0 - 5]
+        if os.path.isdir(d) and os.path.getmtime(d) >= t0 - 5]
     wh = max(produced, key=os.path.getmtime) if produced else None
-    if wh:
-        shutil.copytree(wh, os.path.join(rundir, 'warehouse'))
+    try:
+        if wh:
+            shutil.copytree(wh, os.path.join(rundir, 'warehouse'))
+        stray = os.path.join(REPO, 'WareHouse',
+                             f'{name}_DefaultOrganization_*.log')
+        for f in glob.glob(stray):
+            if os.path.getmtime(f) >= t0 - 5:
+                shutil.copy(f, rundir)  # crashed run: log never moved into dir
+    except OSError as e:
+        print(f'[{slug}] archive error: {e}', flush=True)
 
     result = dict(task=task['task'], project_name=name, run=n, rc=rc,
                   seconds=round(dur, 1), warehouse=wh and os.path.basename(wh),
