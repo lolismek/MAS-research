@@ -1,0 +1,206 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{amssymb,amsmath}
+\usepackage[hidelinks]{hyperref}
+\usepackage{parskip}
+
+\title{Reproducing Multi-Agent System Failures:\\
+ChatDev~1.0 and Magentic-One under gpt-5.4-mini}
+\author{MAS memory research --- working report}
+\date{June 10, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We reproduce 30 tasks from the MAST study (``Why Do Multi-Agent LLM Systems
+Fail?'') on two multi-agent systems --- ChatDev~1.0 (ProgramDev) and
+Magentic-One (GAIA) --- running their \emph{native, unmodified} codebases with
+the original model (GPT-4o) swapped for gpt-5.4-mini behind an API-translation
+proxy. All 60 traces of interest (30 reproduced; originals for calibration)
+are labeled by a two-tier LLM judge (gpt-5.5): a taxonomy-blind close reading
+producing open-ended findings, followed by evidence-quote-required MAST
+labels. Headline results: the selected failure set largely survives the model
+upgrade (Magentic-One $2/15 \to 3/15$ solved; ChatDev $3/15 \to 5/15$);
+ChatDev exhibits Information Withholding (2.4) in \emph{every} run including
+successful ones, rooted in a lossy code-persistence channel; Magentic-One
+shows the opposite signature (2.5-heavy, 2.4-light), consistent with its star
+topology. The open-ended judge tier surfaces mechanism chains the taxonomy
+cannot express.
+\end{abstract}
+
+\section{Introduction}
+
+MAST \cite{mast} introduced a taxonomy of 14 multi-agent failure modes in
+three categories (specification, inter-agent misalignment, verification) and
+annotated traces from several MAS. Our research interest is category~2
+(inter-agent misalignment), specifically whether its modes are
+\emph{capability} failures that fade with stronger models or
+\emph{structural} failures rooted in the systems' communication and memory
+architecture. This report documents the first experimental step: faithfully
+reproducing a biased sample of MAST tasks on a current small model and
+re-labeling old and new traces with a stronger judge.
+
+\section{Task dataset construction}\label{sec:dataset}
+
+\textbf{The dataset is deliberately biased and is not a representative
+benchmark sample.} Tasks were selected to maximize the prior probability of
+observing inter-agent misalignment, with controls retained for contrast.
+Selection proceeded in three steps:
+
+\begin{enumerate}
+\item \textbf{Provenance recovery.} The public per-trace MAST annotations
+(HF \texttt{mcemri/MAD}) are unusable: only 206 unique annotation rows exist
+for 1{,}242 traces and the annotation is purely a function of the row index
+(verified across both dataset revisions). We therefore recovered ChatDev
+human annotations from a deleted file in the MAST repository's git history
+(32 game tasks; sparse labels; three tasks carry explicit category-2 marks:
+TicTacToe~2.1, Wordle~2.2, Sudoku~2.2), and computed Magentic-One outcomes
+locally by comparing each trace's final answer against the GAIA gold answer
+(120/165 original runs failed).
+\item \textbf{Screening for category-2 priors.} Every candidate failed
+task's \emph{original GPT-4o trace} was close-read and classified for
+category-2 symptoms with quoted evidence. Tasks whose original failure had no
+inter-agent surface (e.g.\ solved single-shot by the orchestrator) were
+excluded.
+\item \textbf{Composition.} 15 ChatDev tasks: 4 high-likelihood cat-2, 4
+medium, 4 low (non-cat-2 failure contrast), 3 originally-solved controls.
+15 Magentic-One GAIA tasks: 1 high, 9 medium, 3 low, 2 solved controls
+(8$\times$L1, 6$\times$L2, 1$\times$L3; image-attachment tasks excluded).
+\end{enumerate}
+
+\section{The two architectures and the reproduction setup}\label{sec:arch}
+
+\subsection{ChatDev 1.0}
+A waterfall ``software company'': fixed phase chain (DemandAnalysis
+$\rightarrow$ LanguageChoose $\rightarrow$ Coding $\rightarrow$
+CodeCompleteAll $\rightarrow$ CodeReview$\times$3 $\rightarrow$ Test
+$\rightarrow$ EnvironmentDoc $\rightarrow$ Manual), each phase a two-agent
+dialogue between role-prompted instances (CEO, CTO, Programmer, Code
+Reviewer, Test Engineer). Inter-phase memory is a \emph{shared code store}:
+a regex extractor parses fenced code blocks out of chat messages and persists
+them; phases pass forward short summaries plus the store. Two properties
+matter for what follows: (i)~completion budgets are computed as
+$4096 - \mathrm{prompt}$ tokens for gpt-4o, so long emissions are truncated
+mid-file, and the system never checks the truncation signal; (ii)~the
+extractor silently drops malformed or unterminated code blocks.
+
+\subsection{Magentic-One}
+A star topology: an orchestrator maintains a task ledger (facts/plan) and a
+progress ledger, delegating single steps to four specialists (WebSurfer ---
+multimodal browsing over screenshots; FileSurfer; Coder; ComputerTerminal)
+and re-planning when progress stalls. All inter-agent information flows
+through the orchestrator; re-plans rewrite the ledger from the orchestrator's
+summary of history.
+
+\subsection{Reproduction setup}
+Both systems run their official code: ChatDev at tag v1.1.6 (last 1.x
+release, within the MAST run window), Magentic-One via the MAST authors' own
+agbench harness --- each original trace directory ships the exact
+\texttt{scenario.py} executed, byte-identical to the agbench template at
+\texttt{microsoft/autogen@af5dcc7}; we re-execute it verbatim with AutoGen
+pinned to 0.4.8. The only swap is the model endpoint: a local proxy
+translates the OpenAI chat-completions protocol both systems speak to
+Perplexity's Responses API serving \texttt{gpt-5.4-mini}, aliasing the
+configured model name ``gpt-4o'' (zero patches to either codebase; tool
+calls, JSON mode, and --- verified --- screenshot vision all pass through).
+Known deviations, all documented in the repo: host-local code execution
+rather than Docker; \texttt{max\_tokens} dropped when ChatDev computes it
+$\le 0$ (original behavior is a fatal API error, not a different result);
+GAIA web drift since 2024 (answers are time-anchored).
+
+\section{Outcomes: did the failures reproduce?}\label{sec:outcomes}
+
+The original MAST runs used GPT-4o (their judge was o1; outcome comparisons
+here are against the GPT-4o \emph{runs}). Table~\ref{tab:outcomes} lists
+per-task outcomes.
+
+\input{gen_outcomes}
+
+Aggregates: Magentic-One $2/15 \to 3/15$ solved (one original failure now
+passes; no regressions; both controls reproduce). ChatDev $3/15 \to 5/15$
+(CandyCrush and TextBasedSpaceInvaders now judged working; all three controls
+reproduce). Two caveats: ChatDev graders differ across eras (human annotation
+then vs.\ our judge now), and GAIA answers are time-anchored, so some
+Magentic failures may be web-decay rather than coordination; the per-case
+briefs in Appendix~\ref{app:magentic} distinguish these. The substantive
+conclusion: \textbf{the failure set largely survives a two-generation model
+upgrade}, consistent with structural rather than purely capability-bound
+failure causes.
+
+\section{MAST taxonomy statistics}\label{sec:taxonomy}
+
+\subsection{Judge}
+Labels come from a two-tier gpt-5.5 judge (temperature~0). Tier~1 reads the
+trace with no taxonomy and reports open-ended findings (description, agents,
+verbatim quote, impact, possibly-innocent flag, free-form kind). Tier~2
+receives the MAST definitions and canonical examples plus tier-1 findings and
+emits one binary decision per mode, each requiring a verbatim evidence quote
+(flags without quotes are dropped programmatically). Calibration on four
+ground-truth anchors (the three human-labeled ChatDev tasks plus one
+screening-verified 2.4/2.5 case): commission modes (2.3--2.6, 3.x) are
+detected reliably --- notably 2.4/2.5, which both the MAST authors' o1 judge
+and our earlier gpt-5.4 judge emitted \emph{zero} times across all traces ---
+while omission modes reach only $\approx$50\% recall (2.1 and 2.2 figures
+below are lower bounds). Precision against sparse human labels is not
+measurable; every flag carries its quote for case-level verification.
+
+\input{gen_modes}
+
+\subsection{Architecture signatures}
+The two systems show opposite category-2 profiles
+(Table~\ref{tab:modes}). ChatDev flags 2.4 \emph{and} 2.5 in 15/15 traces ---
+including the runs that produced working software --- because the
+code-persistence channel loses artifacts in every run; whether the task
+survives depends on \emph{which} artifacts are lost. Magentic-One is
+2.5-heavy (13/15) but 2.4-light (4/15): in a star topology the hub sees
+every message, so little can be withheld, but the hub routinely discards or
+overrides specialist input. Verification modes (3.1--3.3) are near-universal
+in both systems. These signatures match the architectures, supporting the
+view that category-2 incidence is a property of the communication topology
+rather than of the underlying model.
+
+\section{Open-ended judge trends}\label{sec:trends}
+
+Tier-1 produced $\sim$650 findings across the 30 traces, each with a
+judge-coined free-form label. Table~\ref{tab:trends} shows the recurring
+clusters (reproduction-harness artifacts --- model-name warnings, visualizer
+logging noise, timestamp formats --- are excluded).
+
+\input{gen_trends}
+
+Three mechanism chains dominate and are invisible to the binary taxonomy:
+
+\begin{enumerate}
+\item \textbf{ChatDev: the lossy persistence chain.} Budget-truncated code
+emission $\rightarrow$ extractor silently drops the unterminated file
+$\rightarrow$ shared store goes stale $\rightarrow$ reviewer repeats an
+identical comment for three cycles $\rightarrow$ tester rubber-stamps
+$\rightarrow$ manual documents features that do not exist. Token accounting
+confirms the root cause: completions hit ChatDev's $4096-\mathrm{prompt}$
+budget exactly. The clusters \emph{truncated output/code/patch},
+\emph{lost artifact}, and \emph{state corruption} are this chain observed at
+different stages.
+\item \textbf{ChatDev: error masking.} When a missing artifact finally
+breaks the build, the programmer patches \emph{around} it (try/except
+fallbacks, \texttt{pip install} of an unrelated package matching the missing
+module's name) instead of re-emitting the artifact it produced earlier ---
+converting a visible failure into an invisible one.
+\item \textbf{Magentic-One: unsupported finals and unused tools.} The
+orchestrator answers from prior knowledge or partial evidence
+(\emph{unsupported final}, 7 traces) and skips planned delegation
+(\emph{unused tools}, 5 traces); ledger re-plans drop working state. The
+\emph{ignored input} mode is usually the hub overriding a specialist's
+correct partial result.
+\end{enumerate}
+
+\appendix
+\input{gen_appendix}
+
+\begin{thebibliography}{1}
+\bibitem{mast} M.~Cemri et al., ``Why Do Multi-Agent LLM Systems Fail?''
+arXiv:2503.13657, 2025.
+\end{thebibliography}
+
+\end{document}
