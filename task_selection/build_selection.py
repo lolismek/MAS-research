@@ -96,6 +96,21 @@ for t in SELECT:
     p = find_prompt(t)
     chatdev_sel.append(dict(task=t, task_prompt=p, **h))
 
+# extract original GPT-4o trajectories (used for cat-2 screening + judge baseline)
+trace_out = os.path.join(HERE, 'original_traces', 'chatdev')
+os.makedirs(trace_out, exist_ok=True)
+trajs = {}
+for rec in mad:
+    if rec['mas_name'] != 'ChatDev':
+        continue
+    m = re.search(r'\*\*project_name\*\*:?\s*(.+)', rec['trace']['trajectory'])
+    if m:
+        trajs[m.group(1).strip()] = rec['trace']['trajectory']
+for t in SELECT:
+    name = ALIASES.get(t, t)
+    with open(os.path.join(trace_out, name.replace(' ', '_') + '.log'), 'w') as f:
+        f.write(trajs[name])
+
 # ------------------------------------------------------------- Magentic ----
 GAIA = os.path.join(MAST, 'traces', 'MagenticOne_GAIA')
 STANDARD = {'global_finalize.sh', 'requirements.txt', 'timestamp.txt', 'expected_answer.txt',
@@ -130,32 +145,48 @@ for lvl in (1, 2, 3):
             trace_dir=os.path.relpath(p, ROOT),
         ))
 
-# near-misses: original answer is semantically right, fails only on exact-match
-# normalization ("Brunei Darussalam" vs "Brunei") — useless as failure cases
-NEAR_MISS = {'0a3cd321-3e76-4622-911b-0fda2e5d6b1a'}
+print(f'GAIA local tasks: {len(gaia_tasks)}; '
+      f'failed: {sum(1 for t in gaia_tasks if not t["success"])}')
 
-failed = [t for t in gaia_tasks if not t['success'] and t['uuid'] not in NEAR_MISS]
-succeeded = [t for t in gaia_tasks if t['success']]
-print(f'GAIA local tasks: {len(gaia_tasks)}; failed: {len(failed)}; succeeded: {len(succeeded)}')
+# Final selection after screening every candidate's ORIGINAL trace for cat-2
+# symptoms with Claude readers (evidence: trace_screening.md). uuid-prefix ->
+# (cat2_likelihood, primary_cause). Composition: 1 high + 9 medium cat-2,
+# 3 low as non-cat-2 failure contrast, 2 successes as controls.
+MAGENTIC_SCREENED = {
+    '5a0c1adf': ('high',   'hallucination'),
+    '3cef3a44': ('medium', 'capability'),
+    '023e9d44': ('medium', 'hallucination'),
+    '05407167': ('medium', 'premature-termination'),
+    '08cae58d': ('medium', 'capability'),
+    '00d579ea': ('medium', 'web-failure'),
+    '366e2f2b': ('medium', 'capability'),
+    '5d0080cb': ('medium', 'capability'),
+    '72e110e7': ('medium', 'capability'),
+    '7673d772': ('medium', 'verification-gap'),
+    '3f57289b': ('low',    'capability'),
+    '04a04a9b': ('low',    'capability'),
+    '2b3ef98c': ('low',    'capability'),
+    '0383a3ee': (None,     None),  # control, succeeded
+    '27d5d136': (None,     None),  # control, succeeded
+}
+CHATDEV_SCREENED = {
+    'Sudoku': 'high', 'TextBasedSpaceInvaders': 'high', 'DouDizhuPoker': 'high',
+    'Tiny Rouge': 'high', 'TicTacToe (with display)': 'medium', 'Wordle': 'medium',
+    'Connections': 'medium', 'Strands': 'medium', 'Checkers': 'low',
+    'The Crossword': 'low', 'MonopolyGo': 'low', 'CandyCrush': 'low',
+}
+for x in chatdev_sel:
+    x['cat2_likelihood_screened'] = CHATDEV_SCREENED.get(x['task'])
 
-# selection: failed tasks, no attachments preferred, across levels + 2 controls
-def take(pool, n, pred):
-    out = [t for t in pool if pred(t)][:n]
-    for t in out:
-        pool.remove(t)
-    return out
-
-pool = list(failed)
-magentic_sel = (
-    take(pool, 5, lambda t: t['level'] == 1 and not t['attachments'])
-    + take(pool, 5, lambda t: t['level'] == 2 and not t['attachments'])
-    + take(pool, 1, lambda t: t['level'] == 3 and not t['attachments'])
-    # attachment tasks must be text-parseable (no images: gpt-5.4-mini via
-    # Perplexity has no vision)
-    + take(pool, 2, lambda t: t['level'] == 2 and t['attachments'] and
-           not any(a.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')) for a in t['attachments']))
-)
-magentic_sel += [t for t in succeeded if not t['attachments']][:2]  # controls
+magentic_sel = []
+for t in gaia_tasks:
+    key = t['uuid'][:8]
+    if key in MAGENTIC_SCREENED:
+        lk, cause = MAGENTIC_SCREENED[key]
+        t['cat2_likelihood_screened'] = lk
+        t['primary_cause_screened'] = cause
+        magentic_sel.append(t)
+assert len(magentic_sel) == len(MAGENTIC_SCREENED), 'uuid prefix mismatch'
 
 json.dump(chatdev_sel, open(os.path.join(HERE, 'chatdev_tasks.json'), 'w'), indent=1)
 json.dump(magentic_sel, open(os.path.join(HERE, 'magentic_gaia_tasks.json'), 'w'), indent=1)

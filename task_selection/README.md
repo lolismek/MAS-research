@@ -46,18 +46,28 @@ Consequences for label provenance:
 
 ## Selection rationale
 
-**ChatDev (15)**: the 3 tasks with explicit human cat-2 labels, 9 tasks the human
-annotators marked as failed (stateful/interactive games — the regime where ChatDev's
-phase-to-phase summary handoff loses information, i.e. where inter-agent
-misalignment is mechanistically expected), 3 solved tasks as controls
-(Gomoku, Pong, ConnectFour).
+Every candidate failed task's ORIGINAL trace was read and screened for cat-2
+symptoms (verdicts + quoted evidence in `trace_screening.md`; embedded in the
+task JSONs as `cat2_likelihood_screened`). So the cat-2 prior is observed, not
+assumed.
 
-**Magentic-One (15)**: 13 failed + 2 succeeded controls; levels 1/2 preferred
-(5×L1, 7×L2, 1×L3), 11 without file attachments, 2 with attachments (the files
-are present in the local trace dirs). Caveat: GAIA answers are time-anchored
-("as of 2023") and the live web has moved — expect some failures to reproduce
-for web-drift rather than coordination reasons; the judge pass should separate
-these (cat-1/web vs cat-2).
+**ChatDev (15)**: 4 high-likelihood cat-2 (Sudoku, TextBasedSpaceInvaders,
+DouDizhuPoker, Tiny Rouge), 4 medium (TicTacToe, Wordle, Connections, Strands —
+TicTacToe/Wordle/Sudoku also carry explicit human cat-2 labels), 4 low as
+non-cat-2 failure contrast, 3 solved controls (Gomoku, Pong, ConnectFour).
+Recurring mechanism in the high group: programmer's fix exists in chat but never
+persists to the shared code store, so the reviewer repeats the identical comment
+until the review budget burns out (2.4/2.5).
+
+**Magentic-One (15)**: 1 high + 9 medium cat-2 failures, 3 low (non-cat-2
+contrast), 2 succeeded controls; 8×L1, 6×L2, 1×L3; 2 with text-parseable
+attachments (files in local trace dirs; image-attachment tasks excluded since
+gpt-5.4-mini has no vision). Recurring mechanism: the orchestrator's ledger
+re-plan acts as a lossy memory checkpoint — working URLs and result sets are
+forgotten after "What Went Wrong / New Plan" cycles (2.1), and planned Assistant
+analysis steps get skipped (2.6). Caveat: GAIA answers are time-anchored and the
+web has drifted — the judge pass should separate web-decay failures from
+coordination failures.
 
 ## Reproducing the original numbers
 
