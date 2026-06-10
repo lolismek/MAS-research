@@ -26,12 +26,17 @@ RUNS = os.path.join(ROOT, 'reproduction', 'runs', 'magentic')
 PROXY = os.environ.get('PROXY_URL', 'http://127.0.0.1:8744/v1')
 TIMEOUT = int(os.environ.get('TASK_TIMEOUT', '7200'))  # matches original run.sh
 
-CONFIG = f"""\
+def make_config(tag):
+    # /t/<tag>/v1 routes through the proxy's tagged endpoint so every
+    # calls.jsonl / raw_calls.jsonl entry is attributable to this run,
+    # even when tasks execute in parallel.
+    base, v1 = PROXY.rsplit('/', 1)
+    return f"""\
 model_config: &client
   provider: autogen_ext.models.openai.OpenAIChatCompletionClient
   config:
     model: gpt-4o
-    base_url: {PROXY}
+    base_url: {base}/t/{tag}/{v1}
     api_key: dummy
 
 orchestrator_client: *client
@@ -54,7 +59,7 @@ def run_one(task):
     for f in ['prompt.txt', 'expected_answer.txt', 'scenario.py'] + task['attachments']:
         shutil.copy(os.path.join(src, f), rundir)
     with open(os.path.join(rundir, 'config.yaml'), 'w') as f:
-        f.write(CONFIG)
+        f.write(make_config(f'mag_{uid8}_run{n}'))
 
     print(f'[{uid8}] run_{n} starting (timeout {TIMEOUT}s)', flush=True)
     t0 = time.time()
@@ -91,11 +96,21 @@ def main():
     args = sys.argv[1:]
     if not args:
         sys.exit(__doc__)
+    par = 1
+    if '--parallel' in args:
+        i = args.index('--parallel')
+        par = int(args[i + 1])
+        args = args[:i] + args[i + 2:]
     sel = TASKS if args == ['--all'] else [
         t for t in TASKS if any(t['uuid'].startswith(a) for a in args)]
     if len(sel) != (len(TASKS) if args == ['--all'] else len(args)):
         sys.exit(f'unmatched uuid prefixes; matched {[t["uuid"][:8] for t in sel]}')
-    results = [run_one(t) for t in sel]
+    if par == 1:
+        results = [run_one(t) for t in sel]
+    else:
+        from concurrent.futures import ThreadPoolExecutor  # run_one is subprocess-bound
+        with ThreadPoolExecutor(max_workers=par) as ex:
+            results = list(ex.map(run_one, sel))
     print(json.dumps(results, indent=1))
 
 

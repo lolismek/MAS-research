@@ -38,7 +38,36 @@ KEY = os.environ['PERPLEXITY_API_KEY']
 TARGET_MODEL = os.environ.get('TARGET_MODEL', 'openai/gpt-5.4-mini')
 PORT = int(os.environ.get('PROXY_PORT', '8744'))
 LOG = os.path.join(HERE, 'calls.jsonl')
+# Full wire-traffic dump (every request/response verbatim, images -> sha1
+# stubs). This is the ground-truth trace: model-internal turns like the
+# Magentic orchestrator's progress-ledger JSON never reach console logs, and
+# losing them is what made the previous experiment's traces unjudgeable.
+RAW = os.environ.get('PROXY_DUMP', os.path.join(HERE, 'raw_calls.jsonl'))
 _log_lock = threading.Lock()
+_raw_lock = threading.Lock()
+
+
+def _redact_images(messages):
+    """Copy messages with image payloads replaced by '<image sha1 ...>' stubs."""
+    import hashlib
+    out = []
+    for m in messages:
+        c = m.get('content')
+        if not isinstance(c, list):
+            out.append(m)
+            continue
+        parts = []
+        for p in c:
+            if isinstance(p, dict) and p.get('type') == 'image_url':
+                iu = p.get('image_url')
+                url = iu.get('url') if isinstance(iu, dict) else (iu or '')
+                if url.startswith('data:'):
+                    h = hashlib.sha1(url.encode()).hexdigest()[:12]
+                    p = dict(type='image_url',
+                             image_url=f'<image {len(url)}B sha1:{h}>')
+            parts.append(p)
+        out.append({**m, 'content': parts})
+    return out
 
 app = FastAPI()
 
@@ -202,24 +231,33 @@ def models():
                                                TARGET_MODEL)])
 
 
+@app.post('/t/{tag}/v1/chat/completions')
+@app.post('/t/{tag}/chat/completions')
 @app.post('/v1/chat/completions')
 @app.post('/chat/completions')
-async def chat(req: Request):
+async def chat(req: Request, tag: str = ''):
     body = await req.json()
     rbody, n_images = to_responses_body(body)
     t0 = time.time()
     status, j = call_upstream(rbody)
     dur = time.time() - t0
     if status != 200:
-        log_call(dict(ts=t0, dur=round(dur, 2), error=status,
+        log_call(dict(ts=t0, tag=tag, dur=round(dur, 2), error=status,
                       detail=str(j)[:300]))
         return JSONResponse(status_code=status if isinstance(status, int) else 500,
                             content=dict(error=dict(
                                 message=f'upstream {status}: {j}',
                                 type='upstream_error', code=status)))
     resp = from_responses_body(j, body.get('model', TARGET_MODEL))
+    with _raw_lock, open(RAW, 'a') as f:
+        f.write(json.dumps(dict(
+            ts=t0, tag=tag, messages=_redact_images(body.get('messages', [])),
+            tools=[t.get('function', t).get('name')
+                   for t in body.get('tools') or []],
+            response_format=body.get('response_format'),
+            reply=resp['choices'][0]['message'])) + '\n')
     cost = ((j.get('usage') or {}).get('cost') or {}).get('total_cost')
-    log_call(dict(ts=t0, dur=round(dur, 2), model=body.get('model'),
+    log_call(dict(ts=t0, tag=tag, dur=round(dur, 2), model=body.get('model'),
                   prompt_tokens=resp['usage']['prompt_tokens'],
                   completion_tokens=resp['usage']['completion_tokens'],
                   cost=cost, n_msgs=len(body.get('messages', [])),
