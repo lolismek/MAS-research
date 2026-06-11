@@ -62,7 +62,7 @@ recs = load('new')
 SYSTEMS = [('chatdev', 'ChatDev'), ('magentic', 'Magentic'),
            ('macnet-chain', 'MacNet-chain'), ('macnet-mlp', 'MacNet-mlp'),
            ('macnet-net', 'MacNet-net'), ('macnet-srdd', 'MacNet-SRDD'),
-           ('dylan', 'DyLAN')]
+           ('dylan', 'DyLAN'), ('dylan-math', 'DyLAN-MATH')]
 bucket = {k: sorted([r for r in recs if r['meta']['system'] == k],
                     key=lambda r: r['meta']['id']) for k, _ in SYSTEMS}
 present = [(k, d) for k, d in SYSTEMS if bucket[k]]
@@ -156,25 +156,34 @@ with open(os.path.join(HERE, 'gen_outcomes.tex'), 'w') as f:
                 '\\caption{MacNet on its native SRDD tasks (chain, 10 '
                 'nodes).}\\label{tab:srdd-outcomes}\n\\end{table}\n')
 
-    if bucket['dylan']:
+    for dy_sys, dy_prefix, dy_caption in (
+            ('dylan', 'mmlu_',
+             'DyLAN (7 agents, listwise, 3 rounds) on screened MMLU items. '
+             'baseline = single gpt-5.4-mini call at screening time; outcome '
+             '= exact match on the gold answer (judge verdict shown for '
+             'comparison).'),
+            ('dylan-math', 'math500_',
+             'DyLAN (7 MATH-subject specialists, listwise, 3 rounds) on '
+             'screened MATH level-5 items (free-form answers graded by the '
+             "framework's is\\_equiv). baseline = single gpt-5.4-mini call "
+             'at screening time (judge verdict shown for comparison).')):
+        if not bucket[dy_sys]:
+            continue
         f.write('\n\\begin{table}[h]\\centering\\small\n'
                 '\\begin{tabular}{llccc}\\toprule\n'
                 'Item & Subject & baseline & DyLAN (exact match) & '
                 'judge\\\\\n\\midrule\n')
-        for r in bucket['dylan']:
+        for r in bucket[dy_sys]:
             m = r['meta']
             b = 'pass' if m.get('baseline_solved') else 'fail'
             n = 'pass' if m.get('new_exact_match') else 'fail'
             j = 'pass' if r['stage_b'].get('task_success') else 'fail'
-            f.write(f"{esc(m['id'].replace('mmlu_', '').rsplit('_run', 1)[0])}"
+            f.write(f"{esc(m['id'].replace(dy_prefix, '').rsplit('_run', 1)[0])}"
                     f" & {esc(m.get('subject', '').replace('_', ' '))}"
                     f" & {b} & {n} & {j}\\\\\n")
         f.write('\\bottomrule\\end{tabular}\n'
-                '\\caption{DyLAN (7 agents, listwise, 3 rounds) on screened '
-                'MMLU items. baseline = single gpt-5.4-mini call at '
-                'screening time; outcome = exact match on the gold answer '
-                '(judge verdict shown for comparison).}'
-                '\\label{tab:dylan-outcomes}\n\\end{table}\n')
+                f'\\caption{{{dy_caption}}}'
+                f'\\label{{tab:{dy_sys}-outcomes}}\n\\end{{table}}\n')
 
 # ---------------------------------------------------------------- modes ----
 with open(os.path.join(HERE, 'gen_modes.tex'), 'w') as f:

@@ -184,18 +184,25 @@ def corpus():
 
     # DyLAN: trace = transcript.txt rebuilt from DyLAN's own completion log;
     # ground-truth outcome (final_correct) comes from result.json.
-    dylan_file = os.path.join(ROOT, 'task_selection', 'dylan_tasks.json')
-    if os.path.exists(dylan_file):
+    # dylan = 7-role MMLU arm; dylan-math = 7-specialist MATH level-5 arm
+    # (free-form answers, added after MMLU's round-1 early stops produced
+    # structurally thin traces).
+    for system, taskfile, runsdir in (
+            ('dylan', 'dylan_tasks.json', 'dylan'),
+            ('dylan-math', 'dylan_math_tasks.json', 'dylan-math')):
+        dylan_file = os.path.join(ROOT, 'task_selection', taskfile)
+        if not os.path.exists(dylan_file):
+            continue
         for t in json.load(open(dylan_file)):
             for rdir in sorted(glob.glob(os.path.join(
-                    ROOT, 'reproduction', 'runs', 'dylan', t['id'], 'run_*'))):
+                    ROOT, 'reproduction', 'runs', runsdir, t['id'], 'run_*'))):
                 trace = os.path.join(rdir, 'transcript.txt')
                 if not os.path.exists(trace):
                     continue
                 res = {}
                 if os.path.exists(os.path.join(rdir, 'result.json')):
                     res = json.load(open(os.path.join(rdir, 'result.json')))
-                yield ('new', 'dylan', f"{t['id']}_{os.path.basename(rdir)}",
+                yield ('new', system, f"{t['id']}_{os.path.basename(rdir)}",
                        trace, dict(subject=t['subject'],
                                    baseline_solved=t['solved'],
                                    new_exact_match=res.get('final_correct'),

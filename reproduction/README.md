@@ -123,6 +123,38 @@ Start: `conda run -n base python reproduction/proxy/server.py`
   final answer vs gold) and result.json (`final_correct` = DyLAN's own
   exact-match bookkeeping).
 
+### DyLAN MATH arm (`dylan-math`)
+
+Added after the MMLU batch ran: 13/15 MMLU items early-stopped at round 1
+with ~5 calls — on 4-option multiple choice, individually-wrong agents
+collide on the same letter often enough to trigger the 2/3 consensus, so
+traces carried almost no inter-agent dynamics. The MATH track uses free-form
+`\boxed{}` answers graded by the framework's own `is_equiv`, so consensus
+requires genuine convergence.
+
+- Config: `code/MMLU/llmlp_listwise_math.py` (same LLMLP machinery, qtype
+  `math_exp`), 7 agents = one specialist per Hendrycks MATH subject from the
+  repo's own `ROLE_MAP_MATH` (AlgebraExpert, CountingProbabilitySpecialist,
+  GeometryWizard, IntermediateAlgebraMaestro, NumberTheoryScholar,
+  PrealgebraProdigy, PrecalculusGuru). The paper's MATH experiments used 4
+  agents; the 7-specialist team is a deliberate deviation to keep team size
+  identical to the MMLU arm and maximize judge-visible interaction.
+- Tasks: `task_selection/dylan_math_tasks.json` — 12 baseline failures + 3
+  controls from the 134 level-5 items of HuggingFaceH4/MATH-500
+  (`task_selection/screen_dylan_math.py`; pool outcomes in
+  `dylan_math_screen_results.json`; baseline failure rate 38/134 after
+  excluding one formatting-only `is_equiv` false negative, which is
+  reclassified and barred from selection — run-time grading would be
+  equally unreliable on it).
+- Run: `conda run -n dylan python reproduction/dylan/run_math_task.py
+  <id> [...]|--all [--parallel N]` → `runs/dylan-math/<id>/run_N/`, same
+  artifact layout as the MMLU arm (the runner writes each problem as a
+  one-file Hendrycks-format dir, since the script loads MATH problems from
+  per-file JSON).
+- Batch result (2026-06-11, $0.77 for 141 calls): 8/15 exact-match correct;
+  5/12 baseline failures fixed, 3/3 controls held. 4 runs went the full 3
+  rounds (17 calls) — the multi-round debate traces the MMLU arm lacked.
+
 ## Parallelism & trace attribution
 
 Every run is an isolated subprocess in its own directory; the proxy is
@@ -222,9 +254,15 @@ conda run -n macnet python reproduction/macnet/run_task.py --config mlp --all --
 conda run -n macnet python reproduction/macnet/run_task.py --config srdd --all --parallel 4
 
 # 4. DyLAN on the 15 screened MMLU items (~$1, ~30min)
+#    [DONE 2026-06-11, $0.18 — runs/dylan/ populated, 12/15 exact match]
 conda run -n dylan python reproduction/dylan/run_task.py --all --parallel 4
 
-# 5. judge the new traces (dominant cost: ~$1.2/trace x 55 ≈ $65; resume-safe)
+# 4b. DyLAN MATH arm on the 15 screened MATH level-5 items (~$1, ~25min)
+#     [DONE 2026-06-11, $0.77 — runs/dylan-math/ populated, 8/15 exact match]
+conda run -n dylan python reproduction/dylan/run_math_task.py --all --parallel 4
+
+# 5. judge the new traces (dominant cost: ~$1.2/trace x 70 ≈ $85; resume-safe;
+#    use --only to judge per system and watch spend between systems)
 conda run -n base python reproduction/judge/judge.py --new --parallel 4
 
 # 6. analysis + report

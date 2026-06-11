@@ -33,6 +33,17 @@ Larger-MAS extension (MacNet + DyLAN; see reproduction/README.md):
   MAST traces, so there is no cat-2 prior — difficulty screening replaces
   trace screening, and the same single-model baseline doubles as the
   MAS-vs-single-model comparison point.
+- `dylan_math_tasks.json` — 15 MATH level-5 items (12 baseline failures + 3
+  controls) from the 134 level-5 items of HuggingFaceH4/MATH-500, screened by
+  `screen_dylan_math.py` (baseline failure rate 38/134; pool outcomes in
+  `dylan_math_screen_results.json`). Added because 13/15 MMLU runs
+  early-stopped at round 1 — on 4-option multiple choice, wrong agents
+  collide on the same letter and trigger the 2/3 consensus; free-form
+  `\boxed{}` answers make consensus require genuine convergence. Screen
+  grading uses dylan_repo's own `extract_math_answer`/`is_equiv` so it
+  matches run-time grading exactly; one formatting-only `is_equiv` false
+  negative was reclassified and excluded from both selection pools (its
+  run-time grading would be equally unreliable).
 
 ## ⚠️ MAD dataset annotations are broken — do not use
 
