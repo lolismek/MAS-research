@@ -13,5 +13,5 @@ How to run on the GPU box: `env/GPU_RUN.md`. **Do not run models locally.**
 | `env/` | `setup.sh`, `run_all.sh`, `GPU_RUN.md` | — |
 
 Arms 3 (note-suffix KV) and 4 (attention-selected context KV) are specified
-in the plan but not implemented here; the `in-place` payload variant (vs
-`alongside`) is also not implemented.
+in the plan but not implemented here, as are the in-place arms 0/2i/3i/4i
+(payload *replacing* the note; plan §in-place-arms, added 2026-06-11).
