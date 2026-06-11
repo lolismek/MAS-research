@@ -78,7 +78,9 @@ def main():
     ap.add_argument("--samples", type=int, default=3)
     ap.add_argument("--base-seed", type=int, default=100)
     ap.add_argument("--temperature", type=float, default=0.7)
-    ap.add_argument("--max-new-tokens", type=int, default=450)
+    # generous enough that all 6 answers + the plan fit; smoke run showed 450
+    # truncates mid-answer, which biases against late-listed facts
+    ap.add_argument("--max-new-tokens", type=int, default=700)
     ap.add_argument("--truncate-tokens", type=int, default=512)
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
