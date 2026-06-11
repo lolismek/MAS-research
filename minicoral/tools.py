@@ -146,6 +146,32 @@ class ToolExecutor:
         self.read_max_chars = read_max_chars
         self.bash_timeout = bash_timeout
         self.last_gen: GenResult | None = None  # set by the agent loop each turn
+        self._stub_bin = self._install_coral_stub()
+
+    def _install_coral_stub(self) -> Path:
+        """Put a `coral` stub on the bash PATH (run_dir/bin/coral).
+
+        The real CLI is the runtime's bash interception, which only sees
+        commands that START with `coral`. Without a stub, `which coral`
+        fails and `... && coral eval` dies with "command not found", and
+        agents conclude the CLI doesn't exist (observed live, 3 of 4 agents).
+        The stub makes probes succeed and turns mis-invocations into
+        actionable feedback.
+        """
+        bin_dir = self.public_dir.parent.parent / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        stub = bin_dir / "coral"
+        if not stub.exists():
+            stub.write_text(
+                "#!/bin/sh\n"
+                "echo 'coral: the coral CLI is provided by the agent runtime and only"
+                " works when `coral ...` is the ENTIRE bash command. Do not chain it"
+                ' with && or pipes. Re-run it alone, e.g.: coral eval -m "description"'
+                "' >&2\n"
+                "exit 2\n"
+            )
+            stub.chmod(0o755)
+        return bin_dir
 
     # -- confinement --------------------------------------------------------
 
@@ -326,5 +352,7 @@ class ToolExecutor:
         import os
 
         sensitive = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
-        return {k: v for k, v in os.environ.items()
-                if not any(s in k.upper() for s in sensitive)}
+        env = {k: v for k, v in os.environ.items()
+               if not any(s in k.upper() for s in sensitive)}
+        env["PATH"] = f"{self._stub_bin}:{env.get('PATH', '/usr/bin:/bin')}"
+        return env

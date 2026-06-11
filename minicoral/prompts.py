@@ -187,6 +187,7 @@ You interact with the system exclusively through these 4 tools:
 
 - bash(command): Run a shell command in your worktree. Use this for `coral ...` commands and `ls`. Output is truncated if long.
   Example: bash(command="coral eval -m \\"increase grid density\\"")
+  IMPORTANT: `coral` is provided by the runtime, which intercepts bash commands that start with `coral`. A coral command must be the ENTIRE bash command --- never chain it with `&&`, `;`, or pipes, and don't look for a coral binary on disk.
 - read_file(path): Read a file. Returns its contents.
   Example: read_file(path="initial_program.py")
 - write_file(path, content): Create or overwrite a file with the given content.

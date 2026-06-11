@@ -200,3 +200,19 @@ def test_truncate_output_marker():
     out = truncate_output(text, 300)
     assert "truncated" in out and out.startswith("A") and out.endswith("B")
     assert truncate_output("short", 300) == "short"
+
+
+# -- coral stub on PATH (discoverability) ------------------------------------
+
+async def test_which_coral_finds_stub(env):
+    ex = make_executor(env)
+    res = await ex.execute(call("bash", command="which coral"))
+    assert not res.is_error
+    assert res.content.strip().endswith("bin/coral")
+
+
+async def test_chained_coral_hits_stub_with_guidance(env):
+    ex = make_executor(env)
+    res = await ex.execute(call("bash", command="true && coral log"))
+    assert res.is_error
+    assert "ENTIRE bash command" in res.content
