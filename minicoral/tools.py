@@ -229,7 +229,8 @@ class ToolExecutor:
                                   content=f"could not parse coral command: {e}", is_error=True)
             try:
                 out = await self.coral.dispatch(argv)
-                return ToolResult(tool_call_id=call.id, name="bash", content=out)
+                return ToolResult(tool_call_id=call.id, name="bash", content=out,
+                                  meta={"coral": argv})
             except CoralUsageError as e:
                 return ToolResult(tool_call_id=call.id, name="bash", content=str(e), is_error=True)
 
