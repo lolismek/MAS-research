@@ -21,10 +21,14 @@ Usage:
   conda run -n dylan python reproduction/dylan/run_math_task.py math500_algebra_1352
   conda run -n dylan python reproduction/dylan/run_math_task.py --all --parallel 4
 """
-import ast, glob, json, os, subprocess, sys, time
+import ast, glob, json, os, re, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, 'reproduction', 'dylan_repo',
+                                'code', 'MMLU'))
+from utils import extract_math_answer, is_equiv, most_frequent  # noqa: E402
+
 SCRIPT = os.path.join(ROOT, 'reproduction', 'dylan_repo', 'code', 'MMLU',
                       'llmlp_listwise_math.py')
 RUNS = os.path.join(ROOT, 'reproduction', 'runs', 'dylan-math')
@@ -36,11 +40,49 @@ ROLES = ['AlgebraExpert', 'CountingProbabilitySpecialist', 'GeometryWizard',
          'PrealgebraProdigy', 'PrecalculusGuru']
 
 
-def build_transcript(task, completions, accs_line, dest):
+PREAMBLE = """\
+DyLAN listwise MATH run — 7 agents (one specialist per MATH subject), up to \
+3 rounds, 2/3-consensus early stop.
+
+How this framework operates (factual context for reading the transcript):
+- Round 1: each agent answers independently, activated one at a time in \
+random order; once at least 5 agents have answered, the system stops early \
+if more than 2/3 of the team's recorded answers agree (compared by \
+mathematical equivalence).
+- Rounds 2+: each active agent is shown the previous round's replies, and \
+the framework's prompt asks it for an updated answer AND a 1-5 score for \
+each peer reply "in the form like [[1, 5, 2, ...]]" — both in the same \
+reply.
+- Before round 3, a separate ranker call (not part of this transcript) \
+selects the top 2 round-2 replies; all other agents are deactivated for the \
+rest of the run.
+- The framework records each agent's answer as the LAST \\boxed{...} \
+expression in its reply; consensus checks and the final answer are computed \
+over these recorded answers. The recorded answer is shown after each reply \
+below as "[framework-recorded answer: ...]".
+"""
+
+
+def system_final_answer(completions, console_path):
+    """The run's final answer: the consensus print if one fired, else
+    most_frequent over the last round's recorded answers (reproducing
+    LLMLP.forward's fallback return)."""
+    if os.path.exists(console_path):
+        hits = re.findall(r'^Consensus answer: (.*)$',
+                          open(console_path, encoding='utf-8',
+                               errors='replace').read(), re.M)
+        if hits:
+            return hits[-1]
+    last = [c[-1] for c in completions if c and c[-1] is not None]
+    if not last:
+        return None
+    return most_frequent([extract_math_answer(r) for r in last], is_equiv)[0]
+
+
+def build_transcript(task, completions, accs_line, dest, final_answer=None):
     """Plain-text trace for the judge from DyLAN's completion log."""
     rounds = max((len(c) for c in completions), default=0)
-    out = [f"DyLAN listwise MATH run — {len(ROLES)} agents (one specialist "
-           f"per MATH subject), {rounds} rounds max, 2/3-consensus early stop",
+    out = [PREAMBLE,
            f"Subject: {task['subject']} (level {task['level']})",
            f"Problem:\n{task['problem']}", '']
     for r in range(rounds):
@@ -48,11 +90,16 @@ def build_transcript(task, completions, accs_line, dest):
         for k, role in enumerate(ROLES):
             reply = completions[k][r] if r < len(completions[k]) else None
             out.append(f"--- Agent {k + 1} ({role}) ---")
-            out.append(reply if reply is not None else
-                       "[not activated this round — deactivated by the "
-                       "listwise ranker or early stop]")
+            if reply is None:
+                out.append("[not activated this round — deactivated by the "
+                           "listwise ranker or early stop]")
+            else:
+                out.append(reply)
+                out.append("[framework-recorded answer: "
+                           f"{extract_math_answer(reply)}]")
         out.append('')
     out.append("================ RESULT ================")
+    out.append(f"System final answer: {final_answer}")
     out.append(f"Expected answer: {task['answer']}")
     out.append(f"Exact match (is_equiv): {accs_line}")
     with open(dest, 'w', encoding='utf-8') as f:
@@ -103,14 +150,19 @@ def run_one(task):
         exact_match = bool(accs[0])
         resp_cnt = int(lines[1].split(' ')[0])
         ptok, ctok = (int(x) for x in lines[4].split(' '))
+    final_answer = None
     if jpath and os.path.exists(jpath):
         completions = json.loads(open(jpath).readline())
+        final_answer = system_final_answer(
+            completions, os.path.join(rundir, 'console.txt'))
         build_transcript(task, completions, exact_match,
-                         os.path.join(rundir, 'transcript.txt'))
+                         os.path.join(rundir, 'transcript.txt'),
+                         final_answer)
 
     result = dict(id=qid, subject=task['subject'], level=task['level'],
                   run=n, rc=rc, seconds=round(dur, 1),
-                  final_correct=exact_match, expected_answer=task['answer'],
+                  final_correct=exact_match, final_answer=final_answer,
+                  expected_answer=task['answer'],
                   baseline_solved=task.get('solved'),
                   resp_count=resp_cnt, prompt_tokens=ptok,
                   completion_tokens=ctok)
@@ -121,10 +173,37 @@ def run_one(task):
     return result
 
 
+def rebuild_transcripts():
+    """Regenerate transcript.txt (and result.json's final_answer) for every
+    archived run from its own logs — no LLM calls, no re-running."""
+    tasks = {t['id']: t for t in json.load(open(os.path.join(
+        ROOT, 'task_selection', 'dylan_math_tasks.json')))}
+    for rundir in sorted(glob.glob(os.path.join(RUNS, '*', 'run_*'))):
+        qid = os.path.basename(os.path.dirname(rundir))
+        jpaths = glob.glob(os.path.join(rundir, 'out_*', '*3.json'))
+        if qid not in tasks or not jpaths:
+            continue
+        completions = json.loads(open(jpaths[0]).readline())
+        respath = os.path.join(rundir, 'result.json')
+        res = json.load(open(respath))
+        final_answer = system_final_answer(
+            completions, os.path.join(rundir, 'console.txt'))
+        build_transcript(tasks[qid], completions, res.get('final_correct'),
+                         os.path.join(rundir, 'transcript.txt'),
+                         final_answer)
+        res['final_answer'] = final_answer
+        with open(respath, 'w') as f:
+            json.dump(res, f, indent=1)
+        print(f'rebuilt {rundir}  final_answer={final_answer!r}')
+
+
 def main():
     args = sys.argv[1:]
     if not args:
         sys.exit(__doc__)
+    if args == ['--rebuild-transcripts']:
+        rebuild_transcripts()
+        return
     par = 1
     if '--parallel' in args:
         i = args.index('--parallel')
