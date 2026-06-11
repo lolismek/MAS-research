@@ -17,6 +17,12 @@ Covers the Phase-0 gates from PROBE_PLAN.md:
   positions confined to the candidate span (sink-masked, unique, scores
   descending), determinism across calls, generation smoke with the suffix
   payload injected (needs a second, eager-attention model instance)
+- level-(ii) KV injection (arms 3kv/3ikv): reconstructing a span's K/V from
+  its own per-layer hidden states must reproduce the cache a plain forward
+  computes (proves the LN → W_k/W_v → k-norm → RoPE → GQA plumbing exact),
+  and greedy generation with the span injected in cache space (through the
+  fp16 storage round-trip) must match plain text generation — the positive
+  control level (i) never had
 """
 
 import argparse
@@ -184,6 +190,41 @@ def main():
         max_new_tokens=60, seed=0)
     ok = len(text) > 20 and any(c.isalpha() for c in text)
     results.append(report("generation with injected suffix states is text", ok, repr(text[:80])))
+
+    # 11. level-(ii) KV reconstruction exactness: rebuild the K/V of the span
+    # [a, b) from B's OWN per-layer hidden states at the same positions and
+    # compare against the cache a plain full forward computes — same math,
+    # so any gap is a plumbing bug (LN, W_k/W_v, per-head k-norm, RoPE, GQA)
+    out_full = h.model(input_ids=ids, attention_mask=torch.ones_like(ids),
+                       use_cache=True, output_hidden_states=True, return_dict=True)
+    per_layer = torch.stack([hs[0, a:b] for hs in out_full.hidden_states], dim=0)
+    cache, S = h.build_kv_injected_cache(pre, per_layer)
+    n_layers = len(h.model.model.layers)
+    worst = 0.0
+    for l in (0, n_layers // 2, n_layers - 1):
+        k_ref, v_ref = h.cache_layer_kv(out_full.past_key_values, l)
+        k_new, v_new = h.cache_layer_kv(cache, l)
+        worst = max(worst,
+                    (k_new[:, :, a:] - k_ref[:, :, a:b]).abs().max().item(),
+                    (v_new[:, :, a:] - v_ref[:, :, a:b]).abs().max().item())
+    ok = worst < tol and S == b - a and k_new.shape[2] == b
+    results.append(report("KV reconstruction matches a plain forward's cache",
+                          ok, f"max|ΔKV|={worst:.2e} over layers (0, mid, last)"))
+
+    # 12. KV positive control: greedy continuation with the span injected in
+    # cache space — through the fp16 round-trip the capture files use — must
+    # match plain greedy generation from the full text
+    text_ref = h.generate_from_ids(ids, max_new_tokens=40, greedy=True)
+    text_kv = h.generate_with_kv_injection(
+        pre, per_layer.to(torch.float16), ids[:, b:], max_new_tokens=40, greedy=True)
+    ok = text_kv == text_ref
+    detail = "exact match" if ok else ""
+    if not ok:
+        import difflib
+        ratio = difflib.SequenceMatcher(None, text_ref, text_kv).ratio()
+        ok = ratio > 0.9
+        detail = f"similarity {ratio:.3f} ref={text_ref[:60]!r} kv={text_kv[:60]!r}"
+    results.append(report("greedy generation with injected KV matches text", ok, detail))
 
     print(f"\n{sum(results)}/{len(results)} passed")
     raise SystemExit(0 if all(results) else 1)

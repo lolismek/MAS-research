@@ -75,6 +75,10 @@ def main():
                     help="reuse the notes of an existing capture run (run name) "
                          "instead of regenerating — keeps notes byte-identical "
                          "so only the latents differ across runs")
+    ap.add_argument("--out-suffix", default="",
+                    help="suffix for output filenames (e.g. _realign) so a "
+                         "re-capture can land in the SAME run dir without "
+                         "clobbering the original latents/records")
     args = ap.parse_args()
 
     out_dir = RUNS_DIR / args.run / "capture"
@@ -89,6 +93,17 @@ def main():
     summary = []
     for i, path in enumerate(ctx_files):
         ctx = read_json(path)
+        st_path = out_dir / f"{ctx['context_id']}{args.out_suffix}.safetensors"
+        rec_path = out_dir / f"{ctx['context_id']}{args.out_suffix}.json"
+        if st_path.exists() and rec_path.exists():
+            record = read_json(rec_path)
+            summary.append({
+                "context_id": ctx["context_id"],
+                "n_unverbalized": record["n_unverbalized"],
+                "note_tokens": record["note_tokens"],
+            })
+            print(f"[{i + 1}/{len(ctx_files)}] {ctx['context_id']}: exists, skipping")
+            continue
         t0 = time.time()
         note = None
         if args.notes_from:
@@ -99,8 +114,8 @@ def main():
         if args.notes_from:
             record["notes_from"] = args.notes_from
         save_file({"arm2_latents": latents.contiguous().to(torch.float32)},
-                  str(out_dir / f"{ctx['context_id']}.safetensors"))
-        write_json(record, out_dir / f"{ctx['context_id']}.json")
+                  str(st_path))
+        write_json(record, rec_path)
         summary.append({
             "context_id": ctx["context_id"],
             "n_unverbalized": record["n_unverbalized"],
@@ -122,7 +137,7 @@ def main():
         "realign": h.realign,
         "per_context": summary,
     }
-    write_json(gate, out_dir / "capture_summary.json")
+    write_json(gate, out_dir / f"capture_summary{args.out_suffix}.json")
     print(f"\nmean unverbalized: {gate['mean_unverbalized']:.2f}/6 across {n} contexts")
 
 

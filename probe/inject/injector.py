@@ -21,6 +21,15 @@ Two mechanisms:
    context positions (arm 4: sink-masked, mid-to-late layers, max over heads,
    mean over note queries), whose last-layer states form the selected payload.
 
+4. Level-(ii) cache-space injection (reader side, arms 3kv/3ikv): instead of
+   re-encoding writer states from B's layer 1, splice A's K/V for the payload
+   tokens directly into B's cache at every layer. K/V at layer l are
+   deterministic functions of the hidden state ENTERING layer l
+   (input_layernorm → W_k/W_v → per-head k-norm → RoPE), so the per-layer
+   states ``capture_note_payloads`` stores suffice — K/V are reconstructed
+   with RoPE applied at B's slot positions, avoiding the positional mismatch
+   of shipping A's rotated keys verbatim.
+
 Norm matching follows LatentMAS ``_apply_latent_realignment``. With
 ``realign=False`` (their CLI default, used for the 2026-06-11 main run):
 identity map + rescale to the mean input-embedding row norm. With
@@ -213,6 +222,92 @@ class ModelHarness:
             past = out.past_key_values
             last_hidden = out.hidden_states[-1][:, -1, :]
         return torch.stack(vecs, dim=0)
+
+    # ---------- level-(ii) cache-space injection (arms 3kv / 3ikv) ----------
+
+    @staticmethod
+    def cache_layer_kv(cache, layer_idx: int):
+        """One layer's (keys, values) across transformers cache APIs."""
+        if hasattr(cache, "layers"):
+            return cache.layers[layer_idx].keys, cache.layers[layer_idx].values
+        return cache.key_cache[layer_idx], cache.value_cache[layer_idx]
+
+    @torch.no_grad()
+    def build_kv_injected_cache(
+        self, pre_ids: torch.Tensor, per_layer_states: torch.Tensor
+    ) -> tuple:
+        """Forward pre_ids with use_cache, then append S rows per layer
+        reconstructed from another pass's per-layer hidden states, RoPE'd at
+        the slot positions [P, P+S). Returns (cache, S).
+
+        per_layer_states: [n_layers(+1), S, hidden]; row l is the hidden
+        state ENTERING decoder layer l (transformers' output_hidden_states
+        convention); a trailing final-output row, if present, is ignored.
+        """
+        from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb
+
+        out = self.model(
+            input_ids=pre_ids,
+            attention_mask=torch.ones_like(pre_ids),
+            use_cache=True,
+            return_dict=True,
+        )
+        cache = out.past_key_values
+        decoder = self.model.model
+        if per_layer_states.shape[0] < len(decoder.layers):
+            raise ValueError(
+                f"need ≥{len(decoder.layers)} per-layer state rows, "
+                f"got {per_layer_states.shape[0]}")
+        S = per_layer_states.shape[1]
+        P = pre_ids.shape[1]
+        pos = torch.arange(P, P + S, device=self.device).unsqueeze(0)
+        ref = torch.empty((1, S, 1), dtype=self.dtype, device=self.device)
+        cos, sin = decoder.rotary_emb(ref, pos)
+        for idx, layer in enumerate(decoder.layers):
+            h = per_layer_states[idx].to(self.device, self.dtype).unsqueeze(0)
+            hs = layer.input_layernorm(h)
+            attn = layer.self_attn
+            hd = attn.head_dim
+            k = attn.k_norm(attn.k_proj(hs).view(1, S, -1, hd)).transpose(1, 2)
+            v = attn.v_proj(hs).view(1, S, -1, hd).transpose(1, 2)
+            k, _ = apply_rotary_pos_emb(k, k, cos, sin)
+            cache.update(k, v, idx)
+        return cache, S
+
+    @torch.no_grad()
+    def generate_with_kv_injection(
+        self,
+        pre_ids: torch.Tensor,
+        per_layer_states: torch.Tensor,
+        post_ids: torch.Tensor,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        top_p: float = 0.95,
+        seed: Optional[int] = None,
+        greedy: bool = False,
+    ) -> str:
+        """Generate with the payload injected in CACHE space at the slot
+        positions. Slot positions are filled with pad ids in input_ids purely
+        for length accounting — the prefilled cache covers them, so generate's
+        first step forwards only the post tokens and the pad ids are never
+        embedded."""
+        cache, S = self.build_kv_injected_cache(pre_ids, per_layer_states)
+        pad = torch.full((1, S), self.tokenizer.pad_token_id,
+                         dtype=torch.long, device=self.device)
+        full_ids = torch.cat([pre_ids, pad, post_ids], dim=1)
+        if seed is not None:
+            torch.manual_seed(seed)
+        out = self.model.generate(
+            input_ids=full_ids,
+            attention_mask=torch.ones_like(full_ids),
+            past_key_values=cache,
+            max_new_tokens=max_new_tokens,
+            do_sample=not greedy,
+            temperature=temperature if not greedy else None,
+            top_p=top_p if not greedy else None,
+            pad_token_id=self.tokenizer.pad_token_id,
+        )
+        return self.decode(out[0, full_ids.shape[1]:]).strip()
 
     # ---------- note-turn payload capture (arms 3 / 4) ----------
 

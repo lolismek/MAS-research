@@ -49,7 +49,12 @@ def main():
     args = ap.parse_args()
 
     arm = normalize_arm(args.arm)
-    _, inplace, _ = parse_arm(arm)
+    base, inplace, _ = parse_arm(arm)
+    if base in ("3kv", "1e"):
+        raise SystemExit(
+            f"arm {arm}: the embeds-space coherence gates don't apply — "
+            "3kv/3ikv are gated by Phase-0 tests 11/12 (KV reconstruction + "
+            "positive control) and 1e IS a control; eyeball side_by_side.md")
     baseline = "0" if inplace else "1"
 
     run_dir = RUNS_DIR / args.run

@@ -29,15 +29,21 @@ from pathlib import Path
 from probe.common import RUNS_DIR, perplexity_api_key, read_json, write_json
 from probe.contexts.facts import fact_matches
 
-_ARM_RANK = {"0": 0, "1": 1, "2": 2, "2i": 3, "3": 4, "3i": 5,
+_ARM_RANK = {"0": 0, "1": 1, "1e": 2, "2": 3, "2r": 4, "2i": 5, "2ir": 6,
+             "3": 7, "3i": 8, "3kv": 9, "3ikv": 10,
              "5": 90, "5t": 91}
 _ARM_LABELS = {
     "0": "arm 0 — no note (floor)",
     "1": "arm 1 — note only (baseline)",
+    "1e": "arm 1e — note input embeddings in place of note (control)",
     "2": "arm 2 — note + rolled latents",
+    "2r": "arm 2r — note + rolled latents (realigned)",
     "2i": "arm 2i — rolled latents in place of note",
+    "2ir": "arm 2ir — realigned rolled latents in place of note",
     "3": "arm 3 — note + note-suffix states",
     "3i": "arm 3i — note-suffix states in place of note",
+    "3kv": "arm 3kv — note + note-suffix KV cache (level ii)",
+    "3ikv": "arm 3ikv — note-suffix KV cache in place of note (level ii)",
     "5": "arm 5 — note + raw context (ceiling)",
     "5t": "arm 5t — note + truncated raw context",
 }
@@ -47,8 +53,8 @@ def arm_sort_key(arm: str):
     if arm in _ARM_RANK:
         return (_ARM_RANK[arm], 0)
     m = re.fullmatch(r"4(i?)k(\d+)", arm)
-    if m:  # alongside 4k* then in-place 4ik*, ascending k, between 3i and 5
-        return (10 + (1 if m.group(1) else 0), int(m.group(2)))
+    if m:  # alongside 4k* then in-place 4ik*, ascending k, between 3ikv and 5
+        return (20 + (1 if m.group(1) else 0), int(m.group(2)))
     return (99, 0)
 
 

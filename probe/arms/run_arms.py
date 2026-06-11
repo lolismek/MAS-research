@@ -7,21 +7,29 @@ Arms (PROBE_PLAN.md §arms and §in-place-arms):
     1     text-only baseline: the note alone
     2     rolled latent thoughts: note + m latent vectors at the sentinel
           (visible text identical to arm 1)
+    2r    as 2, latents passed through the LatentMAS realignment matrix
     3     note-suffix states: note + A's last-layer states for the note tokens
+    3kv   note + A's K/V cache for the note tokens, spliced per layer into
+          B's cache at the slot positions (level ii)
     4k<k> selected context states: note + top-k attention-ranked positions
           (bare "4" = k64)
     5/5t  raw-context ceiling: note + full (or truncated) session log as text
   in place of the note —
     0     no-note floor: bare scaffold, nothing injected
-    2i / 3i / 4ik<k>  the same payloads substituting for the note text
-          (scaffold byte-identical across the in-place family)
+    2i / 2ir / 3i / 3ikv / 4ik<k>  the same payloads substituting for the
+          note text (scaffold byte-identical across the in-place family)
+    1e    positive control: the note's own input-embedding rows in place of
+          its text — must recover ~arm-1 recall if the harness is sound
 
-Every arm runs through the same embeds-based generation path (the no-payload
-arms simply inject nothing), so arms differ only in payload (and, for the
-in-place family, the removed note text). Sampling is paired: sample s uses
-seed (base_seed + s) in every arm.
+All arms except 3kv/3ikv run through the same embeds-based generation path
+(the no-payload arms simply inject nothing); 3kv/3ikv inject in cache space
+instead. Arms differ only in payload (and, for the in-place family, the
+removed note text). Sampling is paired: sample s uses seed (base_seed + s)
+in every arm.
 
-Arms 3/4 need <ctx>_payloads.safetensors from probe.capture.capture_payloads.
+Arms 3/4 need <ctx>_payloads.safetensors from probe.capture.capture_payloads
+(3kv also needs its per-layer states); 2r needs <ctx>_realign.safetensors
+from run_capture --realign --out-suffix _realign.
 
 Outputs: runs/<run>/arms/<ctx>_arm<arm>_s<s>.json
 """
@@ -61,20 +69,33 @@ def run_one(h: ModelHarness, ctx: dict, note: str, arm: str,
     pre_text, post_text = text.split(LATENT_SENTINEL)
     pre_ids, post_ids = h.encode(pre_text), h.encode(post_text)
 
-    embeds = h.build_injected_embeds(pre_ids, payload, post_ids)
-    out = h.generate_from_embeds(embeds, max_new_tokens=max_new_tokens,
-                                 temperature=temperature, seed=seed)
+    if base == "1e":
+        # control payload: the note's own input-embedding rows — exactly the
+        # vectors the model reads when the note is text. Deliberately NOT
+        # norm-matched: they are in-distribution by construction.
+        payload = h.embed(h.encode(note)).squeeze(0)
 
-    if base in ("5", "5t"):  # transcript tokens added on top of arm 1
-        payload_tokens = h.encode(raw).shape[1]
+    if base == "3kv":
+        out = h.generate_with_kv_injection(
+            pre_ids, payload, post_ids, max_new_tokens=max_new_tokens,
+            temperature=temperature, seed=seed)
+        payload_tokens = payload.shape[1]
+        prompt_tokens = pre_ids.shape[1] + payload.shape[1] + post_ids.shape[1]
     else:
-        payload_tokens = 0 if payload is None else payload.shape[0]
+        embeds = h.build_injected_embeds(pre_ids, payload, post_ids)
+        out = h.generate_from_embeds(embeds, max_new_tokens=max_new_tokens,
+                                     temperature=temperature, seed=seed)
+        prompt_tokens = embeds.shape[1]
+        if base in ("5", "5t"):  # transcript tokens added on top of arm 1
+            payload_tokens = h.encode(raw).shape[1]
+        else:
+            payload_tokens = 0 if payload is None else payload.shape[0]
     return {
         "context_id": ctx["context_id"],
         "arm": arm,
         "seed": seed,
         "text": out,
-        "prompt_tokens": int(embeds.shape[1]),
+        "prompt_tokens": int(prompt_tokens),
         "payload_tokens": int(payload_tokens),
     }
 

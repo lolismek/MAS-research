@@ -62,28 +62,36 @@ Then on the box:
 the stored k_max=128, so 4k32/4k128 need no recapture. In-place arms read
 their verdict off the VERBALIZED column (plan §in-place-arms).
 
-## Realign ablation (arm 2 with the LatentMAS realignment matrix)
+## Round 3: realign (2r/2ir), level-(ii) KV (3kv/3ikv), embedding control (1e)
 
-The 2026-06-11 main run rolled latents with realignment OFF (the LatentMAS
-CLI default). Qwen3-8B has untied embeddings, so realign-on is a genuinely
-different condition. To rerun ONLY arm 2 with it, reusing the main run's
-notes byte-for-byte (so arms 1/5 results stay valid and paired):
+These also extend `runs/main` (one paired table at the end). The realigned
+latents are recaptured with `--out-suffix _realign` so they land NEXT TO the
+originals instead of clobbering them; notes are reused byte-for-byte. The KV
+arms reconstruct A's cache rows from the per-layer suffix states
+`capture_payloads` already stored — no new capture pass. Arm 1e needs no
+capture at all (the runner embeds the note text itself).
 
 ```bash
-.venv/bin/python -m probe.inject.test_inject --model full          # now 8/8
-.venv/bin/python -m probe.capture.run_capture --model full --run realign \
-    --realign --notes-from main --limit 38
-cp runs/main/arms/*_arm1_*.json runs/main/arms/*_arm5_*.json runs/realign/arms/
-.venv/bin/python -m probe.arms.run_arms --model full --run realign --arms 2 --samples 3 --limit 38
-.venv/bin/python -m probe.analysis.coherence --model full --run realign --n 10
-.venv/bin/python -m probe.analysis.score_recall --run realign
+.venv/bin/python -m probe.inject.test_inject --model full            # now 12/12
+#   → tests 11/12 are the KV gates: reconstruction exactness + positive
+#     control (greedy KV-injected == greedy text). Do NOT run the KV arms
+#     if either fails.
+.venv/bin/python -m probe.capture.run_capture --model full --run main \
+    --realign --notes-from main --out-suffix _realign --limit 38
+.venv/bin/python -m probe.arms.run_arms --model full --run main \
+    --arms 1e,2r,2ir,3kv,3ikv --samples 1 --limit 2                  # smoke, eyeball
+.venv/bin/python -m probe.analysis.coherence --model full --run main --arm 2r --n 10
+#   → ΔNLL + slot-attention gates for the realigned latents (embeds-space
+#     arms only; 3kv/1e are gated by tests 11/12 and by being controls)
+.venv/bin/python -m probe.arms.run_arms --model full --run main \
+    --arms 1e,2r,2ir,3kv,3ikv --samples 3 --limit 38                 # full eval
+.venv/bin/python -m probe.analysis.score_recall --run main           # one paired table
 ```
 
-Copying the arm-1/5 outputs is sound because they do not depend on the
-latents: identical notes, contexts, and seeds. `--limit 38` matches the main
-run's early stop (it completed the first 38 contexts in order) so all arms
-cover the same context set; verify with
-`ls runs/main/arms/ | cut -d_ -f1-2 | sort -u | wc -l`.
+Reading the new rows: 1e ≈ arm 1 validates the level-(i) in-place harness
+(if it is ≈ 0 instead, every level-(i) zero is suspect). 2r/2ir test whether
+the OOD-correction matrix changes the arm-2/2i nulls. 3ikv is the level-(ii)
+substitution test — the note's own KV instead of its text.
 
 ## Knobs
 
