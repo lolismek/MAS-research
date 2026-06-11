@@ -186,6 +186,32 @@ async def test_parse_error_fed_back(rig):
     assert any(e["type"] == "error" for e in traj.events())
 
 
+async def test_heartbeat_prompts_ride_eval_results_into_trajectory(rig):
+    """M5 integration: reflect (every eval) is appended to the eval tool result
+    and therefore lands in the trajectory the model actually saw."""
+    from minicoral.config import DEFAULT_HEARTBEATS, HeartbeatAction
+    from minicoral.heartbeat import HeartbeatMonitor
+
+    ws, hub, make_runtime = rig
+    engine = ScriptedEngine([
+        gen(("bash", {"command": 'coral eval -m "first"'})),
+        gen(("bash", {"command": 'coral eval -m "second"'})),
+    ])
+    rt, traj = make_runtime(engine, max_turns=2)
+    rt.executor.coral.heartbeat = HeartbeatMonitor(
+        [HeartbeatAction(**a) for a in DEFAULT_HEARTBEATS],
+        heartbeat_dir=ws.public_dir / "heartbeat",
+    )
+    await rt.run()
+
+    results = [e for e in traj.events() if e["type"] == "tool_result"]
+    hb = [e for e in results if "--- HEARTBEAT ---" in e["content"]]
+    assert len(hb) == 2  # reflect fires on every eval
+    assert "Pause and reflect" in hb[0]["content"]
+    # observability mirror updated through the real eval path
+    assert (ws.public_dir / "heartbeat" / "agent-1.json").exists()
+
+
 async def test_capture_states_follows_transport(rig):
     ws, hub, make_runtime = rig
 
