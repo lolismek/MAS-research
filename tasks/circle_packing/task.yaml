@@ -1,0 +1,65 @@
+# Circle packing task (paper D.1 schema, mini-CORAL subset).
+task:
+  name: "Circle Packing --- Maximize Sum of Radii (n=26)"
+  description: |
+    Pack 26 non-overlapping circles inside the unit square [0,1] x [0,1] so
+    that the sum of their radii is as large as possible.
+
+    Your program is initial_program.py. When run with `python
+    initial_program.py`, it must print to stdout a JSON list of exactly 26
+    [x, y, r] triples (floats): circle centers and radii. Every circle must
+    lie entirely inside the unit square and no two circles may overlap
+    (tolerance 1e-6 on both constraints). The score is the sum of the 26
+    radii. The best known value is 2.6359.
+  files: ["initial_program.py"]
+  tips: |
+    The grader runs `python initial_program.py` with a 120s time limit and
+    validates boundary and pairwise-overlap constraints at 1e-6 tolerance.
+    Invalid packings score nothing, so leave a small safety margin. numpy and
+    scipy are available. The seed uses a uniform grid; better packings use
+    unequal radii and optimization.
+  seed: seed
+
+grader:
+  timeout: 300
+  direction: maximize
+  args:
+    program_file: initial_program.py
+    program_timeout: 120
+    n_circles: 26
+    sota: 2.6359
+  private: ["eval/"]
+
+agents:
+  count: 4
+  model: "Qwen/Qwen3-8B"
+  max_turns: 200
+  heartbeat:
+    - {name: reflect, every: 1, trigger: interval, scope: local}
+    - {name: consolidate, every: 10, trigger: interval, scope: global}
+    - {name: pivot, every: 5, trigger: plateau, scope: local}
+
+engine:
+  backend: hf
+  device: auto
+  dtype: bfloat16
+  max_context: 32768
+  compact_at_tokens: 24576
+  max_new_tokens: 2048
+  temperature: 0.7
+  thinking: false
+  tool_output_max_chars: 2000
+
+run:
+  wall_clock_hours: 3.0
+  max_stale_evals: 40
+  results_dir: results
+  seed: null
+
+transport:
+  kind: text_only
+
+sharing:
+  attempts: true
+  notes: true
+  skills: true
