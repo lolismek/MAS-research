@@ -13,6 +13,8 @@ How to run on the GPU box: `env/GPU_RUN.md`. **Do not run models locally.**
 | `env/` | `setup.sh`, `run_all.sh`, `GPU_RUN.md` | — |
 
 All arms of the plan (alongside 1/2/3/4/5 and in-place 0/2i/3i/4i) are
-implemented; the 2026-06-11 REPORT.md covers arms 1/2/5 only. Level-(ii)
-cache-space injection remains unimplemented (per-layer suffix states are
-already stored by `capture_payloads.py` for it).
+implemented and evaluated — full results in `REPORT.md` (2026-06-11, both
+batches; all level-(i) payloads null, 3i = 0.000 verbalized). Still open:
+the realign-on ablation (recipe in `env/GPU_RUN.md`) and level-(ii)
+cache-space injection (unimplemented; the per-layer suffix states it needs
+are already stored by `capture_payloads.py`).
