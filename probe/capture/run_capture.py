@@ -67,6 +67,7 @@ def main():
     args = ap.parse_args()
 
     out_dir = RUNS_DIR / args.run / "capture"
+    out_dir.mkdir(parents=True, exist_ok=True)
     h = ModelHarness(args.model, device=args.device)
 
     from pathlib import Path
