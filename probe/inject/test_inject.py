@@ -200,16 +200,22 @@ def main():
     per_layer = torch.stack([hs[0, a:b] for hs in out_full.hidden_states], dim=0)
     cache, S = h.build_kv_injected_cache(pre, per_layer)
     n_layers = len(h.model.model.layers)
+    # RELATIVE Frobenius criterion: bf16 matmul kernels round, and 8B keys
+    # reach |K|~200 at layer 0 (large k_norm weights), so an absolute bound
+    # false-alarms at ~0.5% relative error (measured flat ~2.5e-3 across all
+    # layers on torch 2.11/A100, with the end-to-end greedy control exact)
     worst = 0.0
     for l in (0, n_layers // 2, n_layers - 1):
         k_ref, v_ref = h.cache_layer_kv(out_full.past_key_values, l)
         k_new, v_new = h.cache_layer_kv(cache, l)
-        worst = max(worst,
-                    (k_new[:, :, a:] - k_ref[:, :, a:b]).abs().max().item(),
-                    (v_new[:, :, a:] - v_ref[:, :, a:b]).abs().max().item())
-    ok = worst < tol and S == b - a and k_new.shape[2] == b
+        for new, ref in ((k_new[:, :, a:], k_ref[:, :, a:b]),
+                         (v_new[:, :, a:], v_ref[:, :, a:b])):
+            d = (new.float() - ref.float()).norm() / ref.float().norm()
+            worst = max(worst, d.item())
+    rel_tol = 1e-3 if h.dtype == torch.float32 else 2e-2
+    ok = worst < rel_tol and S == b - a and k_new.shape[2] == b
     results.append(report("KV reconstruction matches a plain forward's cache",
-                          ok, f"max|ΔKV|={worst:.2e} over layers (0, mid, last)"))
+                          ok, f"worst rel ΔKV={worst:.2e} over layers (0, mid, last)"))
 
     # 12. KV positive control: greedy continuation with the span injected in
     # cache space — through the fp16 round-trip the capture files use — must
