@@ -77,18 +77,21 @@ def main():
     results.append(report("shifted injection changes final logits", d_shift > 10 * tol,
                           f"max|Δlogit|={d_shift:.2e}"))
 
-    # 4. causality: random slots must not affect logits BEFORE the slot
+    # 4. causality: two passes differing ONLY in slot contents must agree on
+    # every logit BEFORE the slot. (Comparing against the uninjected pass
+    # instead is length/path-sensitive: bf16 sdpa kernels on some stacks
+    # drift ~0.4 on earlier logits from the seq-length change alone, while
+    # fp32 confirms exact causality — torch 2.11/transformers 5.11, A100.)
     m = 8
     rand_latents = torch.randn(m, h.hidden_size) * (h.target_norm / h.hidden_size ** 0.5)
-    inj_rand = h.build_injected_embeds(pre, rand_latents, post)
-    l_rand = h.logits(embeds=inj_rand)
-    d_before = (l_rand[0, : a - 1] - l_ids[0, : a - 1]).abs().max().item()
+    l_rand = h.logits(embeds=h.build_injected_embeds(pre, rand_latents, post))
+    l_rand2 = h.logits(embeds=h.build_injected_embeds(pre, -rand_latents, post))
+    d_before = (l_rand2[0, : a - 1] - l_rand[0, : a - 1]).abs().max().item()
     results.append(report("slots invisible to earlier positions (causal mask)",
                           d_before < tol, f"max|Δlogit| before slot={d_before:.2e}"))
 
     # 5. slots are attendable: different slot contents → different final logits
-    inj_rand2 = h.build_injected_embeds(pre, -rand_latents, post)
-    d_slots = (h.logits(embeds=inj_rand2)[0, -1] - l_rand[0, -1]).abs().max().item()
+    d_slots = (l_rand2[0, -1] - l_rand[0, -1]).abs().max().item()
     results.append(report("slot contents influence downstream logits", d_slots > 10 * tol,
                           f"max|Δlogit|={d_slots:.2e}"))
 
