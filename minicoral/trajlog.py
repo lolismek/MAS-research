@@ -23,6 +23,8 @@ EVENT_TYPES = {
     "session_start", "assistant", "tool_call", "tool_result", "eval",
     "heartbeat", "compaction", "note_write", "note_read", "agent_restart",
     "error",
+    # run.events.jsonl (orchestrator-level)
+    "run_start", "run_stop", "agent_start", "agent_stop",
 }
 
 
