@@ -87,7 +87,12 @@ spec (appendices C.1–C.7, D.1). Section/table references are to the paper.
     (`eval/log/show/checkout/diff/revert/notes/skills/heartbeat`-view),
     dispatched in-process via bash interception. Orchestration is
     `python -m minicoral {start,validate,status}`; `runs`, `resume`, `stop`,
-    `ui` are not implemented.
+    `ui` are not implemented. Because `coral` is interception rather than a
+    real binary (the paper's runtimes have one on PATH), a `run_dir/bin/coral`
+    stub is placed on the bash PATH: `which coral` succeeds, and invoking it
+    inside `&&`/pipe chains (which interception cannot see) returns guidance
+    to re-run it standalone. Without the stub, 3 of 4 agents in the first
+    live run concluded the CLI didn't exist and never evaluated.
 18. **`coral checkout` is `git reset --hard <hash>`** on the agent branch
     (the next eval's parent is the checked-out attempt). `coral revert` is
     `reset --hard HEAD~1`.
