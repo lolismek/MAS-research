@@ -1,0 +1,20 @@
+# bren GPU pilot (M8): Qwen3-8B, paper-shaped run.
+# Usage: python -m minicoral start -c tasks/circle_packing/task.yaml -o configs/gpu-a100.yaml
+agents:
+  count: 4
+  model: "Qwen/Qwen3-8B"
+
+engine:
+  backend: hf
+  device: cuda
+  dtype: bfloat16
+  max_context: 32768
+  compact_at_tokens: 24576
+  # YaRN 64k escape hatch if compaction resets exceed ~1 per 2-3 evals:
+  # max_context: 65536
+  # compact_at_tokens: 49152
+  # (also requires rope_scaling yarn factor 2.0 in the model config; see
+  # scripts/setup_gpu.sh notes)
+
+run:
+  wall_clock_hours: 3.0

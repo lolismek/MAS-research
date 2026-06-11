@@ -73,7 +73,7 @@ def cmd_status(cfg: Config) -> int:
     return 0
 
 
-def cmd_start(cfg: Config, resolved_dump: bool = True) -> int:
+def cmd_start(cfg: Config) -> int:
     from .orchestrator import run_orchestrator
 
     return asyncio.run(run_orchestrator(cfg))
