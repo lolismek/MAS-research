@@ -213,7 +213,8 @@ class CoralCLI:
                 raise CoralUsageError(f"unknown coral log option: {arg}")
             i += 1
 
-        attempts = self.hub.attempts()
+        all_attempts = self.hub.attempts()
+        attempts = all_attempts
         if agent:
             attempts = [a for a in attempts if a.agent_id == agent]
         if search:
@@ -228,6 +229,13 @@ class CoralCLI:
             attempts = scored + unscored
         attempts = attempts[:n]
         if not attempts:
+            if all_attempts and (agent or search):
+                # A filtered miss must not read like an empty hub: an agent
+                # that polls `coral log --search ...` and is told "no attempts
+                # yet" will keep polling forever (observed live, Qwen3-8B).
+                return (f"no attempts match that filter "
+                        f"({len(all_attempts)} attempts exist; run `coral log` "
+                        f"to see the leaderboard)")
             return "no attempts yet"
 
         lines = [f"{'score':>12}  {'status':<10} {'agent':<9} {'hash':<9} title"]

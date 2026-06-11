@@ -177,6 +177,10 @@ async def test_log_and_show_render(rig):
     log = await cli.dispatch(["log", "--search", "denser"])
     assert "agent2 denser" in log and "agent1 seed" not in log
 
+    # a filtered miss must not claim the hub is empty (loop-feeding bug)
+    log = await cli.dispatch(["log", "--search", "zzz-no-such-keyword"])
+    assert "no attempts match that filter" in log and "2 attempts exist" in log
+
     recent = await cli.dispatch(["log", "--recent", "-n", "1"])
     assert "agent2 denser" in recent
 

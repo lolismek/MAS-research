@@ -1,0 +1,19 @@
+# Pre-pilot shakedown: 2 agents, 30 min, Qwen3-8B on an A100. Verifies real-
+# model agent behavior (coral CLI, heartbeats, notes, compaction) before the
+# 3h pilot. Thinking mode ON: without it Qwen3-8B degenerates into empty-text
+# tool-call loops (observed 2026-06-11: one agent repeated the same
+# `coral log --search ...` for 50+ turns). Temperature 0.6 per the Qwen3
+# model card's thinking-mode recommendation.
+agents:
+  count: 2
+  model: "Qwen/Qwen3-8B"
+
+engine:
+  backend: hf
+  device: cuda
+  dtype: bfloat16
+  thinking: true
+  temperature: 0.6
+
+run:
+  wall_clock_hours: 0.5
