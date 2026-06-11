@@ -38,9 +38,9 @@ DOMAINS = [
 ]
 
 BEST_CHANGES = [
-    ("reordering the two merge passes", ["merge passes", "reorder*"]),
+    ("reordering the two merge passes", ["merge pass*", "reorder*"]),
     ("tightening the dedup threshold", ["dedup"]),
-    ("pinning the worker pool to physical cores", ["physical cores", "pinn*"]),
+    ("pinning the worker pool to physical cores", ["physical core*", "pinn*"]),
     ("switching the outer loop to row-major order", ["row-major", "row major"]),
     ("trimming the padding logic in the writer", ["padding"]),
 ]

@@ -81,13 +81,15 @@ GOTCHAS = [
      [["seed*"]], ["fixed", "{v}", "identical"], ["1234", "777", "4242"]),
 ]
 
+# trailing * on multiword keys too: B routinely pluralizes ("boundary checks"),
+# which a trailing \b would spuriously reject
 UNTRIED_IDEAS = [
-    ("precomputing the neighbor table offline and shipping it as an artifact", ["neighbor table", "precomput*"]),
+    ("precomputing the neighbor table offline and shipping it as an artifact", ["neighbor table*", "precomput*"]),
     ("fusing the two normalization passes into one sweep", ["fus*", "normalization pass*"]),
-    ("swapping the priority queue for a bucket list", ["bucket list", "priority queue"]),
-    ("vectorizing the boundary check with masked stores", ["vectoriz*", "boundary check"]),
-    ("caching partial scores between attempts via the scratch dir", ["partial score*", "scratch dir"]),
-    ("splitting the solver into a coarse pass and a polish pass", ["coarse pass", "polish pass"]),
+    ("swapping the priority queue for a bucket list", ["bucket list*", "priority queue*"]),
+    ("vectorizing the boundary check with masked stores", ["vectoriz*", "boundary check*"]),
+    ("caching partial scores between attempts via the scratch dir", ["partial score*", "scratch dir*"]),
+    ("splitting the solver into a coarse pass and a polish pass", ["coarse pass*", "polish pass*"]),
 ]
 
 BOTTLENECK_VERDICTS = [

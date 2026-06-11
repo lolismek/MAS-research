@@ -110,7 +110,9 @@ def main():
         arms_seen.add(arm)
         payload_tokens[arm].append(rec["payload_tokens"])
         for f in ctx["facts"]:
-            split = "verbalized" if cap["verbalized"][f["fact_id"]] else "unverbalized"
+            # recompute from the note with the CURRENT matcher (not the stored
+            # capture-time labels) so matcher fixes apply post-hoc
+            split = "verbalized" if fact_matches(f, cap["note"]) else "unverbalized"
             ok = fact_matches(f, rec["text"])
             if not ok and args.llm_judge:
                 ok = llm_judge(f["summary"], rec["text"], judge_cache, cache_path)
