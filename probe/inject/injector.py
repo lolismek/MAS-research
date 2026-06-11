@@ -13,8 +13,14 @@ Two mechanisms:
    ``inputs_embeds``. The model computes K/V for the slots itself, so RoPE
    and GQA need no special handling (LatentMAS's validated level-(i) path).
 
-Norm matching follows LatentMAS ``_apply_latent_realignment`` with realign
-off: identity map + rescale to the mean input-embedding row norm.
+Norm matching follows LatentMAS ``_apply_latent_realignment``. With
+``realign=False`` (their CLI default, used for the 2026-06-11 main run):
+identity map + rescale to the mean input-embedding row norm. With
+``realign=True``: first apply their ridge least-squares map W from the
+output-embedding (unembedding) space to the input-embedding space, fit over
+vocab rows — W = (Wo^T Wo + 1e-5 I)^{-1} Wo^T Wi — then rescale. For models
+with untied embeddings (Qwen3-8B) W is a non-trivial correction; for tied
+models (0.6B/4B) it is ~identity.
 """
 
 from typing import Optional
@@ -32,6 +38,7 @@ class ModelHarness:
         device: str | None = None,
         dtype: str | None = None,
         attn_implementation: str | None = None,
+        realign: bool = False,
     ):
         self.model_name = resolve_model(model_name)
         self.device = resolve_device(device)
@@ -51,6 +58,8 @@ class ModelHarness:
         self.hidden_size = emb.shape[1]
         # LatentMAS normalization target: mean L2 norm of input-embedding rows.
         self.target_norm = emb.detach().to(torch.float32).norm(dim=1).mean().item()
+        self.realign = realign
+        self.realign_matrix = self._compute_realign_matrix() if realign else None
 
     # ---------- text plumbing ----------
 
@@ -142,8 +151,26 @@ class ModelHarness:
 
     # ---------- latent rolling (writer side) ----------
 
+    @torch.no_grad()
+    def _compute_realign_matrix(self) -> torch.Tensor:
+        """LatentMAS latent-space realignment matrix (their formula verbatim):
+        ridge least-squares map from unembedding space to input-embedding
+        space, fit over vocab rows. [hidden, hidden], float32, on device."""
+        w_in = self.model.get_input_embeddings().weight.detach()
+        w_out = self.model.get_output_embeddings().weight.detach()
+        # linalg.solve is unsupported on MPS; the matmuls are fine on CPU too
+        dev = self.device if str(self.device).startswith("cuda") else "cpu"
+        w_in = w_in.to(dev, torch.float32)
+        w_out = w_out.to(dev, torch.float32)
+        gram = w_out.T @ w_out
+        gram += 1e-5 * torch.eye(gram.shape[0], device=dev)
+        rhs = w_out.T @ w_in
+        return torch.linalg.solve(gram, rhs).to(self.device)
+
     def _norm_match(self, hidden: torch.Tensor) -> torch.Tensor:
         h = hidden.to(torch.float32)
+        if self.realign_matrix is not None:
+            h = h @ self.realign_matrix
         scale = self.target_norm / h.norm(dim=-1, keepdim=True).clamp_min(1e-6)
         return (h * scale).to(self.dtype)
 

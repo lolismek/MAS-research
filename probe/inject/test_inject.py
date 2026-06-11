@@ -10,6 +10,9 @@ Covers the Phase-0 gates from PROBE_PLAN.md:
   (causality), and slots ARE attendable (changing them moves final logits)
 - latent rolling: shapes, finiteness, norm matching, and a generation
   smoke test with injected rolled latents
+- realignment: matrix shape/finiteness; for tied-embedding models the
+  LatentMAS ridge LS solution must be ~identity (first rolled latent
+  unchanged vs realign-off)
 """
 
 import argparse
@@ -101,6 +104,32 @@ def main():
                                   max_new_tokens=60, seed=0)
     ok = len(text) > 20 and any(c.isalpha() for c in text)
     results.append(report("generation with injected latents is text", ok, repr(text[:80])))
+
+    # 8. realignment matrix: shape/finiteness; for tied-embedding models
+    # (0.6B/4B) the ridge LS solution must be ~identity, so realigned rolling
+    # must reproduce the realign-off latents
+    h.realign_matrix = h._compute_realign_matrix()
+    W = h.realign_matrix.float()
+    ok = W.shape == (h.hidden_size, h.hidden_size) and torch.isfinite(W).all().item()
+    detail = f"shape={tuple(W.shape)}"
+    tied = getattr(h.model.config, "tie_word_embeddings", False)
+    if tied:
+        d_eye = (W - torch.eye(h.hidden_size, device=W.device)).abs().max().item()
+        ok = ok and d_eye < 1e-2
+        detail += f" tied: max|W-I|={d_eye:.2e}"
+    lat_re = h.roll_latents(ids, m)
+    norms_re = lat_re.float().norm(dim=-1)
+    ok = ok and torch.isfinite(lat_re).all().item() \
+        and (norms_re - h.target_norm).abs().max().item() < 0.01 * h.target_norm
+    if tied:
+        # only the FIRST latent: later steps are autoregressive, so even a
+        # ~1e-4 deviation of W from identity compounds chaotically
+        d_lat = (lat_re[0] - lat[0]).float().abs().max().item()
+        ok = ok and d_lat < 10 * tol
+        detail += f" max|Δlatent_0|={d_lat:.2e}"
+    h.realign_matrix = None
+    results.append(report("realignment matrix sane (rolling norms; ~identity if tied)",
+                          ok, detail))
 
     print(f"\n{sum(results)}/{len(results)} passed")
     raise SystemExit(0 if all(results) else 1)

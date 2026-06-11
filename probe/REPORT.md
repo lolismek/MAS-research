@@ -53,6 +53,14 @@ on training-free transfer:
 
 - Single model family/scale (Qwen3-8B writer = reader), single m (8), payload
   *alongside* the note only; the in-place/compression fork was not run.
+- Latents were rolled **without** LatentMAS's optional realignment matrix
+  (their `--latent_space_realign`; off by default in their code and absent
+  from their canonical Qwen3-8B command, but documented as a per-model
+  hyperparameter). Qwen3-8B has **untied** embeddings, so the matrix is a
+  non-trivial linear map from unembedding to input-embedding space — the
+  realign-on variant is a distinct, untested condition. It is now
+  implemented (`ModelHarness(realign=True)`, `run_capture --realign
+  --notes-from main`); rerun recipe in `env/GPU_RUN.md`.
 - String-match scoring is strict; an LLM-judge pass could award partial credit
   (e.g. technique named without reason). Given the Δ ≈ 0 with overlapping
   confabulation text, a judge is unlikely to change the arm-2 verdict.

@@ -5,7 +5,7 @@ How to run on the GPU box: `env/GPU_RUN.md`. **Do not run models locally.**
 
 | module | what | needs GPU |
 |---|---|---|
-| `inject/` | level-(i) embedding injection + latent rolling (LatentMAS-adapted); `test_inject.py` = Phase-0 gate, 7/7 passed on Qwen3-0.6B 2026-06-11 | yes |
+| `inject/` | level-(i) embedding injection + latent rolling (LatentMAS-adapted, optional `realign=True` for their realignment matrix); `test_inject.py` = Phase-0 gate (8 tests; the original 7 passed on Qwen3-0.6B/8B 2026-06-11, realign test added after) | yes |
 | `contexts/` | deterministic synthetic session logs, K=6 planted facts each, self-checking matcher (`make_contexts.py`) | no |
 | `capture/` | A-side: CORAL-style reflect note + m=8 rolled latents (arm-2 payload) + verbalized labels | yes |
 | `arms/` | B-side runners, arms 1 / 2 / 5 (+5t), paired seeds, identical visible text for 1 vs 2 | yes |

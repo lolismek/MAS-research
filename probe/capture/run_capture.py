@@ -28,12 +28,14 @@ from probe.contexts.facts import fact_matches
 from probe.inject.injector import ModelHarness
 
 
-def capture_one(h: ModelHarness, ctx: dict, m: int, max_note_tokens: int, seed: int) -> tuple[dict, torch.Tensor]:
+def capture_one(h: ModelHarness, ctx: dict, m: int, max_note_tokens: int, seed: int,
+                note: str | None = None) -> tuple[dict, torch.Tensor]:
     msgs = build_a_messages(ctx["transcript"])
     prompt_text = h.render_chat(msgs, add_generation_prompt=True, enable_thinking=False)
     prompt_ids = h.encode(prompt_text)
-    note = h.generate_from_ids(prompt_ids, max_new_tokens=max_note_tokens,
-                               temperature=0.7, seed=seed)
+    if note is None:
+        note = h.generate_from_ids(prompt_ids, max_new_tokens=max_note_tokens,
+                                   temperature=0.7, seed=seed)
 
     # arm-2 payload: roll m latents from the pass containing prompt + note
     full_ids = h.encode(prompt_text + note + "<|im_end|>")
@@ -50,6 +52,7 @@ def capture_one(h: ModelHarness, ctx: dict, m: int, max_note_tokens: int, seed: 
         "m": m,
         "seed": seed,
         "model": h.model_name,
+        "realign": h.realign,
     }
     return record, latents
 
@@ -64,11 +67,19 @@ def main():
     ap.add_argument("--m", type=int, default=8)
     ap.add_argument("--max-note-tokens", type=int, default=320)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--realign", action="store_true",
+                    help="apply the LatentMAS realignment matrix when rolling "
+                         "latents (their --latent_space_realign; default off, "
+                         "matching the main run)")
+    ap.add_argument("--notes-from", default=None,
+                    help="reuse the notes of an existing capture run (run name) "
+                         "instead of regenerating — keeps notes byte-identical "
+                         "so only the latents differ across runs")
     args = ap.parse_args()
 
     out_dir = RUNS_DIR / args.run / "capture"
     out_dir.mkdir(parents=True, exist_ok=True)
-    h = ModelHarness(args.model, device=args.device)
+    h = ModelHarness(args.model, device=args.device, realign=args.realign)
 
     from pathlib import Path
     ctx_files = sorted(Path(args.contexts).glob("ctx_*.json"))
@@ -79,7 +90,14 @@ def main():
     for i, path in enumerate(ctx_files):
         ctx = read_json(path)
         t0 = time.time()
-        record, latents = capture_one(h, ctx, args.m, args.max_note_tokens, args.seed)
+        note = None
+        if args.notes_from:
+            src = RUNS_DIR / args.notes_from / "capture" / f"{ctx['context_id']}.json"
+            note = read_json(src)["note"]
+        record, latents = capture_one(h, ctx, args.m, args.max_note_tokens, args.seed,
+                                      note=note)
+        if args.notes_from:
+            record["notes_from"] = args.notes_from
         save_file({"arm2_latents": latents.contiguous().to(torch.float32)},
                   str(out_dir / f"{ctx['context_id']}.safetensors"))
         write_json(record, out_dir / f"{ctx['context_id']}.json")
@@ -101,6 +119,7 @@ def main():
         "contexts_with_zero_unverbalized": sum(u == 0 for u in unv),
         "gate_note": "healthy is ~3/6 unverbalized; if ~0, shorten the note instruction or raise K",
         "model": h.model_name,
+        "realign": h.realign,
         "per_context": summary,
     }
     write_json(gate, out_dir / "capture_summary.json")
