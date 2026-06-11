@@ -207,7 +207,10 @@ conda run -n base python reproduction/proxy/server.py
 # 1. MacNet chain on the 15 ChatDev tasks (~$2, ~1-2h)
 conda run -n macnet python reproduction/macnet/run_task.py --config chain --all --parallel 4
 
-# 2. MacNet mlp, same tasks (~$4-8, ~2-4h; check cost after first runs)
+# 2. MacNet mlp, same tasks (~$15-35, ~2-4h — smoke telemetry: 81/101 calls
+#    were truncated aggregation merges retried up to Aggregate_retry_limit=10;
+#    lowering that to 3 in macnet_repo/config.yaml roughly halves the cost
+#    with identical fallback behavior. Check calls.jsonl after the first runs.)
 conda run -n macnet python reproduction/macnet/run_task.py --config mlp --all --parallel 3
 
 # 2b. OPTIONAL: MacNet net (~$6-12; structurally inert aggregation — see
