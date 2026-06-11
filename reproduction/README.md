@@ -151,9 +151,29 @@ requires genuine convergence.
   artifact layout as the MMLU arm (the runner writes each problem as a
   one-file Hendrycks-format dir, since the script loads MATH problems from
   per-file JSON).
-- Batch result (2026-06-11, $0.77 for 141 calls): 8/15 exact-match correct;
-  5/12 baseline failures fixed, 3/3 controls held. 4 runs went the full 3
-  rounds (17 calls) — the multi-round debate traces the MMLU arm lacked.
+- Batch result (2026-06-11, $0.77 for 141 calls): 8/15 exact-match correct
+  by the framework's own is_equiv; 4 runs went the full 3 rounds (17 calls)
+  — the multi-round debate traces the MMLU arm lacked.
+- **Outcome corrections from judging + trajectory analysis** (see
+  `reproduction/dylan/analyze_trajectories.py` and the judged records):
+  - Two "failures" are is_equiv grading artifacts, for DyLAN *and* for the
+    screening baseline (`algebra_2626`: `32348` vs gold `\$32,\!348`;
+    `intermediate_algebra_1388`: unordered set `-2,1` vs gold `1,-2`).
+    Corrected: DyLAN 10/15 semantically correct; 10 genuine baseline
+    failures, of which 5 fixed.
+  - Of the 5 genuine unfixed failures, **3 are structural losses, not
+    capability failures**: agents derived the correct answer but the system
+    lost it. Mechanism: the debate prompt demands an updated answer AND 1-5
+    peer scores "in the form like [[1, 5, 2, ...]]" in the same reply,
+    while ans_parser (extract_math_answer) records the LAST \boxed{}
+    expression — agents that box their scores after their answer get the
+    score matrix recorded as their "answer", and consensus/final selection
+    then operate on garbage (`counting_525`: all 7 agents converged on the
+    correct 144 in round 2, final answer `[[5,5,5,5,5,5,5]]`;
+    also `intermediate_algebra_1197`, `prealgebra_1646`). Only 2 failures
+    (`geometry_880`, `precalculus_768`) are pure capability (no agent ever
+    had the right answer). This is native framework behavior, not a
+    reproduction bug.
 
 ## Parallelism & trace attribution
 
