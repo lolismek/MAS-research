@@ -1,124 +1,122 @@
-# Latent Knowledge-Transfer Probe (pre-mini-CORAL)
+# Minimalist Latent Note-Transfer Probe
 
 ## Context — read this first, the session that produced it is gone
 
-**Project:** MAS-memory-research, branch `open-ended-discovery` (orphan branch, currently contains only `.gitignore`; all prior failure-mode experiments live on `main`). New direction: multi-agent systems for open-ended discovery, following **CORAL** (arXiv 2604.01658, `references/CORAL.pdf`), and testing whether **latent mechanisms** improve it. User's broad research notes: `references/MAS with latent communication-2.pdf`.
+**Project:** MAS-memory-research, branch `open-ended-discovery` (orphan branch; prior failure-mode experiments live on `main`). New direction: multi-agent systems for open-ended discovery, following **CORAL** (arXiv 2604.01658, `references/CORAL.pdf`), and testing whether **latent mechanisms** improve them. User's broad research notes: `references/MAS with latent communication-2.pdf`.
 
-**CORAL in one paragraph:** autonomous agents (full coding agents in isolated git worktrees) iteratively improve a solution to an open-ended optimization task (plan → edit → `coral eval` → reflect). They coordinate *only* through a shared text file system: `attempts/` (auto-written JSON per eval: commit hash, score, status, parent_hash), `notes/` (free-form markdown insights, agent-written), `skills/` (reusable scripts + descriptions). No direct messaging. Heartbeats force memory formation: reflect (note after every eval), consolidate (every 10 evals, notes→synthesis/skills), pivot (after 5 stale evals). Ablations show the knowledge artifacts are causal for performance; on circle packing, 100% of attempts that read shared knowledge improved (Read→Impr, Table 5).
+**CORAL in one paragraph:** autonomous coding agents iteratively improve a solution to an open-ended optimization task (plan → edit → eval → reflect). They coordinate *only* through a shared text file system: `attempts/` (auto-written eval records), `notes/` (free-form markdown insights, agent-written), `skills/` (reusable scripts). No direct messaging. Heartbeats force memory formation (reflect every eval, consolidate every 10, pivot on plateau). Ablations show knowledge artifacts are causal for performance; on circle packing, 100% of attempts that read shared knowledge improved.
 
-**Hypothesis (converged through discussion):** notes are a *lossy channel*. When agent A writes a 150-word note after a 30k-token trajectory, everything not verbalized is lost; reader B re-encodes the prose inside its own context. Latent augmentation — shipping A's hidden states alongside the note text — should make knowledge transfer less lossy. Smaller models write worse notes, so the headroom is *larger* at our scale (Qwen3-8B vs the paper's Opus 4.6).
+**Hypothesis:** notes are a *lossy channel*. When agent A writes a 150-word note after a 30k-token trajectory, everything not verbalized is lost; reader B re-encodes the prose in its own context. Shipping A's hidden states alongside the note should make transfer less lossy. Smaller models write worse notes, so headroom is larger at our scale (Qwen3-8B vs the paper's Opus 4.6).
 
 **Scope decisions already made (do not relitigate):**
-- v1 targets **notes only**. Skills stay textual/executable (a skill's value is symbolic+runnable; "latent skills" = trained-prefix territory = v2). Attempts/code transfer stays git-based (lossless already).
-- Latents are a **transport layer, invisible to agents**: agents read/write text exactly as in CORAL; the harness attaches/injects latent sidecars (`note.md` + `note.md.latent`). Agent autonomy and decision-making identical across conditions.
-- **Training-free v1.** Same checkpoint for writer and reader (states only meaningful within one model's representation space). Trained compressor (gist/ICAE-style) is the designated v2 fallback if training-free fails.
-- **Before building mini-CORAL, run this probe**: a single-step transfer test that asks whether cross-context state injection helps *at all*. The user explicitly wants the probe first, with **all arms specified** so they can choose which to implement.
+- The eventual v1 system targets **notes only** — skills stay textual/executable, code transfer stays git-based. Latents are a **transport layer invisible to agents** (sidecar files; agent behavior identical across conditions). **Training-free**, same checkpoint for writer and reader. Trained compressor (gist/ICAE-style) is the v2 fallback.
+- **The probe is deliberately minimal and task-free.** An earlier draft ran the probe on circle packing and measured next-attempt score deltas; user correctly rejected this — an 8B model's score deltas are noise, and a null would say nothing about the mechanism. The probe only answers: *is cross-context state injection coherent, and does unverbalized information actually flow?* Whether it helps **in-loop** is the *next* stage (mini-CORAL on circle packing), built only if the probe passes.
+- Coherence alone is insufficient as a metric: the expected failure mode is the model **silently ignoring** injected slots while generating perfectly fluent text. The discriminating measurement is **planted-fact recall** (below).
 
 **Fixed choices (user-confirmed):**
-- Task: **circle packing** — n=26 circles in unit square, maximize sum of radii (AlphaEvolve task; CORAL SOTA 2.6359). Chosen because: highest knowledge usage of all 11 CORAL tasks (0.64 artifacts/attempt, 55% access, Read→Impr 100%), trivial CPU evaluator (seconds), known external baselines.
-- Model: **Qwen3-8B** (`Qwen/Qwen3-8B`): 36 layers, hidden 4096, 32 Q heads / 8 KV heads (GQA), head_dim 128, QK-norm, 32k native context, transformers ≥ 4.51. Fallback Qwen3-4B (same layer count, hidden 2560) for debugging.
-- Compute: **cloud GPU rented by Claude/user** (Lambda/RunPod-style, 1× A100-80GB or similar). Budget target: tens of dollars (~25–35 GPU-hours total).
+- Model: **Qwen3-8B** (`Qwen/Qwen3-8B`): 36 layers, hidden 4096, 32 Q heads / 8 KV heads (GQA), head_dim 128, QK-norm, 32k context, transformers ≥ 4.51. **Qwen3-4B** (same layer count, hidden 2560) for development — code is model-agnostic; develop on Mac/MPS with 4B, run final numbers with 8B.
+- Compute: **cloud GPU set up when needed** (1× A100/4090-class rental). The minimalist probe needs only a few GPU-hours (~$5–15); all code is developable locally first.
+- Eventual task (NEXT stage, not the probe): circle packing — chosen earlier because it has the highest knowledge usage of all 11 CORAL tasks (0.64 artifacts/attempt, 55% access, Read→Impr 100%). Evaluator lives at `github.com/skydiscover-ai/skydiscover` → `benchmarks/math/circle_packing/`. Not needed for the probe.
 
-**Reference code (verified to exist, both Apache 2.0):**
-- Evaluator: `github.com/skydiscover-ai/skydiscover` → `benchmarks/math/circle_packing/{evaluator.py, initial_program.py, config.yaml}`. Validates boundaries (1e-6 tol) + overlaps, returns `sum_radii`/`combined_score`. CORAL repo (`github.com/Human-Agent-Society/CORAL`) lists circle_packing as an example task and is the reference for note/heartbeat prompt wording (paper Appendix C.1).
-- Injection reference: `github.com/Gen-Verse/LatentMAS` (supports Qwen3-4B/8B/14B, HF transformers). Key files: `models.py` (`generate_latent_batch_hidden_state()` — last-token hidden state extraction; feeds hidden states back as `inputs_embeds`), `methods/latent_mas.py` (KV slicing `_slice_tensor`, cache_position arithmetic for RoPE alignment, attention-mask extension for cached prefixes).
+**Reference code (verified public, both Apache 2.0):**
+- `github.com/Gen-Verse/LatentMAS` (arXiv 2511.20639; supports Qwen3-4B/8B/14B, HF transformers). Key files: `models.py` — `generate_latent_batch_hidden_state()` (last-token hidden-state extraction; feeds hidden states back as `inputs_embeds`); `methods/latent_mas.py` — KV slicing (`_slice_tensor`), `cache_position` arithmetic for RoPE alignment, attention-mask extension for cached prefixes. This is the injection machinery to adapt.
+- `github.com/Human-Agent-Society/CORAL` — reference for note/reflect prompt wording (paper Appendix C.1), so the probe's note-writing step mimics real CORAL notes.
 
 ---
 
-## The probe
+## Probe design
 
-**Question:** given the *same* reader context and the *same* note text, does attaching the writer's latent states improve the reader's next attempt?
+**Setting (task-free):** a two-agent handoff. Agent A = the model rolled through a constructed work-session context; A then generates a reflection note (CORAL reflect-prompt style). Agent B = a fresh context ("you're taking over a colleague's work; here is their note"), receiving the note text plus an arm-dependent payload, then generating a **short continuation** (~200–400 tokens: a plan, plus answers to a few questions). No evaluator, no scores, no long rollouts.
 
-**Unit of measurement:** a "transfer episode" = (reader context B at some mid-trajectory state, a note written by a different trajectory A, one injection condition) → B generates one full attempt (reasoning + code edit) → run the real grader → record score delta vs. B's current best. Paired design: identical B context and sampling seed across all arms; only the injected payload differs.
+**Synthetic contexts with planted facts.** Each A-context is a generated/templated agent work session (a debugging session, a small optimization log, a config-tuning transcript — domain doesn't matter) seeded with **K planted facts** (e.g., "approach X was tried and failed because R", "parameter P=7 was load-bearing", "file F is the real bottleneck"). A's note is generated by the model itself (required — arms 2–4 harvest states from that very forward pass). After generation, each planted fact is labeled **verbalized** (appears in the note text; string/LLM check) or **unverbalized** (lives only in A's context). The unverbalized set is the payload the latent channel is supposed to carry.
 
-### Arms (user will choose which to implement; specify all)
+### Arms (user will choose which to implement; all specified)
 
-| # | Arm | Payload added to note text | Selection needed | Source of method |
-|---|-----|---------------------------|------------------|-------------------|
+| # | Arm | Payload added to note text | Free params | Source |
+|---|-----|---------------------------|-------------|--------|
 | 1 | **Text-only** (baseline) | none | — | CORAL as-is |
-| 2 | **Rolled latent thoughts** | m=8 synthetic states: A's last-token last-layer hidden state fed back as `inputs_embeds`, rolled forward m steps at note-write time | none (m fixed) | LatentMAS |
-| 3 | **Note-suffix KV** (user's proposal, lead candidate) | A's states for the note's own tokens — contiguous suffix of A's trajectory at note-write time. Same words the reader sees, but contextualized by A's whole trajectory | none (natural boundary = the note-writing turn) | this project |
-| 4 | **Attention-selected trajectory KV** | top-k trajectory positions ranked by attention mass that A's note tokens placed on them (sink-masked, mid-to-late layers, max over heads — SnapKV-style) | k (sweep 64/128/256) | SnapKV/H2O recipe |
-| 5 | **Raw segment as text** (ceiling control) | the plain text of A's trajectory window since last eval (token-unconstrained; also a matched-budget truncated variant) | window = since-last-eval | control |
+| 2 | **Rolled latent thoughts** | m=8 synthetic states: A's last-token last-layer hidden state fed back as `inputs_embeds`, rolled m steps at note-write time | m | LatentMAS |
+| 3 | **Note-suffix KV** (lead candidate) | A's states for the note's own tokens — contiguous suffix of A's pass, no selection. Same words B sees, but contextualized by A's whole session | none | this project |
+| 4 | **Attention-selected context KV** | top-k of A's context positions ranked by attention mass A's note tokens placed on them (sink-masked, mid-to-late layers, max over heads — SnapKV-style) | k ∈ {32, 64, 128} | SnapKV/H2O recipe |
+| 5 | **Raw context as text** (ceiling control) | A's full session as plain text (plus a matched-token truncated variant) | — | control |
 
-**Why arm 5 is the most important line in the table:** it disambiguates outcomes. 3/4 ≈ 5 at fewer tokens → latents are a compression win. 2/3/4 ≈ 1 while 5 > 1 → information exists but training-free injection can't deliver it → go to trained compressor v2. 5 ≈ 1 → trajectory residue isn't worth transferring on this task → rethink hypothesis before building anything.
+**Why arm 5 matters most:** it disambiguates. 3/4 ≈ 5 at far fewer tokens → latents are a compression win. 2/3/4 ≈ 1 while 5 ≫ 1 → information exists but training-free injection can't deliver it → trained-compressor v2. 5 ≈ 1 → the probe construction is broken (facts unrecoverable even from raw text) — fix the synthetic contexts before concluding anything.
 
-**Design fork (apply to arms 2–4):** inject **alongside** the note text (default; reader can still quote exact numbers) vs. **in place of** it (compression condition, matched token budget). Implement alongside first; in-place is a cheap toggle.
+**Design fork (arms 2–4):** payload **alongside** the note text (default) vs. **in place of** it (compression condition, matched token budget). Alongside first; in-place is a toggle.
 
 ### Injection mechanics — two implementation levels
 
-- **Level (i) — embedding-space injection (v0, use for all latent arms):** store *last-layer* residual-stream states for the chosen positions; at read time, feed them as `inputs_embeds` at B's positions — the model computes K/V itself, RoPE and GQA handled automatically, no cache surgery. This is exactly LatentMAS's validated mechanism; adapt their code.
-- **Level (ii) — cache-space injection (fidelity upgrade, only if (i) shows nothing for arms 3/4):** store *per-layer* residual states; reader-side, for each layer run input_layernorm → W_k/W_v → QK-norm → RoPE at B's positions, write into a `DynamicCache` at reserved positions, extend attention mask. Preserves A's per-layer representations instead of letting B's layers re-process. More surgery; LatentMAS's cache_position/mask code is the starting point.
+- **Level (i) — embedding-space injection (v0, all latent arms):** store *last-layer* residual-stream states for chosen positions; reader-side, feed them as `inputs_embeds` at B's positions — model computes K/V itself, RoPE/GQA automatic, no cache surgery. LatentMAS's validated mechanism; adapt their code.
+- **Level (ii) — cache-space injection (fidelity upgrade, only if (i) flatlines):** store *per-layer* residual states; reader-side per layer: input_layernorm → W_k/W_v → QK-norm → RoPE at B's positions → write into `DynamicCache`, extend attention mask. Preserves A's per-layer representations instead of letting B's layers re-process.
 
-**Implementation notes (hard-won during discussion, keep):**
-- Attention scores for arm 4 are not available from FlashAttention/SDPA. Compute them explicitly only for the note-writing turn: q·k matmul from cached states (O(m·N·d) per layer, once per note). Do NOT force eager attention globally.
-- Mask attention sinks (BOS/first tokens) before ranking in arm 4; rank local window and long tail separately (recency bias).
-- Hidden states per layer come from one extra forward pass with `output_hidden_states=True` over the relevant span at note-write time (capture is post-hoc; trajectory generation itself can run with fast kernels).
-- Sidecar format: safetensors file next to the note markdown; metadata JSON (positions, layers, arm, writer trajectory id, token ids for debugging).
-
----
-
-## Pipeline (phases, each with a gate)
-
-### Phase 0 — environment + task + model sanity (gate: model can improve the seed at all)
-1. Provision cloud GPU (1× A100-80GB class). `uv`/conda env: torch, transformers ≥4.51, safetensors, accelerate. Download `Qwen/Qwen3-8B`.
-2. Port circle-packing evaluator: vendor `evaluator.py` + `initial_program.py` from SkyDiscover into `probe/task/`; strip framework deps; wrap as `evaluate(program_path) -> {sum_radii, valid, error}` with subprocess + timeout (grader isolation, same spirit as CORAL's `.coral/private/`).
-3. Minimal single-agent loop (no multi-agent, no heartbeats yet): system prompt adapted from CORAL's single-agent template (Appendix C.1.1) — orient, propose code edit, eval, reflect-note after every eval (reflect prompt adapted from C.1.2). Plain text, ~12–15 evals per trajectory. Qwen3 thinking mode ON for proposal turns (config flag to compare).
-4. **Gate:** ≥ ~10% of evals improve best score across 3 pilot trajectories. If flat: try better seed prompt, thinking mode, Qwen3-14B, before proceeding. If nothing improves the seed, the probe is moot — stop and reassess.
-
-### Phase 1 — trajectory bank with state capture
-1. Run ~20 single-agent trajectories (different seeds/temperatures), each 12–15 evals, each producing reflect-notes. Log every token, eval event, and note event (JSONL per trajectory).
-2. At each note event, capture and store all candidate payloads at once (they share the forward passes): last-layer states for note tokens (arm 3-i), per-layer states for note tokens (arm 3-ii, cheap to add), m=8 rolled states (arm 2), attention-ranked trajectory positions + their states (arm 4), since-last-eval text window (arm 5).
-3. Curate ~40–60 transfer episodes: (B context, A note) pairs where A ≠ B's trajectory, A's note is relevant (B hasn't already found A's insight), and B has headroom (B's best < A's best, or B plateaued). Selection scripted + manually spot-checked; freeze as `probe/episodes/`.
-
-### Phase 2 — injection module + coherence checks (gate: injection is non-destructive and attended)
-Built before the arms run; this is the user's stated first concern ("test that the injection is coherent").
-1. Implement level (i) injection; unit tests: round-trip (inject states extracted from B's own context at the same positions → generation distribution ≈ unchanged), positional correctness, mask correctness.
-2. **Coherence battery** on ~10 episodes: (a) fluency — injected-condition continuations remain well-formed code/reasoning, no perplexity blow-up vs. baseline; (b) attention diagnostic — B's generated tokens place non-trivial attention mass on injected slots (if ~zero, arms 2–4 will collapse to arm 1; report and stop early); (c) needle test — A's trajectory contains a planted fact absent from the note text (e.g., "approach X failed"); measure whether B's plans reflect it above chance in injected vs. text-only conditions.
-3. **Gate:** (a) passes and (b) shows nonzero attention. (c) is informative, not gating.
-
-### Phase 3 — run the arms
-- For each episode × each implemented arm × 3 samples (temp ~0.7, paired seeds): build B's context (B trajectory prefix + note-read event + payload per arm), generate one attempt, run grader.
-- ~50 episodes × 5 arms × 3 samples ≈ 750 generations × ~2–3k tokens. With per-episode KV reuse of the shared prefix, est. ~12–18 GPU-hours.
-
-### Phase 4 — analysis + writeup
-- **Primary metric:** paired score delta of next attempt vs. arm 1 (per-episode pairing; bootstrap CIs over episodes, not samples).
-- **Secondary:** fraction of attempts improving B's best ("single-step Read→Impr"); validity rate (does injection increase broken-code rate?); tokens consumed per condition.
-- **Diagnostics:** attention mass on injected slots vs. outcome; arm-4 k-sweep; alongside vs. in-place.
-- Deliverable: `probe/REPORT.md` with the decision table — which arm (if any) carries signal → build mini-CORAL with that arm / go to trained-compressor v2 / kill the latent-notes hypothesis.
+**Implementation notes (hard-won, keep):**
+- Attention scores for arm 4 are unavailable from FlashAttention/SDPA. Compute explicitly only for the note turn (q·k from cached states, O(m·N·d)/layer, once per note). Do NOT force eager attention globally.
+- Mask attention sinks (BOS/first positions) before ranking arm 4; treat the local recency window separately from the long tail.
+- Per-layer states: one extra forward with `output_hidden_states=True` over the relevant span at capture time; generation itself runs on fast kernels.
+- Sidecar format: safetensors next to the note text + metadata JSON (positions, layers, arm, token ids for debugging).
+- Qwen3 thinking mode: off for note generation (notes should mimic CORAL notes), configurable for B.
 
 ---
 
-## Repo layout (all under `~/MAS-memory-research`, branch `open-ended-discovery`)
+## Metrics
+
+1. **Coherence (necessary, not sufficient):** B's continuation stays well-formed (no gibberish/format collapse); perplexity of B's text-only continuation evaluated under each injected condition's context does not blow up. Manual eyeball of ~10 side-by-side generations.
+2. **Planted-fact recall (the headline number):** for each fact, does B's continuation/answers reflect it? (string match where possible, LLM-judge with the fact as rubric otherwise). Report **verbalized recall** (sanity: ≈ equal across arms, near ceiling) and **unverbalized recall** (the hypothesis test: arms 2–4 vs arm 1, bounded by arm 5).
+3. **Attention diagnostic:** attention mass B's generated tokens place on injected slots. ~Zero mass predicts arms 2–4 ≡ arm 1 and is itself the key negative finding.
+4. **Cost accounting:** payload tokens/bytes per arm, so any recall gain is reported per token spent.
+
+**Stats:** ~50 synthetic contexts × 5 arms × 3 sampled B-generations (temp ~0.7, paired seeds). Pairing at the context level; bootstrap CIs over contexts. Power is fine for the large effects we care about — if the effect is so small it needs hundreds of contexts, it won't survive the noisy in-loop setting anyway.
+
+---
+
+## Pipeline
+
+### Phase 0 — injection module + unit tests (Mac/MPS, Qwen3-4B; no GPU rental yet)
+1. Env: uv/conda; torch, transformers ≥4.51, safetensors. Smoke-test Qwen3-4B on MPS.
+2. Implement level (i) injection (adapt LatentMAS `models.py` / `methods/latent_mas.py`).
+3. Unit tests — **round-trip:** extract states from B's own context at the same positions, re-inject → generation distribution ≈ unchanged (logit deltas ~0). Positional correctness (shifted injection point), mask correctness (slots attendable, nothing attends *from* them).
+
+### Phase 1 — synthetic contexts + note generation + capture
+1. Context generator: ~50 work-session transcripts, 2–6k tokens each, K≈6 planted facts each (mix of "what failed and why", "what mattered", "what's untried"). Templated skeletons with model-generated filler; facts and their canonical phrasings stored in metadata.
+2. Note generation: roll A (Qwen3-8B from here on) through each context, generate note with the CORAL reflect prompt (Appendix C.1.2 wording). Capture all payloads in one pass: last-layer note-suffix states (arm 3-i), per-layer (3-ii, cheap to also store), m=8 rolled states (arm 2), attention-ranked context positions + states (arm 4).
+3. Label each fact verbalized/unverbalized per note. **Gate:** notes must leave a healthy unverbalized set (~half of facts). If the model verbalizes everything, shorten the note instruction or raise K.
+
+### Phase 2 — coherence battery (first GPU spend, ~10 contexts)
+Fluency check, round-trip on real payloads, attention diagnostic. **Gate:** no degeneration; nonzero attention mass on slots. If slots are ignored → report early, decide level (ii) vs. stop.
+
+### Phase 3 — full run
+50 contexts × implemented arms × 3 samples; B continuation + fact questions; recall scoring. A few GPU-hours total.
+
+### Phase 4 — analysis + `probe/REPORT.md`
+Decision table: unverbalized recall lifts (2/3/4 vs 1, vs ceiling 5), per-token efficiency, alongside vs in-place, k-sweep. Outcomes → (a) signal: proceed to mini-CORAL on circle packing with the winning arm; (b) info exists but injection fails (5≫1, 2–4≈1): trained-compressor v2; (c) 5≈1: fix probe construction; (d) coherent but zero attention: negative result, write it up.
+
+---
+
+## Repo layout (branch `open-ended-discovery`)
 
 ```
 probe/
-├── task/            vendored circle-packing evaluator + seed (from SkyDiscover, Apache 2.0 — keep LICENSE note)
-├── agentloop/       minimal single-agent loop (HF transformers, Qwen3-8B), trajectory JSONL logging
-├── capture/         note-event state capture (all payload types), sidecar safetensors writer
-├── inject/          level-(i) embedding injection (+ level-(ii) cache injection, stretch), coherence tests
-├── episodes/        frozen (B context, A note) pairs
-├── arms/            arm runners + paired sampling harness
-├── analysis/        metrics, bootstrap, plots, REPORT.md
-└── env/             setup script for cloud GPU (uv env, model download, smoke test)
+├── inject/        level-(i) embedding injection (+ level-(ii) stretch), round-trip & mask unit tests
+├── contexts/      synthetic session generator, planted-fact metadata
+├── capture/       A-side note generation + payload capture (all arms in one pass), safetensors sidecars
+├── arms/          B-side runners, paired sampling harness
+├── analysis/      recall scoring (string + LLM-judge), attention diagnostics, bootstrap, REPORT.md
+└── env/           setup scripts (local MPS dev; cloud GPU provisioning notes)
 ```
 
-`.env` (already gitignored) holds any API keys; cloud-GPU SSH details go in `env/README.md`, not committed.
-
-## Cost/runtime estimate
-Phase 0–1: ~8–12 GPU-h (trajectory bank dominates). Phase 2: ~1–2 GPU-h. Phase 3: ~12–18 GPU-h. Total ≈ 25–30 GPU-h ≈ **$30–60** on an A100-class rental. Mac (MPS) is fine for writing/debugging all code with Qwen3-4B at tiny scale before renting.
+## Cost/runtime
+Phase 0–1 development: local Mac (4B). Phases 1–3 final numbers on one rented A100/4090: ~3–6 GPU-hours ≈ **$5–15**. (Two orders cheaper than the rejected task-based probe.)
 
 ## Risks
-- **Model too weak on task** → Phase 0 gate; escalate prompt/thinking-mode/model-size before concluding anything.
-- **Attention ignores injected slots** (the central scientific risk) → Phase 2 diagnostic catches it for ~$2 instead of after the full run; outcome is itself a publishable negative datapoint for training-free transfer in agentic loops.
-- **Confound: latent arms see more information AND more capacity** → arm 5 (text ceiling) + matched-token in-place variants isolate channel effect from information effect.
-- **Episode curation bias** → freeze episodes before running any latent arm; same episodes for all arms.
-- Known open question to flag in REPORT: training-free cross-*context* injection is untested territory (CIPHER/DroidSpeak/KVComm/LatentMAS are all short-horizon or sequential-handoff settings).
+- **Slots silently ignored** (central risk): caught by attention diagnostic in Phase 2 for ~$1; negative result is itself informative for training-free transfer.
+- **Synthetic contexts too easy/unnatural:** facts may be trivially inferable or weirdly salient. Mitigate: arm-5 ceiling and verbalized-recall sanity calibrate the construction; keep transcripts agent-flavored (CORAL-style eval feedback, tool-output noise).
+- **LLM-judge noise in recall scoring:** prefer string-matchable canonical facts (numbers, names); judge only the remainder; spot-check manually.
+- **External validity:** a positive probe does NOT prove in-loop utility — it licenses building mini-CORAL, nothing more. State this in REPORT.md.
 
 ## Verification
-- Evaluator: reproduce seed-program score from SkyDiscover; hand-craft a known-valid packing and a known-overlapping one, assert accept/reject.
-- Injection: round-trip unit test (above) must pass; needle test gives a human-readable sanity signal.
-- End-to-end: one full episode through all implemented arms, eyeball the 5 generations side by side before launching the batch.
+- Round-trip unit test passes (own-context re-injection ≈ no-op).
+- Verbalized-fact recall ≈ equal across arms (injection didn't break text reading).
+- One context end-to-end through all arms, 5 generations eyeballed side by side, before the batch run.
 
-## Explicitly out of scope (v2+, do not build now)
-mini-CORAL multi-agent harness; heartbeat machinery beyond the reflect prompt; latent skills (trained prefixes / flashmem→extra-mem extension); trained compressor (gist/ICAE); commit-checkout latent attachments; heterogeneous-model translation.
+## Explicitly out of scope (later stages)
+Circle-packing evaluator and any score-based measurement; mini-CORAL multi-agent harness; heartbeats; latent skills; trained compressor (v2); commit-checkout latent attachments; heterogeneous-model translation.
