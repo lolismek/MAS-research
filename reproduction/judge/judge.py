@@ -149,6 +149,58 @@ def corpus():
                             human_cat2=t['cat2'],
                             cat2_screened=t.get('cat2_likelihood_screened')))
 
+    # MacNet (no 'original' era: these systems have no MAST-era traces).
+    # macnet-chain / macnet-mesh reuse the chatdev tasks; macnet-srdd has its
+    # own task file. Trace = MacNetLog transcript archived as trace.log.
+    def macnet_runs(system, tasks, base_meta):
+        for t in tasks:
+            name = ALIASES.get(t['task'], t['task'])
+            slug = name.replace(' ', '').replace('/', '_')
+            for rdir in sorted(glob.glob(os.path.join(
+                    ROOT, 'reproduction', 'runs', system, slug, 'run_*'))):
+                trace = os.path.join(rdir, 'trace.log')
+                if not os.path.exists(trace):
+                    continue
+                res = {}
+                if os.path.exists(os.path.join(rdir, 'result.json')):
+                    res = json.load(open(os.path.join(rdir, 'result.json')))
+                yield ('new', system, f'{slug}_{os.path.basename(rdir)}',
+                       trace, dict(task=t['task'],
+                                   topology=res.get('topology'),
+                                   n_nodes=res.get('n_nodes'),
+                                   **base_meta(t)))
+
+    for cfg in ('chain', 'mlp', 'net'):
+        yield from macnet_runs(
+            f'macnet-{cfg}', cd,
+            lambda t: dict(original_solved=t['solved'], human_cat2=t['cat2'],
+                           cat2_screened=t.get('cat2_likelihood_screened')))
+    srdd_file = os.path.join(ROOT, 'task_selection', 'macnet_srdd_tasks.json')
+    if os.path.exists(srdd_file):
+        yield from macnet_runs(
+            'macnet-srdd', json.load(open(srdd_file)),
+            lambda t: dict(category=t.get('category'), original_solved=None,
+                           cat2_screened=None))
+
+    # DyLAN: trace = transcript.txt rebuilt from DyLAN's own completion log;
+    # ground-truth outcome (final_correct) comes from result.json.
+    dylan_file = os.path.join(ROOT, 'task_selection', 'dylan_tasks.json')
+    if os.path.exists(dylan_file):
+        for t in json.load(open(dylan_file)):
+            for rdir in sorted(glob.glob(os.path.join(
+                    ROOT, 'reproduction', 'runs', 'dylan', t['id'], 'run_*'))):
+                trace = os.path.join(rdir, 'transcript.txt')
+                if not os.path.exists(trace):
+                    continue
+                res = {}
+                if os.path.exists(os.path.join(rdir, 'result.json')):
+                    res = json.load(open(os.path.join(rdir, 'result.json')))
+                yield ('new', 'dylan', f"{t['id']}_{os.path.basename(rdir)}",
+                       trace, dict(subject=t['subject'],
+                                   baseline_solved=t['solved'],
+                                   new_exact_match=res.get('final_correct'),
+                                   cat2_screened=None))
+
 
 def run_one(item):
     era, system, tid, path, meta = item

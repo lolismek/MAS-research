@@ -59,14 +59,37 @@ def load(era='new'):
 
 
 recs = load('new')
-cd = sorted([r for r in recs if r['meta']['system'] == 'chatdev'],
-            key=lambda r: r['meta']['id'])
-mag = sorted([r for r in recs if r['meta']['system'] == 'magentic'],
-             key=lambda r: r['meta']['id'])
+SYSTEMS = [('chatdev', 'ChatDev'), ('magentic', 'Magentic'),
+           ('macnet-chain', 'MacNet-chain'), ('macnet-mlp', 'MacNet-mlp'),
+           ('macnet-net', 'MacNet-net'), ('macnet-srdd', 'MacNet-SRDD'),
+           ('dylan', 'DyLAN')]
+bucket = {k: sorted([r for r in recs if r['meta']['system'] == k],
+                    key=lambda r: r['meta']['id']) for k, _ in SYSTEMS}
+present = [(k, d) for k, d in SYSTEMS if bucket[k]]
+cd, mag = bucket['chatdev'], bucket['magentic']
 cd_tasks = {t['task']: t for t in json.load(open(
     os.path.join(ROOT, 'task_selection', 'chatdev_tasks.json')))}
 mag_tasks = {t['uuid'][:8]: t for t in json.load(open(
     os.path.join(ROOT, 'task_selection', 'magentic_gaia_tasks.json')))}
+
+
+def opt_tasks(fname, key):
+    p = os.path.join(ROOT, 'task_selection', fname)
+    return ({t[key]: t for t in json.load(open(p))}
+            if os.path.exists(p) else {})
+
+
+srdd_tasks = opt_tasks('macnet_srdd_tasks.json', 'task')
+dylan_tasks = opt_tasks('dylan_tasks.json', 'id')
+
+
+def judged_by_task(system):
+    """task name -> judge pass/fail for the latest run of each task."""
+    out = {}
+    for r in bucket[system]:
+        out[r['meta']['task']] = ('pass' if r['stage_b'].get('task_success')
+                                  else 'fail')
+    return out
 
 # ------------------------------------------------------------- outcomes ----
 with open(os.path.join(HERE, 'gen_outcomes.tex'), 'w') as f:
@@ -95,18 +118,80 @@ with open(os.path.join(HERE, 'gen_outcomes.tex'), 'w') as f:
             'our reproduction (gpt-5.4-mini).}\\label{tab:outcomes}\n'
             '\\end{table}\n')
 
+    # architecture comparison on identical tasks: ChatDev vs MacNet topologies
+    mn_cfgs = [(f'macnet-{c}', f'MacNet-{c}') for c in ('chain', 'mlp', 'net')
+               if bucket[f'macnet-{c}']]
+    if mn_cfgs:
+        verdicts = {k: judged_by_task(k) for k, _ in mn_cfgs}
+        f.write('\n\\begin{table}[h]\\centering\\small\n'
+                f"\\begin{{tabular}}{{ll{'c' * (1 + len(mn_cfgs))}}}\\toprule\n"
+                'Task & cat-2 prior & ChatDev & ' +
+                ' & '.join(d for _, d in mn_cfgs) + '\\\\\n\\midrule\n')
+        for r in cd:
+            m = r['meta']
+            lk = m.get('cat2_screened') or 'control'
+            n = 'pass' if r['stage_b'].get('task_success') else 'fail'
+            f.write(f"{esc(m['task'])} & {lk} & {n} & " + ' & '.join(
+                verdicts[k].get(m['task'], '--') for k, _ in mn_cfgs) +
+                '\\\\\n')
+        f.write('\\bottomrule\\end{tabular}\n'
+                '\\caption{Same 15 tasks, same model (gpt-5.4-mini), '
+                'different coordination structures: ChatDev waterfall vs.\\ '
+                'MacNet chain (10 nodes), mlp (8 nodes, dense 4-2-2 layers, '
+                'working aggregation), and net (8 nodes, complete DAG; '
+                'aggregation structurally inert at the pinned commit). '
+                'All verdicts per our judge.}\\label{tab:macnet-outcomes}\n'
+                '\\end{table}\n')
+
+    if bucket['macnet-srdd']:
+        f.write('\n\\begin{table}[h]\\centering\\small\n'
+                '\\begin{tabular}{llc}\\toprule\n'
+                'Task & SRDD category & MacNet-chain (judge)\\\\\n\\midrule\n')
+        for r in bucket['macnet-srdd']:
+            m = r['meta']
+            n = 'pass' if r['stage_b'].get('task_success') else 'fail'
+            f.write(f"{esc(m['task'])} & "
+                    f"{esc(m.get('category'))} & {n}\\\\\n")
+        f.write('\\bottomrule\\end{tabular}\n'
+                '\\caption{MacNet on its native SRDD tasks (chain, 10 '
+                'nodes).}\\label{tab:srdd-outcomes}\n\\end{table}\n')
+
+    if bucket['dylan']:
+        f.write('\n\\begin{table}[h]\\centering\\small\n'
+                '\\begin{tabular}{llccc}\\toprule\n'
+                'Item & Subject & baseline & DyLAN (exact match) & '
+                'judge\\\\\n\\midrule\n')
+        for r in bucket['dylan']:
+            m = r['meta']
+            b = 'pass' if m.get('baseline_solved') else 'fail'
+            n = 'pass' if m.get('new_exact_match') else 'fail'
+            j = 'pass' if r['stage_b'].get('task_success') else 'fail'
+            f.write(f"{esc(m['id'].replace('mmlu_', '').rsplit('_run', 1)[0])}"
+                    f" & {esc(m.get('subject', '').replace('_', ' '))}"
+                    f" & {b} & {n} & {j}\\\\\n")
+        f.write('\\bottomrule\\end{tabular}\n'
+                '\\caption{DyLAN (7 agents, listwise, 3 rounds) on screened '
+                'MMLU items. baseline = single gpt-5.4-mini call at '
+                'screening time; outcome = exact match on the gold answer '
+                '(judge verdict shown for comparison).}'
+                '\\label{tab:dylan-outcomes}\n\\end{table}\n')
+
 # ---------------------------------------------------------------- modes ----
 with open(os.path.join(HERE, 'gen_modes.tex'), 'w') as f:
+    cols = 'c' * len(present)
     f.write('\\begin{table}[h]\\centering\\small\n'
-            '\\begin{tabular}{llcc}\\toprule\n'
-            'Mode & Name & ChatDev (n=15) & Magentic-One (n=15)\\\\\n\\midrule\n')
+            f'\\begin{{tabular}}{{ll{cols}}}\\toprule\n'
+            'Mode & Name & ' +
+            ' & '.join(f'{d} (n={len(bucket[k])})' for k, d in present) +
+            '\\\\\n\\midrule\n')
     for mcode in MODES:
-        c = sum(1 for r in cd if r['stage_b']['modes'][mcode]['present'])
-        g = sum(1 for r in mag if r['stage_b']['modes'][mcode]['present'])
-        f.write(f'{mcode} & {esc(MODE_NAMES[mcode])} & {c} & {g}\\\\\n')
+        counts = ' & '.join(str(sum(
+            1 for r in bucket[k] if r['stage_b']['modes'][mcode]['present']))
+            for k, _ in present)
+        f.write(f'{mcode} & {esc(MODE_NAMES[mcode])} & {counts}\\\\\n')
     f.write('\\bottomrule\\end{tabular}\n'
-            '\\caption{MAST failure-mode incidence in the 30 reproduced '
-            'traces (gpt-5.5 judge, evidence-quote required per flag). '
+            '\\caption{MAST failure-mode incidence per system (gpt-5.5 '
+            'judge, evidence-quote required per flag). '
             '2.1/2.2 are lower bounds (Section~\\ref{sec:taxonomy}).}'
             '\\label{tab:modes}\n\\end{table}\n')
 
@@ -119,20 +204,20 @@ for r in recs:
             groups[k][r['meta']['system']].add(r['meta']['id'])
 with open(os.path.join(HERE, 'gen_trends.tex'), 'w') as f:
     f.write('\\begin{table}[h]\\centering\\small\n'
-            '\\begin{tabular}{lcc}\\toprule\n'
-            'Judge-coined finding cluster & ChatDev traces & '
-            'Magentic traces\\\\\n\\midrule\n')
+            f"\\begin{{tabular}}{{l{'c' * len(present)}}}\\toprule\n"
+            'Judge-coined finding cluster & ' +
+            ' & '.join(d for _, d in present) + '\\\\\n\\midrule\n')
     rows = sorted(groups.items(),
                   key=lambda kv: -sum(len(v) for v in kv[1].values()))
     for k, by in rows:
         tot = sum(len(v) for v in by.values())
         if tot < 3:
             continue
-        f.write(f"{esc(k)} & {len(by.get('chatdev', []))} & "
-                f"{len(by.get('magentic', []))}\\\\\n")
+        f.write(f"{esc(k)} & " + ' & '.join(
+            str(len(by.get(s, []))) for s, _ in present) + '\\\\\n')
     f.write('\\bottomrule\\end{tabular}\n'
             '\\caption{Recurring open-ended (taxonomy-free) finding clusters '
-            'across the 30 reproduced traces; counts are distinct traces. '
+            'across the reproduced traces; counts are distinct traces. '
             'Reproduction-harness artifacts excluded.}\\label{tab:trends}\n'
             '\\end{table}\n')
 
@@ -184,5 +269,46 @@ with open(os.path.join(HERE, 'gen_appendix.tex'), 'w') as f:
                    f"{t.get('cat2_likelihood_screened') or 'control'}.")
         f.write(case(r, f"Magentic-One {m['uuid'][:8]} (GAIA L{t['level']})",
                      t['question'], outcome))
+
+    for cfg in ('chain', 'mlp', 'net'):
+        if not bucket[f'macnet-{cfg}']:
+            continue
+        f.write(f'\\clearpage\n\\section{{Case briefs: MacNet ({cfg})}}'
+                f'\\label{{app:macnet-{cfg}}}\n\n')
+        for r in bucket[f'macnet-{cfg}']:
+            m = r['meta']
+            t = cd_tasks[m['task']]
+            n = 'solved' if r['stage_b'].get('task_success') else 'failed'
+            outcome = (f"MacNet {cfg} ({m.get('n_nodes')} nodes): {n} "
+                       f"(judge). ChatDev original GPT-4o run: "
+                       f"{'solved' if t['solved'] == 'TRUE' else 'failed'}. "
+                       f"Screened cat-2 prior: "
+                       f"{m.get('cat2_screened') or 'control'}.")
+            f.write(case(r, f"MacNet-{cfg}: {m['task']}", t['task_prompt'],
+                         outcome))
+    if bucket['macnet-srdd']:
+        f.write('\\clearpage\n\\section{Case briefs: MacNet (SRDD)}'
+                '\\label{app:macnet-srdd}\n\n')
+        for r in bucket['macnet-srdd']:
+            m = r['meta']
+            t = srdd_tasks.get(m['task'], {})
+            n = 'solved' if r['stage_b'].get('task_success') else 'failed'
+            outcome = (f"MacNet chain ({m.get('n_nodes')} nodes): {n} "
+                       f"(judge). SRDD category: {m.get('category')}.")
+            f.write(case(r, f"MacNet-SRDD: {m['task']}",
+                         t.get('task_prompt', ''), outcome))
+    if bucket['dylan']:
+        f.write('\\clearpage\n\\section{Case briefs: DyLAN (MMLU)}'
+                '\\label{app:dylan}\n\n')
+        for r in bucket['dylan']:
+            m = r['meta']
+            tid = m['id'].rsplit('_run', 1)[0]
+            t = dylan_tasks.get(tid, {})
+            n = 'correct' if m.get('new_exact_match') else 'wrong'
+            outcome = (f"DyLAN final answer: {n} (exact match vs gold "
+                       f"``{t.get('answer')}''). Single-model baseline at "
+                       f"screening: "
+                       f"{'correct' if m.get('baseline_solved') else 'wrong'}.")
+            f.write(case(r, f"DyLAN: {tid}", t.get('question', ''), outcome))
 
 print('generated gen_outcomes.tex gen_modes.tex gen_trends.tex gen_appendix.tex')

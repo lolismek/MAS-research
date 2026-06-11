@@ -29,7 +29,7 @@ def load(era='new'):
 
 def overview():
     recs = load()
-    for system in ('chatdev', 'magentic'):
+    for system in sorted({r['meta']['system'] for r in recs}):
         rs = [r for r in recs if r['meta']['system'] == system]
         print(f"\n=== {system} (n={len(rs)}) ===")
         print(f"{'trace':<26} " + ' '.join(f'{m:>4}' for m in MODES) + '  success')

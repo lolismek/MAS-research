@@ -1,8 +1,9 @@
-# Native reproduction harness: ChatDev 1.0 + Magentic-One on gpt-5.4-mini
+# Native reproduction harness: ChatDev 1.0 + Magentic-One (+ MacNet, DyLAN) on gpt-5.4-mini
 
-Both MAS run with their **native tooling, unmodified** — the only swap is the
-model endpoint, behind a local proxy. Both control tasks validated end-to-end
-on 2026-06-10 (combined smoke+control cost: ~$0.26).
+All MAS run with their **native tooling, unmodified** — the only swap is the
+model endpoint, behind a local proxy. ChatDev/Magentic control tasks validated
+end-to-end on 2026-06-10 (combined smoke+control cost: ~$0.26); MacNet/DyLAN
+controls on 2026-06-11.
 
 ## Architecture
 
@@ -59,6 +60,69 @@ Start: `conda run -n base python reproduction/proxy/server.py`
   originals), logs/ screenshots, result.json (FINAL ANSWER vs expected,
   normalized exact match).
 
+## MacNet (larger-MAS extension)
+
+- Code: `macnet_repo/` = OpenBMB/ChatDev branch **macnet**, pinned at commit
+  **e7a35824fd683ffe8fc237e28ecc47d7b1a5da63** (no tags exist on the branch).
+  Gitignored; re-clone with `git clone --depth 1 --branch macnet
+  https://github.com/OpenBMB/ChatDev macnet_repo` and verify the SHA.
+- Env: conda `macnet` (py3.10, `pip install -r requirements.txt` with
+  `rich>=13` instead of the pinned 9.13 — upstream's own pins are mutually
+  unresolvable (openai 1.44.1 needs typing-extensions>=4.11, rich 9.13 needs
+  <4) — then `pip install httpx==0.27.2`, same openai-1.x/httpx-0.28 breakage
+  as chatdev_v1). `imgcat` comes from requirements (PyPI CLI); `dot` from
+  Homebrew graphviz. Endpoint: same `BASE_URL` env mechanism as ChatDev.
+- Configs (system name = `macnet-<config>` in runs/ and judged/):
+  - `chain`: 10 nodes in a line, the 15 chatdev_tasks.json prompts (max
+    solution handoffs);
+  - `mlp`: 8 nodes in dense layers (4-2-2, complete bipartite between
+    consecutive layers), same prompts — the redundancy arm with WORKING
+    aggregation (see the `net` note below for why mlp and not net).
+    Caveat: individual aggregation merges can fail when the merged-codebase
+    reply outgrows max_output_tokens (`finish=length` in calls.jsonl);
+    MacNet then falls back to the first pre-solution and logs "failed
+    aggregating" in the trace — its own behavior, judge-visible
+    (mlp n=4 smoke: 6 aggregation events, 2 such fallbacks, run completes);
+  - `net`: 8 nodes, complete DAG (28 edges), same prompts — OPTIONAL /
+    exploratory only, see deviation note 8;
+  - `srdd`: 10-node chain on `task_selection/macnet_srdd_tasks.json`
+    (MacNet's native benchmark; personas via `--type <category>`).
+- Run: `conda run -n macnet python reproduction/macnet/run_task.py
+  --config chain|mlp|net|srdd <Name> [...]|--all [--parallel N]`.
+  MacNet reads config.yaml/MacNetLog/WareHouse cwd-relative and re-reads
+  config.yaml mid-run, so the driver gives every run a private copy of
+  macnet_repo (deleted after archiving). The driver writes the `graph:` edge
+  list into config.yaml directly (byte-identical to what the repo's
+  generate_graph.py emits, minus its imgcat/graphviz detour).
+- Trace for the judge: `runs/macnet-<cfg>/<slug>/run_N/trace.log` = MacNet's
+  own MacNetLog transcript (Original Solution / Suggestions / Optimized
+  Solution per edge + aggregation events), utf-8.
+
+## DyLAN (larger-MAS extension)
+
+- Code: `dylan_repo/` = SALT-NLP/DyLAN pinned at commit
+  **006e440a519f7cf21e2826f3b8033d84ae9bf07c** (no releases). Gitignored.
+- Env: conda `dylan` (py3.10, `openai==0.27.6 backoff pandas==1.5.3
+  numpy==1.22.4 prettytable astunparse` — the repo's requirements minus
+  human-eval/sacrebleu, which only the HumanEval track needs).
+- Config: the paper-default MMLU setup, unmodified — 7 role agents
+  (Economist, Doctor, Lawyer, Mathematician, Psychologist, Programmer,
+  Historian), 3 rounds, listwise ranker activation, 2/3-consensus early
+  stop (`code/MMLU/llmlp_listwise_mmlu.py`).
+- Endpoint: openai 0.x honors `OPENAI_API_BASE`; DyLAN calls with `engine=`,
+  which the 0.x SDK turns into `/engines/<engine>/chat/completions` — the
+  proxy routes that path family (engine name ignored, aliasing as usual).
+- Tasks: `task_selection/dylan_tasks.json` — 12 items a single gpt-5.4-mini
+  call gets wrong + 3 it gets right (controls), screened from 120 candidates
+  across 6 hard MMLU subjects (`task_selection/screen_dylan.py`; full pool
+  outcomes in `dylan_screen_results.json`; baseline failure rate 36/120).
+- Run: `conda run -n dylan python reproduction/dylan/run_task.py
+  <id> [...]|--all [--parallel N]` → `runs/dylan/<id>/run_N/` with
+  `transcript.txt` (judge input, rebuilt from DyLAN's own per-round
+  completion log: every agent reply per round + deactivation markers +
+  final answer vs gold) and result.json (`final_correct` = DyLAN's own
+  exact-match bookkeeping).
+
 ## Parallelism & trace attribution
 
 Every run is an isolated subprocess in its own directory; the proxy is
@@ -92,3 +156,75 @@ memory + Perplexity rate limits; proxy retries 429s with backoff).
 4. GAIA web drift: answers are time-anchored to ~2024; judge pass must
    separate web-decay failures from coordination failures (noted in
    task_selection/README.md).
+5. MacNet logging patch (macnet_repo/graph.py, one line, marked
+   `[reproduction patch]`): the log FileHandler's `encoding="gbk"` →
+   `"utf-8"`. Upstream's gbk handler silently DROPS every log record that
+   contains a non-GBK character (emit() swallows the UnicodeEncodeError), so
+   the transcript the judge reads would be incomplete. Logging-only; agent
+   behavior untouched.
+6. MacNet env: `rich>=13` instead of the pinned 9.13 (upstream
+   requirements.txt is internally unresolvable, see MacNet section). rich
+   only renders console boxes/diffs; the .log transcript is unaffected.
+7. Proxy addition (infra, not framework): `/engines/<engine>/chat/completions`
+   route family for openai-0.x `engine=` calls (DyLAN). Same handler,
+   engine ignored.
+7b. Proxy translation guard: chat messages with empty string content are
+   forwarded as a single space. OpenAI chat.completions accepts
+   `content: ""` but Perplexity Responses rejects it ("content cannot be
+   empty"); MacNet's aggregation step (chatdev/waiting.py) sends such a
+   message, which would otherwise 400-loop and crash the run — an infra
+   mismatch, not a research-relevant failure.
+8. MacNet `net` topology has structurally inert aggregation at the pinned
+   commit (upstream behavior, NOT patched): the layered executor deletes
+   consumed predecessor edges after each layer, and aggregation requires
+   `len(pre_solutions) == len(remaining predecessors)` — for complete-DAG
+   inputs arriving across layers this almost never holds, so
+   multi-predecessor nodes log "insufficient predecessors" and silently
+   fall back to their FIRST received solution, discarding the rest.
+   Verified empirically (net n=3 smoke: zero aggregation events; the
+   layer-3 node's solution.txt hash-matches its first pre_solution while
+   the later, larger contribution is dropped). Topologies whose inputs
+   arrive within ONE execution layer (`mlp`, `star`) aggregate correctly.
+   Hence the redundancy arm uses `mlp`; `net` remains available as an
+   exploratory config — its traces show architecture-induced information
+   discarding (the discarded suggestions/solutions ARE in the trace, so
+   the judge sees them), but it is not a working aggregation arm and costs
+   ~3x chain.
+
+Pre-batch validation runs (MacNet chain n=3 / mlp n=4 / net n=3, DyLAN
+control) live in `runs/_smoke/` — outside the judge's globs, kept for
+reference.
+
+## Full-experiment batch commands (run these yourself — not automated)
+
+Start the proxy first; judge afterwards. Costs are rough, observable live via
+`python3 -c "import json;print(sum(json.loads(l).get('cost') or 0 for l in open('reproduction/proxy/calls.jsonl')))"`.
+
+```bash
+# 0. proxy (leave running)
+conda run -n base python reproduction/proxy/server.py
+
+# 1. MacNet chain on the 15 ChatDev tasks (~$2, ~1-2h)
+conda run -n macnet python reproduction/macnet/run_task.py --config chain --all --parallel 4
+
+# 2. MacNet mlp, same tasks (~$4-8, ~2-4h; check cost after first runs)
+conda run -n macnet python reproduction/macnet/run_task.py --config mlp --all --parallel 3
+
+# 2b. OPTIONAL: MacNet net (~$6-12; structurally inert aggregation — see
+#     deviation note 8 — run only if the architecture-induced-discarding
+#     traces are wanted as a third arm)
+# conda run -n macnet python reproduction/macnet/run_task.py --config net --all --parallel 3
+
+# 3. MacNet on SRDD (~$1.5, ~1h)
+conda run -n macnet python reproduction/macnet/run_task.py --config srdd --all --parallel 4
+
+# 4. DyLAN on the 15 screened MMLU items (~$1, ~30min)
+conda run -n dylan python reproduction/dylan/run_task.py --all --parallel 4
+
+# 5. judge the new traces (dominant cost: ~$1.2/trace x 55 ≈ $65; resume-safe)
+conda run -n base python reproduction/judge/judge.py --new --parallel 4
+
+# 6. analysis + report
+conda run -n base python reproduction/judge/analyze.py overview
+conda run -n base python reproduction/report/make_report.py
+```

@@ -118,7 +118,11 @@ def to_input_items(messages):
                     n_images += 1
             items.append(dict(role=out_role, content=parts))
         else:
-            items.append(dict(role=out_role, content=content or ''))
+            # OpenAI chat.completions accepts content="" but Perplexity
+            # Responses rejects it ("content cannot be empty"; hit by
+            # MacNet's aggregation step) — a single space is the closest
+            # accepted equivalent
+            items.append(dict(role=out_role, content=content or ' '))
     return items, n_images
 
 
@@ -244,11 +248,17 @@ def models():
                                                TARGET_MODEL)])
 
 
+# /engines/{engine}/... is the path openai-python 0.x emits when called with
+# engine= (DyLAN does this); engine is ignored — every model is aliased anyway.
+@app.post('/t/{tag}/v1/engines/{engine}/chat/completions')
+@app.post('/t/{tag}/engines/{engine}/chat/completions')
+@app.post('/v1/engines/{engine}/chat/completions')
+@app.post('/engines/{engine}/chat/completions')
 @app.post('/t/{tag}/v1/chat/completions')
 @app.post('/t/{tag}/chat/completions')
 @app.post('/v1/chat/completions')
 @app.post('/chat/completions')
-async def chat(req: Request, tag: str = ''):
+async def chat(req: Request, tag: str = '', engine: str = ''):
     body = await req.json()
     rbody, n_images = to_responses_body(body)
     t0 = time.time()

@@ -18,6 +18,22 @@ the Perplexity key**, then study whether memory / communication interventions he
   https://github.com/multi-agent-systems-failure-taxonomy/MAST, gitignored) and
   HF access to `mcemri/MAD` for ChatDev task prompts.
 
+Larger-MAS extension (MacNet + DyLAN; see reproduction/README.md):
+
+- `macnet_srdd_tasks.json` — 10 SRDD tasks (MacNet's native benchmark), seeded
+  sample of 10 distinct categories × 1 task via `sample_srdd.py` (source CSV
+  cached under `data/`, gitignored). No ground-truth outcome exists; success is
+  the judge's verdict. MacNet's chain/mesh configs need no task file of their
+  own — they reuse `chatdev_tasks.json` verbatim (the architecture-only
+  comparison).
+- `dylan_tasks.json` — 15 MMLU test items: 12 that a single gpt-5.4-mini call
+  answered wrong + 3 it answered right (controls), screened from 120 candidates
+  across 6 hard subjects by `screen_dylan.py` (baseline failure rate 36/120;
+  full pool outcomes in `dylan_screen_results.json`). DyLAN has no original
+  MAST traces, so there is no cat-2 prior — difficulty screening replaces
+  trace screening, and the same single-model baseline doubles as the
+  MAS-vs-single-model comparison point.
+
 ## ⚠️ MAD dataset annotations are broken — do not use
 
 The HF dataset `mcemri/MAD` (`MAD_full_dataset.json`, both the 2025-05-16 and
