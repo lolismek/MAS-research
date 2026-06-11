@@ -1,17 +1,18 @@
-# Latent note-transfer probe — arms 1, 2, 5
+# Latent note-transfer probe
 
 Design + decision table: `../PROBE_PLAN.md` (read it first).
 How to run on the GPU box: `env/GPU_RUN.md`. **Do not run models locally.**
 
 | module | what | needs GPU |
 |---|---|---|
-| `inject/` | level-(i) embedding injection + latent rolling (LatentMAS-adapted, optional `realign=True` for their realignment matrix); `test_inject.py` = Phase-0 gate (8 tests; the original 7 passed on Qwen3-0.6B/8B 2026-06-11, realign test added after) | yes |
+| `inject/` | level-(i) embedding injection, latent rolling (LatentMAS-adapted, optional `realign=True` for their realignment matrix), note-turn payload capture for arms 3/4; `test_inject.py` = Phase-0 gate (10 tests; the original 7 passed on Qwen3-0.6B/8B 2026-06-11, realign + payload-capture tests added after) | yes |
 | `contexts/` | deterministic synthetic session logs, K=6 planted facts each, self-checking matcher (`make_contexts.py`) | no |
-| `capture/` | A-side: CORAL-style reflect note + m=8 rolled latents (arm-2 payload) + verbalized labels | yes |
-| `arms/` | B-side runners, arms 1 / 2 / 5 (+5t), paired seeds, identical visible text for 1 vs 2 | yes |
-| `analysis/` | `coherence.py` = Phase-2 gates (ΔNLL, slot attention, side-by-side); `score_recall.py` = headline recall table (CPU-only) | coherence only |
+| `capture/` | A-side: `run_capture.py` — CORAL-style reflect note + m=8 rolled latents (arm-2 payload) + verbalized labels; `capture_payloads.py` — arm-3 note-suffix states + arm-4 attention-selected context states (eager attention, reuses existing notes) | yes |
+| `arms/` | B-side runners, all arms: alongside 1 / 2 / 3 / 4k\<k\> / 5 (+5t), in-place 0 / 2i / 3i / 4ik\<k\>; paired seeds; identical visible text for 1 vs 2, identical scaffold across the in-place family (`payloads.py` = arm parsing + payload loading) | yes |
+| `analysis/` | `coherence.py` = Phase-2 gates per payload arm (ΔNLL, slot attention, side-by-side); `score_recall.py` = headline recall table with Δ verb./unverb. vs arm 1 (CPU-only) | coherence only |
 | `env/` | `setup.sh`, `run_all.sh`, `GPU_RUN.md` | — |
 
-Arms 3 (note-suffix KV) and 4 (attention-selected context KV) are specified
-in the plan but not implemented here, as are the in-place arms 0/2i/3i/4i
-(payload *replacing* the note; plan §in-place-arms, added 2026-06-11).
+All arms of the plan (alongside 1/2/3/4/5 and in-place 0/2i/3i/4i) are
+implemented; the 2026-06-11 REPORT.md covers arms 1/2/5 only. Level-(ii)
+cache-space injection remains unimplemented (per-layer suffix states are
+already stored by `capture_payloads.py` for it).

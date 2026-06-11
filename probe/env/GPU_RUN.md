@@ -31,6 +31,37 @@ Idempotent: re-running skips finished arm outputs.
 .venv/bin/python -m probe.analysis.score_recall --run main       # CPU-only, can run anywhere
 ```
 
+## New arms 0 / 2i / 3 / 3i / 4k\<k\> / 4ik\<k\> (extend the main run)
+
+These reuse the main run's notes, latents, contexts, and seeds, so the new
+outputs land in `runs/main/` and pair with the existing arms 1/2/5. Upload
+the main run from the Mac first:
+
+```bash
+rsync -av runs/main/ <box>:~/MAS-memory-research/runs/main/
+```
+
+Then on the box:
+
+```bash
+.venv/bin/python -m probe.inject.test_inject --model full            # now 10/10
+.venv/bin/python -m probe.capture.capture_payloads --model full --run main --limit 38
+#   → arm-3/4 payloads (note-suffix + attention-selected states), eager attention,
+#     idempotent. ~45MB/ctx with per-layer states (--skip-per-layer to halve).
+.venv/bin/python -m probe.arms.run_arms --model full --run main \
+    --arms 0,2i,3,3i,4k64,4ik64 --samples 1 --limit 2                # smoke, eyeball
+.venv/bin/python -m probe.analysis.coherence --model full --run main --arm 3 --n 10
+#   → ΔNLL gate vs arm 1 (identical text); --arm 3i gates vs the arm-0 scaffold
+#     (needs arm-0 s0 outputs first).
+.venv/bin/python -m probe.arms.run_arms --model full --run main \
+    --arms 0,2i,3,3i,4k64,4ik64 --samples 3 --limit 38               # full eval
+.venv/bin/python -m probe.analysis.score_recall --run main           # one paired table
+```
+
+`--limit 38` matches the main run's early stop. k is subset at use time from
+the stored k_max=128, so 4k32/4k128 need no recapture. In-place arms read
+their verdict off the VERBALIZED column (plan §in-place-arms).
+
 ## Realign ablation (arm 2 with the LatentMAS realignment matrix)
 
 The 2026-06-11 main run rolled latents with realignment OFF (the LatentMAS

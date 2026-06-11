@@ -21,6 +21,7 @@ judge verdicts are cached + logged for spot-checking.
 import argparse
 import json
 import random
+import re
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
@@ -28,13 +29,38 @@ from pathlib import Path
 from probe.common import RUNS_DIR, perplexity_api_key, read_json, write_json
 from probe.contexts.facts import fact_matches
 
-ARMS_ORDER = ["1", "2", "5", "5t"]
-ARM_LABELS = {
+_ARM_RANK = {"0": 0, "1": 1, "2": 2, "2i": 3, "3": 4, "3i": 5,
+             "5": 90, "5t": 91}
+_ARM_LABELS = {
+    "0": "arm 0 — no note (floor)",
     "1": "arm 1 — note only (baseline)",
     "2": "arm 2 — note + rolled latents",
+    "2i": "arm 2i — rolled latents in place of note",
+    "3": "arm 3 — note + note-suffix states",
+    "3i": "arm 3i — note-suffix states in place of note",
     "5": "arm 5 — note + raw context (ceiling)",
     "5t": "arm 5t — note + truncated raw context",
 }
+
+
+def arm_sort_key(arm: str):
+    if arm in _ARM_RANK:
+        return (_ARM_RANK[arm], 0)
+    m = re.fullmatch(r"4(i?)k(\d+)", arm)
+    if m:  # alongside 4k* then in-place 4ik*, ascending k, between 3i and 5
+        return (10 + (1 if m.group(1) else 0), int(m.group(2)))
+    return (99, 0)
+
+
+def arm_label(arm: str) -> str:
+    if arm in _ARM_LABELS:
+        return _ARM_LABELS[arm]
+    m = re.fullmatch(r"4(i?)k(\d+)", arm)
+    if m and m.group(1):
+        return f"arm {arm} — selected context states (k={m.group(2)}) in place of note"
+    if m:
+        return f"arm {arm} — note + selected context states (k={m.group(2)})"
+    return f"arm {arm}"
 
 
 def llm_judge(fact_summary: str, b_text: str, cache: dict, cache_path: Path) -> bool:
@@ -118,7 +144,7 @@ def main():
                 ok = llm_judge(f["summary"], rec["text"], judge_cache, cache_path)
             hits[arm][split][cid].append(1.0 if ok else 0.0)
 
-    arms = [a for a in ARMS_ORDER if a in arms_seen]
+    arms = sorted(arms_seen, key=arm_sort_key)
     results = {}
     for arm in arms:
         results[arm] = {"payload_tokens_mean":
@@ -134,21 +160,26 @@ def main():
                 "recall": mean, "ci95": [lo, hi], "n_contexts": len(per_ctx),
             }
 
-    # paired per-context deltas vs arm 1 on the unverbalized split
-    deltas = {}
+    # paired per-context deltas vs arm 1, both splits (unverbalized = the
+    # alongside hypothesis test; verbalized = the in-place headline)
+    deltas = {"unverbalized": {}, "verbalized": {}}
     if "1" in results:
-        base = hits["1"]["unverbalized"]
-        for arm in arms:
-            if arm == "1":
-                continue
-            ds = [sum(hits[arm]["unverbalized"][c]) / len(hits[arm]["unverbalized"][c])
-                  - sum(base[c]) / len(base[c])
-                  for c in base if hits[arm]["unverbalized"].get(c)]
-            if ds:
-                lo, hi = bootstrap_ci(ds)
-                deltas[arm] = {"mean_delta": sum(ds) / len(ds), "ci95": [lo, hi]}
+        for split in deltas:
+            base = hits["1"][split]
+            for arm in arms:
+                if arm == "1":
+                    continue
+                ds = [sum(hits[arm][split][c]) / len(hits[arm][split][c])
+                      - sum(base[c]) / len(base[c])
+                      for c in base if hits[arm][split].get(c)]
+                if ds:
+                    lo, hi = bootstrap_ci(ds)
+                    deltas[split][arm] = {"mean_delta": sum(ds) / len(ds),
+                                          "ci95": [lo, hi]}
 
-    write_json({"results": results, "deltas_vs_arm1_unverbalized": deltas},
+    write_json({"results": results,
+                "deltas_vs_arm1_unverbalized": deltas["unverbalized"],
+                "deltas_vs_arm1_verbalized": deltas["verbalized"]},
                out_dir / "recall.json")
 
     n_scored = len({cid for arm in hits.values() for split in arm.values() for cid in split})
@@ -158,8 +189,8 @@ def main():
         f"run: `{args.run}` — {n_scored} contexts scored, "
         f"llm_judge={'on' if args.llm_judge else 'off'}",
         "",
-        "| arm | payload tok | verbalized recall | unverbalized recall | Δ unverb. vs arm 1 |",
-        "|---|---|---|---|---|",
+        "| arm | payload tok | verbalized recall | unverbalized recall | Δ verb. vs arm 1 | Δ unverb. vs arm 1 |",
+        "|---|---|---|---|---|---|",
     ]
     for arm in arms:
         r = results[arm]
@@ -167,17 +198,24 @@ def main():
             if not r.get(s):
                 return "—"
             return f"{r[s]['recall']:.3f} [{r[s]['ci95'][0]:.3f}, {r[s]['ci95'][1]:.3f}]"
-        d = deltas.get(arm)
-        dtxt = f"{d['mean_delta']:+.3f} [{d['ci95'][0]:+.3f}, {d['ci95'][1]:+.3f}]" if d else "—"
-        lines.append(f"| {ARM_LABELS.get(arm, arm)} | {r['payload_tokens_mean']:.0f} | "
-                     f"{fmt('verbalized')} | {fmt('unverbalized')} | {dtxt} |")
+        def fmt_d(split):
+            d = deltas[split].get(arm)
+            if not d:
+                return "—"
+            return f"{d['mean_delta']:+.3f} [{d['ci95'][0]:+.3f}, {d['ci95'][1]:+.3f}]"
+        lines.append(f"| {arm_label(arm)} | {r['payload_tokens_mean']:.0f} | "
+                     f"{fmt('verbalized')} | {fmt('unverbalized')} | "
+                     f"{fmt_d('verbalized')} | {fmt_d('unverbalized')} |")
     lines += [
         "",
-        "Reading guide (PROBE_PLAN.md §why-arm-5-matters): "
-        "2 ≈ 5 at few tokens → latent compression win; "
-        "2 ≈ 1 while 5 ≫ 1 → info exists but training-free injection fails (v2 trained compressor); "
-        "5 ≈ 1 → probe construction broken — fix contexts before concluding anything. "
-        "Verbalized recall should be ≈ equal across arms (sanity).",
+        "Reading guide (PROBE_PLAN.md §why-arm-5-matters and §in-place-arms): "
+        "alongside arms — 2/3/4 ≈ 5 at few tokens → latent compression win; "
+        "≈ 1 while 5 ≫ 1 → info exists but training-free injection fails (v2 trained compressor); "
+        "5 ≈ 1 → probe construction broken. Verbalized recall ≈ equal across "
+        "alongside arms (sanity). In-place arms — the VERBALIZED column is the "
+        "headline: 3i ≈ 1 → substitution works, proceed to 4i; "
+        "3i ≈ 2i ≈ 0 → level (i) can't deliver even self-generated content "
+        "(level (ii) or v2). Arm 0 ≪ arm 1 on verbalized validates the floor.",
     ]
     report = "\n".join(lines)
     (out_dir / "recall_report.md").parent.mkdir(parents=True, exist_ok=True)

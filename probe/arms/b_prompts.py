@@ -6,6 +6,12 @@ and arm 2. The injection point is marked with a sentinel that is removed
 before tokenization; arm 2 places the latent embeddings there, arm 1 places
 nothing. Arm 5 adds the raw session log as ordinary text (a different,
 explicitly textual condition — the ceiling control).
+
+In-place arms (0 / 2i / 3i / 4i): the sentinel sits where the note text would
+be, inside the same fences — the scaffold is byte-identical across the whole
+in-place family, and differs from arm 1 only by the note text's removal
+(plan §in-place-arms). The alongside rendering is untouched, so outputs stay
+comparable with the 2026-06-11 main run.
 """
 
 # Sentinel split point for latent injection: right after the note block.
@@ -22,7 +28,7 @@ B_SYSTEM = (
 
 
 def build_b_user(objective: str, note: str, questions: list[str],
-                 raw_transcript: str | None = None) -> str:
+                 raw_transcript: str | None = None, inplace: bool = False) -> str:
     qs = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(questions))
     raw_block = ""
     if raw_transcript is not None:
@@ -30,15 +36,16 @@ def build_b_user(objective: str, note: str, questions: list[str],
             "\nTheir full raw session log is also available:\n\n"
             f"{raw_transcript}\n"
         )
+    if inplace:
+        note_section = f"---\n{LATENT_SENTINEL}\n---{raw_block}"
+    else:
+        note_section = f"---\n{note}\n---\n{LATENT_SENTINEL}{raw_block}"
     return f"""\
 You are taking over a colleague's work. The objective: {objective}.
 
 Your colleague left this note before handing off:
 
----
-{note}
----
-{LATENT_SENTINEL}{raw_block}
+{note_section}
 First, answer these questions about your colleague's session as concretely as \
 you can — exact names, values, and reasons where possible. If the note does \
 not say, give your best guess from whatever context you have.
@@ -48,9 +55,11 @@ not say, give your best guess from whatever context you have.
 Then write a short plan (under 150 words) for your next attempt."""
 
 
-def build_b_messages(ctx: dict, note: str, raw_transcript: str | None = None) -> list[dict]:
+def build_b_messages(ctx: dict, note: str, raw_transcript: str | None = None,
+                     inplace: bool = False) -> list[dict]:
     questions = [f["question"] for f in ctx["facts"]]
     return [
         {"role": "system", "content": B_SYSTEM},
-        {"role": "user", "content": build_b_user(ctx["objective"], note, questions, raw_transcript)},
+        {"role": "user", "content": build_b_user(ctx["objective"], note, questions,
+                                                 raw_transcript, inplace=inplace)},
     ]

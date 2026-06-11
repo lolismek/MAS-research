@@ -13,6 +13,14 @@ Two mechanisms:
    ``inputs_embeds``. The model computes K/V for the slots itself, so RoPE
    and GQA need no special handling (LatentMAS's validated level-(i) path).
 
+3. Note-turn payload capture (writer side, arms 3/4): re-forward A's pass in
+   two stages — prompt with ``use_cache``, then the note tokens against that
+   cache with ``output_attentions`` + ``output_hidden_states`` (requires an
+   eager-attention harness). Yields the note tokens' last-layer states (arm 3,
+   the note "as A computed it") and a SnapKV-style attention ranking of
+   context positions (arm 4: sink-masked, mid-to-late layers, max over heads,
+   mean over note queries), whose last-layer states form the selected payload.
+
 Norm matching follows LatentMAS ``_apply_latent_realignment``. With
 ``realign=False`` (their CLI default, used for the 2026-06-11 main run):
 identity map + rescale to the mean input-embedding row norm. With
@@ -205,6 +213,104 @@ class ModelHarness:
             past = out.past_key_values
             last_hidden = out.hidden_states[-1][:, -1, :]
         return torch.stack(vecs, dim=0)
+
+    # ---------- note-turn payload capture (arms 3 / 4) ----------
+
+    def token_span_for_substring(self, text: str, sub: str) -> tuple[int, int]:
+        """Token [start, end) of a substring within text, under the same
+        no-special-tokens encoding ``encode`` uses. Used to restrict arm-4
+        selection to the transcript span of A's prompt."""
+        start_char = text.index(sub)
+        end_char = start_char + len(sub)
+        enc = self.tokenizer(text, add_special_tokens=False,
+                             return_offsets_mapping=True)
+        toks = [i for i, (s, e) in enumerate(enc["offset_mapping"])
+                if e > start_char and s < end_char]
+        if not toks:
+            raise ValueError("substring maps to no tokens")
+        return toks[0], toks[-1] + 1
+
+    @torch.no_grad()
+    def capture_note_payloads(
+        self,
+        prompt_ids: torch.Tensor,
+        note_ids: torch.Tensor,
+        n_suffix: int | None = None,
+        candidate_span: tuple[int, int] | None = None,
+        k_max: int = 128,
+        layer_frac: float = 0.5,
+        sink_tokens: int = 4,
+    ) -> dict:
+        """Arm-3 and arm-4 payloads from one re-forward of A's note turn.
+
+        prompt_ids: A's full prompt (context + reflect instruction + gen prompt).
+        note_ids:   the note tokens as generated (may include the trailing
+                    <|im_end|>); all of them serve as ranking queries.
+        n_suffix:   how many leading note tokens to keep states for (arm 3);
+                    default all of note_ids.
+        candidate_span: token [start, end) within prompt_ids that arm-4
+                    selection may pick from (the transcript span); default all.
+        Returns dict of CPU tensors:
+          suffix_states   [n_suffix, hidden]  norm-matched (ready to inject)
+          suffix_per_layer [n_layers+1, n_suffix, hidden]  raw, for level (ii)
+          selected_states [k, hidden]  norm-matched, score-descending order
+          selected_positions [k]  prompt token positions, same order
+          selected_scores [k]
+        """
+        out_a = self.model(
+            input_ids=prompt_ids,
+            attention_mask=torch.ones_like(prompt_ids),
+            use_cache=True,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        ctx_states = out_a.hidden_states[-1][0]  # [T_prompt, hidden], last layer
+        t0 = prompt_ids.shape[1]
+        mask = torch.ones((1, t0 + note_ids.shape[1]), dtype=torch.long,
+                          device=self.device)
+        out_b = self.model(
+            input_ids=note_ids,
+            attention_mask=mask,
+            past_key_values=out_a.past_key_values,
+            use_cache=True,
+            output_attentions=True,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        if not out_b.attentions or out_b.attentions[0] is None:
+            raise RuntimeError(
+                "attention scores unavailable — load the harness with "
+                "attn_implementation='eager' for payload capture")
+
+        n_suffix = n_suffix or note_ids.shape[1]
+        suffix_states = self._norm_match(out_b.hidden_states[-1][0, :n_suffix])
+        suffix_per_layer = torch.stack(
+            [hs[0, :n_suffix] for hs in out_b.hidden_states], dim=0)
+
+        # SnapKV-style ranking of prompt positions by the attention the note
+        # tokens place on them: mid-to-late layers, mean over note queries,
+        # max over heads, mean over layers.
+        n_layers = len(out_b.attentions)
+        first_layer = int(n_layers * layer_frac)
+        scores = torch.zeros(t0, dtype=torch.float32, device=self.device)
+        for att in out_b.attentions[first_layer:]:  # [1, H, n_note, T]
+            scores += att[0, :, :, :t0].float().mean(dim=1).max(dim=0).values
+        scores /= n_layers - first_layer
+
+        lo, hi = candidate_span or (0, t0)
+        allowed = torch.zeros(t0, dtype=torch.bool, device=self.device)
+        allowed[max(lo, sink_tokens):hi] = True
+        scores = scores.masked_fill(~allowed, float("-inf"))
+        k = min(k_max, int(allowed.sum().item()))
+        top_scores, top_pos = scores.topk(k)
+
+        return {
+            "suffix_states": suffix_states.float().cpu(),
+            "suffix_per_layer": suffix_per_layer.to(torch.float16).cpu(),
+            "selected_states": self._norm_match(ctx_states[top_pos]).float().cpu(),
+            "selected_positions": top_pos.cpu(),
+            "selected_scores": top_scores.float().cpu(),
+        }
 
     # ---------- scoring (tests + coherence metric) ----------
 

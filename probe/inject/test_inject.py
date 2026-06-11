@@ -13,6 +13,10 @@ Covers the Phase-0 gates from PROBE_PLAN.md:
 - realignment: matrix shape/finiteness; for tied-embedding models the
   LatentMAS ridge LS solution must be ~identity (first rolled latent
   unchanged vs realign-off)
+- note-turn payload capture (arms 3/4): suffix-state shapes/norms, selected
+  positions confined to the candidate span (sink-masked, unique, scores
+  descending), determinism across calls, generation smoke with the suffix
+  payload injected (needs a second, eager-attention model instance)
 """
 
 import argparse
@@ -130,6 +134,53 @@ def main():
     h.realign_matrix = None
     results.append(report("realignment matrix sane (rolling norms; ~identity if tied)",
                           ok, detail))
+
+    # 9. note-turn payload capture (arms 3/4) — needs eager attention
+    h9 = ModelHarness(args.model, device=args.device, dtype=args.dtype,
+                      attn_implementation="eager")
+    transcript = (
+        "attempt 1: greedy packing, score 0.512. attempt 2: simulated "
+        "annealing with T0=2.5, score 0.541. observation: the corner "
+        "heuristic only helps when N is prime; retry logic untested."
+    )
+    p_text = h9.render_chat([{"role": "user", "content":
+                              f"Session log:\n\n{transcript}\n\nWrite a one-line note."}])
+    p_ids = h9.encode(p_text)
+    note = "Annealing beat greedy; T0=2.5 was load-bearing."
+    n_ids = h9.encode(note + "<|im_end|>")
+    n_suffix = h9.encode(note).shape[1]
+    span = h9.token_span_for_substring(p_text, transcript)
+    k_max = 16
+    pl = h9.capture_note_payloads(p_ids, n_ids, n_suffix=n_suffix,
+                                  candidate_span=span, k_max=k_max)
+    pos = pl["selected_positions"]
+    sc = pl["selected_scores"]
+    norms_s = pl["suffix_states"].norm(dim=-1)
+    norms_k = pl["selected_states"].norm(dim=-1)
+    k_expect = min(k_max, span[1] - max(span[0], 4))
+    ok = (
+        pl["suffix_states"].shape == (n_suffix, h9.hidden_size)
+        and pl["suffix_per_layer"].shape[1] == n_suffix
+        and torch.isfinite(pl["suffix_states"]).all().item()
+        and (norms_s - h9.target_norm).abs().max().item() < 0.01 * h9.target_norm
+        and (norms_k - h9.target_norm).abs().max().item() < 0.01 * h9.target_norm
+        and pos.shape[0] == k_expect
+        and len(set(pos.tolist())) == pos.shape[0]
+        and bool(((pos >= max(span[0], 4)) & (pos < span[1])).all().item())
+        and bool((sc[:-1] >= sc[1:]).all().item())
+    )
+    pl2 = h9.capture_note_payloads(p_ids, n_ids, n_suffix=n_suffix,
+                                   candidate_span=span, k_max=k_max)
+    ok = ok and pos.tolist() == pl2["selected_positions"].tolist()
+    results.append(report("payload capture (suffix shapes/norms, selection in span, deterministic)",
+                          ok, f"suffix={n_suffix} tok, selected {pos.shape[0]} of span {span}"))
+
+    # 10. generation with the injected note-suffix payload stays text
+    text = h.generate_from_embeds(
+        h.build_injected_embeds(pre, pl["suffix_states"], post),
+        max_new_tokens=60, seed=0)
+    ok = len(text) > 20 and any(c.isalpha() for c in text)
+    results.append(report("generation with injected suffix states is text", ok, repr(text[:80])))
 
     print(f"\n{sum(results)}/{len(results)} passed")
     raise SystemExit(0 if all(results) else 1)
