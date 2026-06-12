@@ -12,9 +12,11 @@ How to run on the GPU box: `env/GPU_RUN.md`. **Do not run models locally.**
 | `analysis/` | `coherence.py` = Phase-2 gates per payload arm (ΔNLL, slot attention, side-by-side); `score_recall.py` = headline recall table with Δ verb./unverb. vs arm 1 (CPU-only) | coherence only |
 | `env/` | `setup.sh`, `run_all.sh`, `GPU_RUN.md` | — |
 
-All arms of the plan (alongside 1/2/3/4/5 and in-place 0/2i/3i/4i) are
-implemented and evaluated — full results in `REPORT.md` (2026-06-11, both
-batches; all level-(i) payloads null, 3i = 0.000 verbalized). Still open:
-the realign-on ablation (recipe in `env/GPU_RUN.md`) and level-(ii)
-cache-space injection (unimplemented; the per-layer suffix states it needs
-are already stored by `capture_payloads.py`).
+All arms evaluated (2026-06-11, three batches) — full results in
+`REPORT.md`. Headline: level (i) is closed WITH its positive control
+(arm 1e = 0.996 proves the harness; 3i = 0.000 is real), the realign
+ablation is a double null (2r/2ir), and **level (ii) works**: the note's
+KV cache substitutes for the note text at 0.928 verbalized recall
+(arm 3ikv) where level (i) carried 0.000. Open: selected-context KV
+("4kv", needs one recapture pass for per-layer states at selected
+positions) vs trained compressor v2.
