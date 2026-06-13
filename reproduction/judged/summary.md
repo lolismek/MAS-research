@@ -54,3 +54,10 @@ file -> reviewer repeats identical comment -> verification rubber-stamps) is
 fully evidence-quoted across traces and suggests a concrete intervention:
 persistent artifact store with receipt verification; falsifiable via the
 repeated-reviewer-comment signature.
+
+## DyLAN-MATH arm (added 2026-06-11)
+
+15 MATH-500 level-5 traces judged; fingerprint + four evidence-quoted case
+studies (the answer/score extraction collision, ranker discarding correct
+agents, the one conformity flip, grading artifacts) in
+`dylan_math_cases.md`. Per-trace verdicts in `new/dylan-math/`.
