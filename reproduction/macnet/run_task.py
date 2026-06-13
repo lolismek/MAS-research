@@ -16,6 +16,15 @@ Configs (the system name under runs/ and judged/ encodes the config):
            n=3 smoke: zero aggregation events; later contributions dropped).
            Structurally induced information discarding — interesting for
            MAST 2.4/2.5, but NOT a working "redundancy" arm. ~3x chain cost.
+  rand   - 10 nodes, seeded TRUE random DAG (RAND_SEED=7, one fixed sample
+           across tasks/runs: 18 edges incl. skip edges, 9 execution steps,
+           7 aggregation points with fan-ins 2-3). Mixes plain handoffs and
+           genuine merges in one irregular, non-layered arm. Requires the
+           graph.py scheduler patch (README deviation note 11): upstream
+           only aggregates layer-aligned arrivals, so without the patch any
+           skip edge silently degenerates to net's first-solution fallback.
+           MacNet's own generate_random is NOT used (no connectivity
+           guarantee, unbounded edge count up to n(n-1)/2).
   srdd   - 10-node chain on task_selection/macnet_srdd_tasks.json with the
            SRDD persona profiles (--type <category>).
 
@@ -31,10 +40,10 @@ re-encoded to clean utf-8.
 
 Usage:
   conda run -n macnet python reproduction/macnet/run_task.py --config chain Gomoku
-  conda run -n macnet python reproduction/macnet/run_task.py --config mesh --all --parallel 3
+  conda run -n macnet python reproduction/macnet/run_task.py --config rand --all --parallel 3
   conda run -n macnet python reproduction/macnet/run_task.py --config chain --nodes 3 Gomoku   # smoke
 """
-import glob, json, os, shutil, subprocess, sys, time
+import glob, json, os, random, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -45,8 +54,11 @@ CONFIGS = {
     'chain': dict(nodes=10, topology='chain', timeout=3600),
     'mlp': dict(nodes=8, topology='mlp', timeout=7200),
     'net': dict(nodes=8, topology='net', timeout=7200),
+    'rand': dict(nodes=10, topology='rand', timeout=7200),
     'srdd': dict(nodes=10, topology='chain', timeout=3600),
 }
+
+RAND_SEED = 7  # fixed: one sampled graph, identical across tasks and runs
 
 ALIASES = {  # same map as chatdev/run_task.py so prompts see identical names
     'TicTacToe (with display)': 'TicTacToe', 'The Crossword': 'TheCrossword',
@@ -72,6 +84,24 @@ def edge_list(topology, n):
         edges = [(u, v) for i in range(len(layers) - 1)
                  for u in range(start_ids[i], end_ids[i])
                  for v in range(start_ids[i + 1], end_ids[i + 1])]
+    elif topology == 'rand':
+        # Seeded TRUE random DAG (skip edges and all): node ids are the
+        # topological order; a backbone gives every non-source node one
+        # predecessor among earlier nodes (weak connectivity — MacNet's own
+        # generate_random can emit isolated nodes), then uniform extra
+        # forward edges. Total edges land in [1.5n, 2n) — a density bound
+        # generate_random lacks (it samples up to n(n-1)/2, a cost hazard),
+        # the one deliberate departure from "uniform over all DAGs".
+        # Cross-layer aggregation works because of the graph.py scheduler
+        # patch (deviation note 11); unpatched, any skip edge silently
+        # degenerates to first-solution fallback like the net config.
+        rng = random.Random(RAND_SEED)
+        chosen = {(rng.randrange(i), i) for i in range(1, n)}
+        pool = [(u, v) for u in range(n) for v in range(u + 1, n)
+                if (u, v) not in chosen]
+        extra = rng.randint(n // 2, n - 1)
+        chosen |= set(rng.sample(pool, min(extra, len(pool))))
+        edges = sorted(chosen)
     else:
         raise ValueError(topology)
     return [f'{u}->{v}' for u, v in edges]
@@ -148,6 +178,8 @@ def run_one(cfg, task):
 
     result = dict(task=task['task'], project_name=name, config=cfg,
                   topology=CONFIGS[cfg]['topology'],
+                  edges=edge_list(CONFIGS[cfg]['topology'],
+                                  CONFIGS[cfg]['nodes']),
                   n_nodes=CONFIGS[cfg]['nodes'], run=n, rc=rc,
                   seconds=round(dur, 1),
                   trace=trace and os.path.relpath(trace, rundir),

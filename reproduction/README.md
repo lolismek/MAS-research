@@ -76,19 +76,26 @@ Start: `conda run -n base python reproduction/proxy/server.py`
   - `chain`: 10 nodes in a line, the 15 chatdev_tasks.json prompts (max
     solution handoffs);
   - `mlp`: 8 nodes in dense layers (4-2-2, complete bipartite between
-    consecutive layers), same prompts — the redundancy arm with WORKING
-    aggregation (see the `net` note below for why mlp and not net).
-    Caveat: individual aggregation merges can fail when the merged-codebase
-    reply outgrows max_output_tokens (`finish=length` in calls.jsonl);
-    MacNet then falls back to the first pre-solution and logs "failed
-    aggregating" in the trace — its own behavior, judge-visible
-    (mlp n=4 smoke: 6 aggregation events, 2 such fallbacks, run completes);
+    consecutive layers), same prompts — redundancy arm with WORKING
+    aggregation (see the `net` note below for why mlp and not net);
   - `net`: 8 nodes, complete DAG (28 edges), same prompts — OPTIONAL /
     exploratory only, see deviation note 8;
+  - `rand`: 10 nodes, seeded TRUE random DAG (RAND_SEED=7 in run_task.py,
+    one fixed sample shared by all tasks/runs: 18 edges including skip
+    edges, 9 execution steps, fan-ins up to 3; edge list recorded in each
+    result.json). **The single-topology arm of choice**: irregular,
+    non-layered topology mixing plain handoffs with genuine aggregation at
+    7 merge points (nodes 4, 5, 6, 7, 8, 9 and the output collector).
+    Depends on the scheduler patch of deviation note 11 — unpatched, every
+    skip edge degenerates into `net`'s silent first-solution fallback.
+    MacNet's own `generate_random` is NOT used: no connectivity guarantee
+    (isolated nodes possible) and edge count sampled up to n(n-1)/2 (cost
+    hazard); the driver samples a backbone-connected DAG with total edges
+    bounded in [1.5n, 2n) instead;
   - `srdd`: 10-node chain on `task_selection/macnet_srdd_tasks.json`
     (MacNet's native benchmark; personas via `--type <category>`).
 - Run: `conda run -n macnet python reproduction/macnet/run_task.py
-  --config chain|mlp|net|srdd <Name> [...]|--all [--parallel N]`.
+  --config chain|mlp|net|rand|srdd <Name> [...]|--all [--parallel N]`.
   MacNet reads config.yaml/MacNetLog/WareHouse cwd-relative and re-reads
   config.yaml mid-run, so the driver gives every run a private copy of
   macnet_repo (deleted after archiving). The driver writes the `graph:` edge
@@ -241,37 +248,99 @@ memory + Perplexity rate limits; proxy retries 429s with backoff).
    exploratory config — its traces show architecture-induced information
    discarding (the discarded suggestions/solutions ARE in the trace, so
    the judge sees them), but it is not a working aggregation arm and costs
-   ~3x chain.
+   ~3x chain. The same degeneration applies to MacNet's native
+   `generate_random`, which is why the `rand` config uses a driver-side
+   layered sampler instead.
+9. MacNet truncation patch (macnet_repo/camel/model_backend.py, both API
+   branches, marked `MAS-REPRO PATCH`): upstream sets
+   `max_tokens = 4096 - prompt_tokens` for gpt-4o on EVERY call, so any
+   rewrite or merge whose prompt contains a codebase gets its reply
+   truncated (`finish=length`) — mlp n=4 smoke: 81/101 calls truncated,
+   aggregations failing via retry-limit fallback. That is a systemic loss
+   source that would masquerade as agent-level information withholding
+   (2.4/2.5), so the patch drops the param and lets the API's
+   model-maximum default apply. Errors in the traces are now attributable
+   to agents, not the token budget. (The proxy's note-3b guard for <=0
+   budgets stays, for ChatDev.)
+10. Perplexity API drift (2026-06-12, infra): the Responses endpoint went
+   schema-strict and now 400s on `store`, `temperature`, `top_p`, and
+   `parallel_tool_calls` (each probed individually; `max_output_tokens`
+   still accepted). The proxy no longer forwards them. CONSEQUENCE for
+   MacNet: its depth-annealed temperature schedule (1 - depth/graph_depth,
+   the explore->exploit gradient) is inert — every node samples at the
+   model's fixed default. Applies equally to all arms run after this date;
+   pre-drift runs (ChatDev, Magentic, DyLAN, all judged traces) sent
+   temperature while upstream still accepted it.
+11. MacNet scheduler patch (macnet_repo/graph.py, two marked `MAS-REPRO
+   PATCH` sites): aggregation now compares accumulated pre_solutions
+   against each node's BUILD-TIME in-degree instead of the live
+   (edge-deleted, shrinking) predecessor list, so it fires exactly once —
+   when the last predecessor delivers — regardless of which execution
+   layer each input arrived in. Upstream's condition only ever held for
+   layer-aligned arrivals (deviation note 8), making aggregation
+   structurally inert for any DAG with skip edges; that is a scheduler
+   artifact that would masquerade as agent-level input-ignoring (2.5).
+   This patch DOES alter collaboration semantics relative to the pinned
+   artifact — it implements per-node aggregation as the MacNet paper
+   describes it. It also revives aggregation for the `net` config
+   (previously inert; post-patch every net node merges all predecessors —
+   re-estimate cost before ever running it). Validated by offline executor
+   simulation + rand n=6 smoke. Layer-aligned topologies (chain, mlp,
+   srdd) are unaffected: for them build-time in-degree and the upstream
+   condition coincide.
+12. MacNet docstring-mangle patch (macnet_repo/graph.py optimize +
+   chatdev/waiting.py llm_api, marked `MAS-REPRO PATCH`): upstream rewrote
+   every `'''` in model replies to `\n'''` (legacy fence normalization),
+   de-indenting every Python docstring — the first rand smoke's WareHouse
+   main.py was a complete, logically sound Gomoku that failed to compile
+   (IndentationError) although the raw wire dump shows the agent emitted
+   correct indentation. The Codes parser (chatdev/codes.py:34) only
+   matches ``` fences, so the `'''` rewrite is dropped; the ```
+   normalization the parser needs is kept. Without this, outcome grading
+   and judge labels would blame agents for framework-corrupted artifacts.
+   Note the surviving upstream quirk: replies also get `main.py` ->
+   `\nmain.py` in the merge path (kept — removing it risks the filename
+   regex); mid-line "main.py" mentions in strings/comments can still be
+   reformatted by the framework.
 
-Pre-batch validation runs (MacNet chain n=3 / mlp n=4 / net n=3, DyLAN
-control) live in `runs/_smoke/` — outside the judge's globs, kept for
-reference.
+Pre-batch validation runs (MacNet chain n=3 / mlp n=4 / net n=3 / rand n=6,
+DyLAN control) live in `runs/_smoke/` — outside the judge's globs, kept for
+reference. The rand n=6 smoke (2026-06-12, post-patches: $0.25, 245s,
+36 calls all `finish=stop`, 5/5 aggregations succeeded first-try — incl.
+cross-layer merges impossible pre-patch — zero retries) validates deviation
+notes 9-11 end-to-end; the executor was also simulated offline to confirm
+aggregation fires at every multi-indeg node of the seed-7 graph.
 
 ## Full-experiment batch commands (run these yourself — not automated)
 
 Start the proxy first; judge afterwards. Costs are rough, observable live via
 `python3 -c "import json;print(sum(json.loads(l).get('cost') or 0 for l in open('reproduction/proxy/calls.jsonl')))"`.
 
+Proxy guardrails (2026-06-12): when a caller sends no token cap the proxy
+applies `OUT_TOKEN_CAP` (default 16384 — ~6x the largest reply ever logged,
+2,564 tokens; hits are auditable as `finish=length` in calls.jsonl), and it
+refuses calls outright once the session's summed cost passes `SPEND_CAP`
+(default $20 per proxy process — plenty for any one batch; the judge run
+needs `SPEND_CAP=100 conda run -n base python reproduction/proxy/server.py`).
+
 ```bash
 # 0. proxy (leave running)
 conda run -n base python reproduction/proxy/server.py
 
-# 1. MacNet chain on the 15 ChatDev tasks (~$2, ~1-2h)
-conda run -n macnet python reproduction/macnet/run_task.py --config chain --all --parallel 4
+# 1. MacNet rand (THE single-topology arm) on the 15 ChatDev tasks
+#    (~$6-10, ~1.5-2.5h: rand n=6 smoke cost $0.25/task; the full 10-node
+#    graph has ~1.6x the transmissions plus larger codebases.
+#    Post-truncation-patch (deviation note 9) there are no retry storms —
+#    still watch calls.jsonl after the first 2-3 runs.)
+conda run -n macnet python reproduction/macnet/run_task.py --config rand --all --parallel 3
 
-# 2. MacNet mlp, same tasks (~$15-35, ~2-4h — smoke telemetry: 81/101 calls
-#    were truncated aggregation merges retried up to Aggregate_retry_limit=10;
-#    lowering that to 3 in macnet_repo/config.yaml roughly halves the cost
-#    with identical fallback behavior. Check calls.jsonl after the first runs.)
-conda run -n macnet python reproduction/macnet/run_task.py --config mlp --all --parallel 3
-
-# 2b. OPTIONAL: MacNet net (~$6-12; structurally inert aggregation — see
-#     deviation note 8 — run only if the architecture-induced-discarding
-#     traces are wanted as a third arm)
+# 1b. OPTIONAL alternates, same prompts (not part of the single-topology
+#     plan): chain (pure handoffs), mlp (paper-faithful dense aggregation),
+#     net (inert aggregation, deviation note 8), srdd (native benchmark).
+# conda run -n macnet python reproduction/macnet/run_task.py --config chain --all --parallel 4
+# conda run -n macnet python reproduction/macnet/run_task.py --config mlp --all --parallel 3
 # conda run -n macnet python reproduction/macnet/run_task.py --config net --all --parallel 3
-
-# 3. MacNet on SRDD (~$1.5, ~1h)
-conda run -n macnet python reproduction/macnet/run_task.py --config srdd --all --parallel 4
+# conda run -n macnet python reproduction/macnet/run_task.py --config srdd --all --parallel 4
 
 # 4. DyLAN on the 15 screened MMLU items (~$1, ~30min)
 #    [DONE 2026-06-11, $0.18 — runs/dylan/ populated, 12/15 exact match]

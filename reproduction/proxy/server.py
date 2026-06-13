@@ -43,6 +43,15 @@ LOG = os.path.join(HERE, 'calls.jsonl')
 # Magentic orchestrator's progress-ledger JSON never reach console logs, and
 # losing them is what made the previous experiment's traces unjudgeable.
 RAW = os.environ.get('PROXY_DUMP', os.path.join(HERE, 'raw_calls.jsonl'))
+# Guardrails (2026-06-12): default per-call output cap when the caller sends
+# none (all-time observed max reply is 2,564 tokens — 16k is ~6x headroom,
+# bounds degenerate rambling; cap hits are visible as finish=length in
+# calls.jsonl), and a cumulative per-proxy-session spend kill-switch
+# (refuses calls past the budget; raise via SPEND_CAP=100 for judge runs).
+OUT_TOKEN_CAP = int(os.environ.get('OUT_TOKEN_CAP', '16384'))
+SPEND_CAP = float(os.environ.get('SPEND_CAP', '20'))
+_spent = 0.0
+_spent_lock = threading.Lock()
 _log_lock = threading.Lock()
 _raw_lock = threading.Lock()
 
@@ -128,11 +137,15 @@ def to_input_items(messages):
 
 def to_responses_body(body):
     items, n_images = to_input_items(body.get('messages', []))
-    out = dict(model=TARGET_MODEL, store=False, input=items)
-    for src, dst in (('temperature', 'temperature'), ('top_p', 'top_p'),
-                     ('max_tokens', 'max_output_tokens'),
-                     ('max_completion_tokens', 'max_output_tokens'),
-                     ('parallel_tool_calls', 'parallel_tool_calls')):
+    # store=False removed 2026-06-12: Perplexity began rejecting the field
+    # ("unknown field store", upstream 400 on every call)
+    out = dict(model=TARGET_MODEL, input=items)
+    # temperature/top_p/parallel_tool_calls dropped 2026-06-12: Perplexity's
+    # Responses endpoint went schema-strict and 400s on them (probed
+    # individually; max_output_tokens still accepted). Sampling params are
+    # silently discarded — callers' temperature schedules are inert.
+    for src, dst in (('max_tokens', 'max_output_tokens'),
+                     ('max_completion_tokens', 'max_output_tokens')):
         if body.get(src) is not None:
             out[dst] = body[src]
     # ChatDev computes max_tokens = 4096 - tiktoken(prompt) for "gpt-4o"; once
@@ -140,6 +153,8 @@ def to_responses_body(body):
     # every retry. Drop the param instead (upstream default applies).
     if out.get('max_output_tokens') is not None and out['max_output_tokens'] < 16:
         del out['max_output_tokens']
+    if out.get('max_output_tokens') is None:
+        out['max_output_tokens'] = OUT_TOKEN_CAP
     tools = []
     for t in body.get('tools') or []:
         if t.get('type') == 'function':
@@ -259,7 +274,17 @@ def models():
 @app.post('/v1/chat/completions')
 @app.post('/chat/completions')
 async def chat(req: Request, tag: str = '', engine: str = ''):
+    global _spent
     body = await req.json()
+    with _spent_lock:
+        if _spent >= SPEND_CAP:
+            log_call(dict(ts=time.time(), tag=tag, error='spend_cap',
+                          detail=f'session spend ${_spent:.2f} >= cap ${SPEND_CAP:.2f}'))
+            return JSONResponse(status_code=402, content=dict(error=dict(
+                message=f'proxy spend cap reached: ${_spent:.2f} of '
+                        f'${SPEND_CAP:.2f} this session. Restart with '
+                        f'SPEND_CAP=<n> to raise.',
+                type='spend_cap', code=402)))
     rbody, n_images = to_responses_body(body)
     t0 = time.time()
     status, j = call_upstream(rbody)
@@ -281,6 +306,9 @@ async def chat(req: Request, tag: str = '', engine: str = ''):
             response_format=body.get('response_format'),
             reply=resp['choices'][0]['message'])) + '\n')
     cost = ((j.get('usage') or {}).get('cost') or {}).get('total_cost')
+    if cost:
+        with _spent_lock:
+            _spent += cost
     log_call(dict(ts=t0, tag=tag, dur=round(dur, 2), model=body.get('model'),
                   prompt_tokens=resp['usage']['prompt_tokens'],
                   completion_tokens=resp['usage']['completion_tokens'],
