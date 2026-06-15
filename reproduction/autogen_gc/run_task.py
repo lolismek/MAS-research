@@ -104,7 +104,7 @@ def run_one(task):
     expected = task['expected_answer']
     part = participation(tail)
     result = dict(uuid=task['uuid'], run=n, rc=rc, seconds=round(dur, 1),
-                  level=task.get('level'),
+                  level=task.get('level'), category=task.get('category'),
                   final_answer=final, expected_answer=expected,
                   exact_match=final is not None and norm(final) == norm(expected),
                   original_success=task.get('success'),

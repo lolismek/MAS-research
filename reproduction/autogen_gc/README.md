@@ -108,22 +108,42 @@ conda run -n autogen_gc python reproduction/autogen_gc/run_task.py --all --paral
 
 ## Task set (`autogen_gc_tasks.json`)
 
-30 GAIA tasks, **8 L1 / 14 L2 / 8 L3** — weighted toward the hard end.
-- **12 reused** (the attachment-free tasks already run on Magentic-One, for
-  apples-to-apples comparison) + **18 added** harder L2/L3 from the 165-task pool.
-- **Doability filter** (this system is text + web + code, no vision): excludes
-  tasks needing a modality the tools lack — local audio/video/pdf/image
-  attachments, and the L3 YouTube-transcription task `00d579ea`. Some remaining
-  hard tasks may still be unsolvable by the toolset; that is expected (the study
-  cares about coordination behavior on hard tasks, not only the pass rate).
+**28 GAIA tasks, 8 L1 / 15 L2 / 5 L3** — hard by construction: **26 of 28 were
+*failed* by the original Magentic-One run.** Each task carries a `category` field
+so results can be sliced by the coordination dynamics it actually exercises:
+
+| `category` | n | what it forces | why it's in the set |
+|---|---|---|---|
+| `web_compute` | 14 | a web fact **and** a computation on it → WebResearcher→Analyst→Verifier | the inter-agent core: the only tasks that force info to cross the partition |
+| `web_only` | 12 | a web fact the Verifier must judge → WebResearcher→Verifier | thinner 2-agent ToM surface (where the `023e9d44` groupthink lived) |
+| `compute_only` | 2 | computation alone → Analyst→Verifier | deliberate **single-agent control** — inter-agent failures should be ~absent here |
+
+Curation rationale (this system is **text + web + code, no vision**):
+- **Dropped** tasks the toolset literally cannot do — anything gated on reading an
+  image, a video, or audio (e.g. `0e9e85b8` text-in-image, `0512426f` 360° video,
+  `0bdb7c40` identify-astronaut-in-photo) — plus local audio/video/pdf/image
+  attachments. A 0 on those would indict the tools, not the coordination.
+- **Demoted** pure-compute tasks to a 2-task control: they're effectively
+  single-agent (only the Analyst acts) and don't exercise inter-agent dynamics.
+- **Topped up** `web_compute` with 8 hard `success=False` tasks from the 165-pool
+  (e.g. `f0f46385` ASEAN furthest capitals = Wikipedia coords *then* pairwise
+  distance; `a26649c6` chinstrap penguins = two web sources *then* a per-pair
+  difference) — the configuration most likely to surface real handoff behavior.
+
+A few `web_compute`/`web_only` tasks lean on JS-heavy or paywalled sites
+(ScienceDirect `0b260a57`, data via `data.census.gov`, some PDFs); `fetch_url` is a
+plain GET, so those are tool-risky but not impossible (Perplexity search often
+surfaces the fact). The study cares about coordination behavior on hard tasks, not
+the pass rate.
 
 ## Scoring
 
 Identical to the Magentic harness: the last `FINAL ANSWER: <x>` line in
 `console_log.txt` is captured and compared to the gold answer under `norm()`
 (lowercase, strip whitespace, drop `,$%`). `result.json` schema:
-`{uuid, run, rc, seconds, level, final_answer, expected_answer, exact_match,
-original_success, speaker_turns, tool_calls, n_agents_spoke, single_agent}`.
+`{uuid, run, rc, seconds, level, category, final_answer, expected_answer,
+exact_match, original_success, speaker_turns, tool_calls, n_agents_spoke,
+single_agent}`.
 Strict exact-match understates substantive correctness (same normalizer caveats as
 the Magentic run) — read traces, not just the score. The last four fields are the
 participation instrumentation: `speaker_turns`/`tool_calls` are per-agent dicts,
