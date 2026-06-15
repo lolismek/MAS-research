@@ -44,39 +44,75 @@ The team members and their roles:
 Conversation so far:
 {history}
 
-Select the SINGLE next member from {participants} to act next. Guidance:
-- WebResearcher: find facts on the web (searches + reading pages).
-- Analyst: compute, count, parse, or do date/number reasoning once the needed
-  facts are available.
-- Verifier: check the proposed answer against the evidence and finalize.
-Prefer WebResearcher early (gather facts), Analyst for any computation, and
-Verifier to confirm and finalize. Return only the member name."""
+Select the SINGLE next member from {participants} to act next.
+
+The members have STRICTLY PARTITIONED capabilities — no member can do another's
+job, so the answer almost always requires more than one of them:
+- WebResearcher: the ONLY member who can access the web (search + read pages).
+- Analyst: the ONLY member who can run code (compute, count, parse, date/number
+  reasoning). If the question needs ANY non-trivial calculation or counting,
+  the Analyst MUST take a turn — no one else may compute.
+- Verifier: has NO tools. It reviews the proposed answer against the evidence and
+  is the only member that may finalize.
+
+Routing rules:
+- Early on, pick WebResearcher to gather facts.
+- If a computation, count, or date/number step is needed, pick Analyst — do not
+  let another member do the math.
+- After an answer has been proposed, route to Verifier to review it.
+- The Verifier must review at least once before any answer is finalized. If the
+  Verifier raises an issue or asks for something, route to the member who can
+  address it (WebResearcher for facts, Analyst for computation) BEFORE returning
+  to the Verifier to finalize.
+
+Return only the member name."""
 
 RESEARCHER_SYS = (
-    "You are WebResearcher on a team answering one question. Use web_search and "
-    "fetch_url to gather the facts the team needs. Investigate thoroughly: run "
-    "multiple searches and read the most promising pages before concluding. When "
-    "done, post ONE concise message to the team stating exactly what you found and "
-    "citing the source URLs. Never guess — if a fact cannot be found, say so "
-    "plainly. Do not write 'FINAL ANSWER:'; leave finalization to the Verifier."
+    "You are WebResearcher on a team answering one question. You are the ONLY "
+    "teammate who can access the web — use web_search and fetch_url to gather the "
+    "facts the team needs. Investigate thoroughly: run multiple searches and read "
+    "the most promising pages before concluding. When done, post ONE concise "
+    "message to the team stating exactly what you found and citing the source URLs. "
+    "Your teammates CANNOT see your searches or the pages you read — they see only "
+    "the message you post, so make it self-contained. Never guess — if a fact "
+    "cannot be found, say so plainly. You cannot run code: if a computation is "
+    "needed, hand the raw facts to the Analyst. Do not write 'FINAL ANSWER:'; leave "
+    "finalization to the Verifier."
 )
 ANALYST_SYS = (
-    "You are Analyst on a team answering one question. Use run_python for any "
-    "computation, counting, parsing, or date arithmetic — do not do nontrivial "
-    "math in your head. Given the facts gathered by the team, compute the required "
-    "result and post ONE message stating the result and the key numbers/steps. Do "
-    "not write 'FINAL ANSWER:'; leave finalization to the Verifier."
+    "You are Analyst on a team answering one question. You are the ONLY teammate who "
+    "can run code — use run_python for any computation, counting, parsing, or date "
+    "arithmetic, and never do nontrivial math in your head. Your teammates cannot "
+    "see your code or its output, only the message you post. Given the facts "
+    "gathered by the team, compute the required result and post ONE message stating "
+    "the result and the key numbers/steps. You cannot access the web: if a fact is "
+    "missing, say what you need from the WebResearcher. Do not write 'FINAL "
+    "ANSWER:'; leave finalization to the Verifier."
 )
+# Two-phase, tool-less Verifier: it has NO tools, so it cannot silently re-do the
+# others' work — it must rely on their published digests and delegate gaps back to
+# them. It separates REVIEW (an explicit critique turn) from FINALIZE (emitting the
+# sentinel on a later turn), which forces at least one genuine verification turn and
+# is where ignored-input (2.5) / accepted-distortion (2.4) become observable.
 VERIFIER_SYS = (
-    "You are Verifier, the team's checker and finalizer. Review the team's findings "
-    "and reasoning against the evidence. If anything is unverified, inconsistent, or "
-    "missing, say what is wrong and let the relevant teammate (WebResearcher or "
-    "Analyst) address it on the next turn — you may also use web_search/fetch_url to "
-    "double-check facts yourself. Only when you are confident the answer is correct "
-    "and fully supported, output the final answer on its own line in EXACTLY this "
-    "format:\n\nFINAL ANSWER: <answer>\n\nMatch the question's required answer format "
-    "precisely (a number, a name, or a short phrase; no extra words). Do not write "
-    "'FINAL ANSWER:' until you are confident."
+    "You are Verifier, the team's checker and finalizer. You have NO tools: you "
+    "cannot search the web or run code, so you must reason over what your teammates "
+    "have reported — and you only see the messages they posted, not the work behind "
+    "them. Work in two phases.\n\n"
+    "PHASE 1 — REVIEW (do this first, and do NOT finalize yet): scrutinize the "
+    "proposed answer against the evidence the team posted. State explicitly what is "
+    "supported, and call out anything unverified, internally inconsistent, missing, "
+    "or that looks like a teammate over-claimed beyond what they actually showed. If "
+    "anything is wrong or unsupported, say precisely what you need and from whom "
+    "(WebResearcher for facts, Analyst for computation), then STOP so they can "
+    "address it. Do NOT write 'FINAL ANSWER:' on a review turn.\n\n"
+    "PHASE 2 — FINALIZE (only on a later turn, once the team has resolved your "
+    "concerns and you are confident the answer is correct and fully supported): "
+    "output the final answer on its own line in EXACTLY this format:\n\n"
+    "FINAL ANSWER: <answer>\n\n"
+    "Match the question's required answer format precisely (a number, a name, or a "
+    "short phrase; no extra words). Never finalize on the same turn you first review "
+    "a freshly proposed answer."
 )
 
 
@@ -110,10 +146,12 @@ async def main() -> None:
         description="Computes, counts, parses, and does quantitative reasoning with Python.",
         system_message=ANALYST_SYS,
     )
+    # Verifier has NO tools (capability partition): it cannot search or compute, so
+    # it must rely on the others' published digests and delegate gaps back to them.
     verifier = AssistantAgent(
-        "Verifier", model_client=mc, tools=[web_search, fetch_url],
-        max_tool_iterations=K, reflect_on_tool_use=True,
-        description="Checks the proposed answer against evidence and finalizes it.",
+        "Verifier", model_client=mc,
+        description="Reviews the proposed answer against the evidence and finalizes "
+                    "it. Has no tools; relies on the team's reports.",
         system_message=VERIFIER_SYS,
     )
 

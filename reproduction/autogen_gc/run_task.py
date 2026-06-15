@@ -41,6 +41,26 @@ def norm(s):
     return re.sub(r'\s+', ' ', re.sub(r'[,$%]', '', (s or '').strip().lower()))
 
 
+def participation(text):
+    """Parse the AutoGen Console log into per-agent participation stats so we can
+    tell a genuine multi-agent run from one that collapsed to a single speaker.
+
+    Console headers look like ``---------- <EventType> (<name>) ----------``:
+    ``TextMessage`` = one PUBLISHED turn; ``ToolCallRequestEvent`` = one PRIVATE
+    tool call inside that agent's hidden session.
+    """
+    hdr = re.findall(r'^-{3,}\s*(\w+)\s*\((\w+)\)\s*-{3,}', text, re.M)
+    speaker_turns, tool_calls = {}, {}
+    for ev, name in hdr:
+        if ev == 'TextMessage' and name != 'user':
+            speaker_turns[name] = speaker_turns.get(name, 0) + 1
+        elif ev == 'ToolCallRequestEvent':
+            tool_calls[name] = tool_calls.get(name, 0) + 1
+    n_spoke = len(speaker_turns)
+    return dict(speaker_turns=speaker_turns, tool_calls=tool_calls,
+                n_agents_spoke=n_spoke, single_agent=n_spoke <= 1)
+
+
 def run_one(task):
     uid8 = task['uuid'][:8]
     n = 1
@@ -82,15 +102,18 @@ def run_one(task):
     m = re.findall(r'FINAL ANSWER:\s*(.+)', tail)
     final = m[-1].strip() if m else None
     expected = task['expected_answer']
+    part = participation(tail)
     result = dict(uuid=task['uuid'], run=n, rc=rc, seconds=round(dur, 1),
                   level=task.get('level'),
                   final_answer=final, expected_answer=expected,
                   exact_match=final is not None and norm(final) == norm(expected),
-                  original_success=task.get('success'))
+                  original_success=task.get('success'),
+                  **part)
     with open(os.path.join(rundir, 'result.json'), 'w') as f:
         json.dump(result, f, indent=1)
     print(f'[{uid8}] rc={rc} {dur:.0f}s final={final!r} expected={expected!r} '
-          f'match={result["exact_match"]}', flush=True)
+          f'match={result["exact_match"]} spoke={part["n_agents_spoke"]}/3 '
+          f'turns={part["speaker_turns"]} tools={part["tool_calls"]}', flush=True)
     return result
 
 

@@ -23,11 +23,31 @@ but not in Magentic-One, that supports the topology hypothesis.
 
 ```
 SelectorGroupChat                ← an LLM selector routes between 3 peers
- ├─ WebResearcher  tools=[web_search, fetch_url]
- ├─ Analyst        tools=[run_python]
- └─ Verifier       tools=[web_search, fetch_url]   ← emits "FINAL ANSWER:"
+ ├─ WebResearcher  tools=[web_search, fetch_url]   ← ONLY agent with web access
+ ├─ Analyst        tools=[run_python]              ← ONLY agent that can run code
+ └─ Verifier       tools=[]                        ← no tools; reviews + emits "FINAL ANSWER:"
 termination = TextMention("FINAL ANSWER:") | MaxMessage(N)
 ```
+
+**Capability partition (makes it genuinely multi-agent).** Each capability lives
+in exactly one agent: only WebResearcher can reach the web, only the Analyst can
+run code. So any task needing a fact *and* a computation **cannot** be solved by a
+single agent — a handoff is structural, not hoped-for. The Verifier has **no
+tools**: it cannot silently re-do the others' work, so it must rely on their
+published digests and delegate gaps back to them. That reliance is exactly where
+ignored-input (2.5) and accepted-distortion (2.4) become observable.
+
+**Two-phase Verifier.** Its system prompt separates REVIEW (an explicit critique
+turn — what's supported, what's unverified/inconsistent/missing) from FINALIZE
+(emitting `FINAL ANSWER:` only on a later turn, once concerns are resolved). NOTE:
+this is prompt-level guidance, not a hard guarantee — the LLM selector and agent
+can still finalize on a first Verifier turn. A structural guarantee (review-only
+first appearance) would need `GraphFlow`; not yet implemented.
+
+**Participation is instrumented.** `run_task.py` parses the Console log into
+per-agent `speaker_turns` and `tool_calls`, plus `n_agents_spoke` and a
+`single_agent` flag, and writes them into `result.json` — so a run that collapsed
+to one speaker is detectable, not invisible.
 
 Each agent is an `AssistantAgent(max_tool_iterations=K)`. Within one turn it runs
 an internal ReAct loop (model → tool → model → … up to K) whose tool calls/results
@@ -103,8 +123,12 @@ Identical to the Magentic harness: the last `FINAL ANSWER: <x>` line in
 `console_log.txt` is captured and compared to the gold answer under `norm()`
 (lowercase, strip whitespace, drop `,$%`). `result.json` schema:
 `{uuid, run, rc, seconds, level, final_answer, expected_answer, exact_match,
-original_success}`. Strict exact-match understates substantive correctness (same
-normalizer caveats as the Magentic run) — read traces, not just the score.
+original_success, speaker_turns, tool_calls, n_agents_spoke, single_agent}`.
+Strict exact-match understates substantive correctness (same normalizer caveats as
+the Magentic run) — read traces, not just the score. The last four fields are the
+participation instrumentation: `speaker_turns`/`tool_calls` are per-agent dicts,
+`n_agents_spoke` counts distinct non-user speakers, and `single_agent` flags a run
+that collapsed to one speaker (a degenerate, not-really-multi-agent run).
 
 ## Caveats for comparison
 - **Framework version delta** vs. Magentic-One (0.7.5 vs 0.4.8): acceptable —
