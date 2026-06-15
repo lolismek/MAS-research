@@ -14,20 +14,31 @@ browser or the _debing patch — web access is function tools (tools.py).
 
 Env: conda env autogen_gc (autogen-agentchat/core/ext >= 0.6.2).
 
+Topology variant is selected with --variant {selector3 (default), split4}; results
+are namespaced by variant under runs/autogen_gc/<variant>/<uid8>/run_*.
+
 Usage:
   conda run -n autogen_gc python reproduction/autogen_gc/run_task.py 0383a3ee [..]
   conda run -n autogen_gc python reproduction/autogen_gc/run_task.py --all
   conda run -n autogen_gc python reproduction/autogen_gc/run_task.py --all --parallel 4
+  conda run -n autogen_gc python reproduction/autogen_gc/run_task.py --all --variant split4 --parallel 4
 """
-import json, os, re, shutil, subprocess, sys, time
+import functools, json, os, re, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 TASKS = json.load(open(os.path.join(ROOT, 'task_selection', 'autogen_gc_tasks.json')))
 RUNS = os.path.join(ROOT, 'reproduction', 'runs', 'autogen_gc')
-SCENARIO = os.path.join(HERE, 'scenario_template.py')
 PROXY = os.environ.get('PROXY_URL', 'http://127.0.0.1:8744/v1')
 TIMEOUT = int(os.environ.get('TASK_TIMEOUT', '1800'))
+
+# Topology variants share the ENTIRE harness (tools, proxy, scoring, task set) and
+# differ only in the scenario file (team construction), so the comparison isolates
+# topology. Results are namespaced by variant: runs/autogen_gc/<variant>/<uid8>/.
+VARIANTS = {
+    'selector3': os.path.join(HERE, 'scenario_template.py'),  # 3-agent (WebResearcher/Analyst/Verifier)
+    'split4': os.path.join(HERE, 'scenario_split.py'),        # 4-agent (… + Critic/Finalizer review gate)
+}
 
 
 def make_config(tag):
@@ -61,12 +72,13 @@ def participation(text):
                 n_agents_spoke=n_spoke, single_agent=n_spoke <= 1)
 
 
-def run_one(task):
+def run_one(task, variant='selector3'):
     uid8 = task['uuid'][:8]
+    runs_v = os.path.join(RUNS, variant)
     n = 1
-    while os.path.exists(os.path.join(RUNS, uid8, f'run_{n}')):
+    while os.path.exists(os.path.join(runs_v, uid8, f'run_{n}')):
         n += 1
-    rundir = os.path.join(RUNS, uid8, f'run_{n}')
+    rundir = os.path.join(runs_v, uid8, f'run_{n}')
     os.makedirs(rundir)
 
     # prompt.txt: prefer the original extracted prompt (exact comparability for the
@@ -79,11 +91,11 @@ def run_one(task):
             f.write(task['question'])
     with open(os.path.join(rundir, 'expected_answer.txt'), 'w') as f:
         f.write(str(task['expected_answer']))
-    shutil.copy(SCENARIO, os.path.join(rundir, 'scenario.py'))
+    shutil.copy(VARIANTS[variant], os.path.join(rundir, 'scenario.py'))
     with open(os.path.join(rundir, 'config.yaml'), 'w') as f:
-        json.dump(make_config(f'agc_{uid8}_run{n}'), f)  # JSON is valid YAML
+        json.dump(make_config(f'agc_{variant}_{uid8}_run{n}'), f)  # JSON is valid YAML
 
-    print(f'[{uid8}] run_{n} starting (timeout {TIMEOUT}s)', flush=True)
+    print(f'[{variant}/{uid8}] run_{n} starting (timeout {TIMEOUT}s)', flush=True)
     t0 = time.time()
     # Put reproduction/autogen_gc on PYTHONPATH so the copied scenario.py can
     # `import tools` (web_search / fetch_url / run_python).
@@ -103,7 +115,7 @@ def run_one(task):
     final = m[-1].strip() if m else None
     expected = task['expected_answer']
     part = participation(tail)
-    result = dict(uuid=task['uuid'], run=n, rc=rc, seconds=round(dur, 1),
+    result = dict(uuid=task['uuid'], variant=variant, run=n, rc=rc, seconds=round(dur, 1),
                   level=task.get('level'), category=task.get('category'),
                   final_answer=final, expected_answer=expected,
                   exact_match=final is not None and norm(final) == norm(expected),
@@ -111,8 +123,8 @@ def run_one(task):
                   **part)
     with open(os.path.join(rundir, 'result.json'), 'w') as f:
         json.dump(result, f, indent=1)
-    print(f'[{uid8}] rc={rc} {dur:.0f}s final={final!r} expected={expected!r} '
-          f'match={result["exact_match"]} spoke={part["n_agents_spoke"]}/3 '
+    print(f'[{variant}/{uid8}] rc={rc} {dur:.0f}s final={final!r} expected={expected!r} '
+          f'match={result["exact_match"]} spoke={part["n_agents_spoke"]} '
           f'turns={part["speaker_turns"]} tools={part["tool_calls"]}', flush=True)
     return result
 
@@ -126,16 +138,24 @@ def main():
         i = args.index('--parallel')
         par = int(args[i + 1])
         args = args[:i] + args[i + 2:]
+    variant = 'selector3'
+    if '--variant' in args:
+        i = args.index('--variant')
+        variant = args[i + 1]
+        args = args[:i] + args[i + 2:]
+    if variant not in VARIANTS:
+        sys.exit(f'unknown --variant {variant!r}; choose from {list(VARIANTS)}')
     sel = TASKS if args == ['--all'] else [
         t for t in TASKS if any(t['uuid'].startswith(a) for a in args)]
     if args != ['--all'] and len(sel) != len(args):
         sys.exit(f'unmatched uuid prefixes; matched {[t["uuid"][:8] for t in sel]}')
+    run = functools.partial(run_one, variant=variant)
     if par == 1:
-        results = [run_one(t) for t in sel]
+        results = [run(t) for t in sel]
     else:
         from concurrent.futures import ThreadPoolExecutor  # run_one is subprocess-bound
         with ThreadPoolExecutor(max_workers=par) as ex:
-            results = list(ex.map(run_one, sel))
+            results = list(ex.map(run, sel))
     print(json.dumps(results, indent=1))
 
 
