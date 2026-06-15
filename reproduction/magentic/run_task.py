@@ -63,10 +63,19 @@ def run_one(task):
 
     print(f'[{uid8}] run_{n} starting (timeout {TIMEOUT}s)', flush=True)
     t0 = time.time()
+    # Put the de-Bing hook dir on the subprocess PYTHONPATH; its sitecustomize.py
+    # installs the WebSurfer search-backend patch at interpreter startup, before
+    # the native scenario.py builds MultimodalWebSurfer (no site-packages edit).
+    # See reproduction/magentic/_debing/. Override the search engine via the
+    # WEBSURFER_SEARCH_URL / WEBSURFER_START_PAGE env vars (defaults: DuckDuckGo).
+    env = dict(os.environ)
+    debing = os.path.join(HERE, '_debing')
+    env['PYTHONPATH'] = debing + (os.pathsep + env['PYTHONPATH']
+                                  if env.get('PYTHONPATH') else '')
     with open(os.path.join(rundir, 'console_log.txt'), 'w') as log:
         try:
             rc = subprocess.run([sys.executable, 'scenario.py'], cwd=rundir,
-                                stdout=log, stderr=subprocess.STDOUT,
+                                env=env, stdout=log, stderr=subprocess.STDOUT,
                                 timeout=TIMEOUT).returncode
         except subprocess.TimeoutExpired:
             rc = 'timeout'

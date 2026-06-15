@@ -43,15 +43,6 @@ LOG = os.path.join(HERE, 'calls.jsonl')
 # Magentic orchestrator's progress-ledger JSON never reach console logs, and
 # losing them is what made the previous experiment's traces unjudgeable.
 RAW = os.environ.get('PROXY_DUMP', os.path.join(HERE, 'raw_calls.jsonl'))
-# Guardrails (2026-06-12): default per-call output cap when the caller sends
-# none (all-time observed max reply is 2,564 tokens — 16k is ~6x headroom,
-# bounds degenerate rambling; cap hits are visible as finish=length in
-# calls.jsonl), and a cumulative per-proxy-session spend kill-switch
-# (refuses calls past the budget; raise via SPEND_CAP=100 for judge runs).
-OUT_TOKEN_CAP = int(os.environ.get('OUT_TOKEN_CAP', '16384'))
-SPEND_CAP = float(os.environ.get('SPEND_CAP', '20'))
-_spent = 0.0
-_spent_lock = threading.Lock()
 _log_lock = threading.Lock()
 _raw_lock = threading.Lock()
 
@@ -133,15 +124,13 @@ def to_input_items(messages):
 
 def to_responses_body(body):
     items, n_images = to_input_items(body.get('messages', []))
-    # store=False removed 2026-06-12: Perplexity began rejecting the field
-    # ("unknown field store", upstream 400 on every call)
+    # NB: do NOT send `store` — Perplexity's /responses rejects it as an unknown
+    # field ("invalid request body: json: unknown field \"store\"").
     out = dict(model=TARGET_MODEL, input=items)
-    # temperature/top_p/parallel_tool_calls dropped 2026-06-12: Perplexity's
-    # Responses endpoint went schema-strict and 400s on them (probed
-    # individually; max_output_tokens still accepted). Sampling params are
-    # silently discarded — callers' temperature schedules are inert.
-    for src, dst in (('max_tokens', 'max_output_tokens'),
-                     ('max_completion_tokens', 'max_output_tokens')):
+    for src, dst in (('temperature', 'temperature'), ('top_p', 'top_p'),
+                     ('max_tokens', 'max_output_tokens'),
+                     ('max_completion_tokens', 'max_output_tokens'),
+                     ('parallel_tool_calls', 'parallel_tool_calls')):
         if body.get(src) is not None:
             out[dst] = body[src]
     # ChatDev computes max_tokens = 4096 - tiktoken(prompt) for "gpt-4o"; once
@@ -149,8 +138,6 @@ def to_responses_body(body):
     # every retry. Drop the param instead (upstream default applies).
     if out.get('max_output_tokens') is not None and out['max_output_tokens'] < 16:
         del out['max_output_tokens']
-    if out.get('max_output_tokens') is None:
-        out['max_output_tokens'] = OUT_TOKEN_CAP
     tools = []
     for t in body.get('tools') or []:
         if t.get('type') == 'function':
@@ -167,21 +154,14 @@ def to_responses_body(body):
                           or dict(type='object', properties={})))
     if tools:
         out['tools'] = tools
-    tc = body.get('tool_choice')
-    if isinstance(tc, str) and tc in ('auto', 'none', 'required'):
-        out['tool_choice'] = tc
-    elif isinstance(tc, dict) and tc.get('type') == 'function':
-        out['tool_choice'] = dict(type='function',
-                                  name=tc.get('function', {}).get('name'))
-    rf = body.get('response_format')
-    if isinstance(rf, dict) and rf.get('type') in ('json_object', 'json_schema'):
-        fmt = dict(type=rf['type'])
-        if rf.get('type') == 'json_schema':
-            js = rf.get('json_schema', {})
-            fmt.update(name=js.get('name', 'response'), schema=js.get('schema', {}))
-            if js.get('strict') is not None:
-                fmt['strict'] = js['strict']
-        out['text'] = dict(format=fmt)
+    # NB: do NOT send `tool_choice` — Perplexity's /responses rejects it
+    # ("unknown field tool_choice"); the model picks tools on its own (== auto,
+    # which is what WebSurfer/the orchestrator request anyway).
+    # NB: do NOT translate response_format -> text.format. Perplexity's
+    # /responses rejects the `format` field ("invalid request body: json:
+    # unknown field \"format\""). Callers that need JSON (e.g. the Magentic-One
+    # orchestrator, json_output=True) enforce it via their prompt, so dropping
+    # the structured-output hint is safe for this reproduction.
     return out, n_images
 
 
@@ -224,9 +204,23 @@ def from_responses_body(j, req_model, max_out=None):
 
 
 # --------------------------------------------------------------- upstream ----
+def _unknown_field(text):
+    """Name of the field Perplexity rejected, from a 400 body, else None."""
+    import re
+    try:
+        p = json.loads(text).get('error', {}).get('param')
+        if p:
+            return p
+    except Exception:
+        pass
+    m = re.search(r'unknown field \\?"([^"\\]+)\\?"', text)
+    return m.group(1) if m else None
+
+
 def call_upstream(rbody):
+    rbody = dict(rbody)  # local copy; we may strip drifted fields below
     last = None
-    for attempt in range(5):
+    for attempt in range(8):
         try:
             r = requests.post(f'{UPSTREAM}/responses', json=rbody, timeout=600,
                               headers={'Authorization': f'Bearer {KEY}'})
@@ -237,6 +231,14 @@ def call_upstream(rbody):
         if r.status_code == 200:
             return 200, r.json()
         last = (r.status_code, r.text[:2000])
+        # Perplexity's /responses has tightened over time and 400s on fields the
+        # OpenAI schema permits (store, tool_choice, ...). Auto-heal: strip the
+        # named top-level unknown field and retry instead of failing the call.
+        if r.status_code == 400:
+            fld = _unknown_field(r.text)
+            if fld and fld in rbody:
+                rbody.pop(fld, None)
+                continue
         if r.status_code in (429, 500, 502, 503, 504):
             time.sleep(2 ** (attempt + 1))
             continue
@@ -263,18 +265,8 @@ def models():
 @app.post('/t/{tag}/chat/completions')
 @app.post('/v1/chat/completions')
 @app.post('/chat/completions')
-async def chat(req: Request, tag: str = '', engine: str = ''):
-    global _spent
+async def chat(req: Request, tag: str = ''):
     body = await req.json()
-    with _spent_lock:
-        if _spent >= SPEND_CAP:
-            log_call(dict(ts=time.time(), tag=tag, error='spend_cap',
-                          detail=f'session spend ${_spent:.2f} >= cap ${SPEND_CAP:.2f}'))
-            return JSONResponse(status_code=402, content=dict(error=dict(
-                message=f'proxy spend cap reached: ${_spent:.2f} of '
-                        f'${SPEND_CAP:.2f} this session. Restart with '
-                        f'SPEND_CAP=<n> to raise.',
-                type='spend_cap', code=402)))
     rbody, n_images = to_responses_body(body)
     t0 = time.time()
     status, j = call_upstream(rbody)
@@ -296,9 +288,6 @@ async def chat(req: Request, tag: str = '', engine: str = ''):
             response_format=body.get('response_format'),
             reply=resp['choices'][0]['message'])) + '\n')
     cost = ((j.get('usage') or {}).get('cost') or {}).get('total_cost')
-    if cost:
-        with _spent_lock:
-            _spent += cost
     log_call(dict(ts=t0, tag=tag, dur=round(dur, 2), model=body.get('model'),
                   prompt_tokens=resp['usage']['prompt_tokens'],
                   completion_tokens=resp['usage']['completion_tokens'],
