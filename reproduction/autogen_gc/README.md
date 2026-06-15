@@ -64,12 +64,36 @@ Playwright/Bing/CAPTCHA surface entirely. `web_search` reuses the exact Perplexi
 `/search` call from the Magentic de-Bing backend. The only thing lost vs. the
 browser is page *vision* (web is text-only here), handled by the task filter.
 
+## Topology variants
+
+Both variants share the **entire** harness (tools, proxy, scoring, task set) and
+differ only in the scenario file, so a comparison isolates topology — no branch, no
+forked driver. Select with `--variant`; default is `selector3`.
+
+- **`selector3`** (`scenario_template.py`) — the original 3 agents: WebResearcher /
+  Analyst / Verifier. The Verifier both reviews and finalizes.
+- **`split4`** (`scenario_split.py`) — splits the Verifier into a **Critic** (reviews,
+  delegates gaps, *forbidden to finalize*) and a **Finalizer** (the only agent that
+  may emit `FINAL ANSWER:`). A custom termination, `CriticThenFinalize`, ends the run
+  **only** when a *Finalizer* sentinel follows a *Critic* review — a premature
+  sentinel (from anyone, or before any Critic turn) does not stop the chat.
+
+Why split4 exists: the 28-trace analysis (`FAILURE_ANALYSIS.md`) found the single
+Verifier finalized on its **first turn in 20/28 traces**, skipping the two-phase
+review entirely — the system message was delivered intact and the mechanism worked
+in 7/28, so it was an *unenforced prompt*, not a bug. `split4` makes the review
+**structural**: at least one genuine Critic review provably precedes every
+finalization (validated — the Critic cannot terminate; only the Finalizer can, and
+only post-review). Note this fixes the *process*, not the lossy digest — the MAST 2.4
+distortion cases (info dropped at the publish bottleneck) need a separate fix.
+
 ## Files
 
 | path | role |
 |---|---|
 | `tools.py` | `web_search` (Perplexity `/search`), `fetch_url` (GET + BeautifulSoup text), `run_python` (subprocess) |
-| `scenario_template.py` | the 3-agent SelectorGroupChat for one task; reads `config.yaml` + `prompt.txt` |
+| `scenario_template.py` | variant **selector3**: the 3-agent SelectorGroupChat for one task; reads `config.yaml` + `prompt.txt` |
+| `scenario_split.py` | variant **split4**: 4-agent (Critic + Finalizer split) with a structural review gate (see Topology variants) |
 | `run_task.py` | driver: builds run dirs, tags proxy calls, parses `FINAL ANSWER:`, writes `result.json` |
 | `../../task_selection/autogen_gc_tasks.json` | the 30-task set (see below) |
 
@@ -89,11 +113,17 @@ baselines.
 # 1. proxy must be up (chat.completions -> Perplexity /responses), port 8744
 conda run -n base python reproduction/proxy/server.py &
 
-# 2. run one / several / all tasks
+# 2. run one / several / all tasks (default variant = selector3)
 conda run -n autogen_gc python reproduction/autogen_gc/run_task.py 0383a3ee
 conda run -n autogen_gc python reproduction/autogen_gc/run_task.py --all
 conda run -n autogen_gc python reproduction/autogen_gc/run_task.py --all --parallel 4
+
+# 3. run the topology variant (4-agent Critic/Finalizer split)
+conda run -n autogen_gc python reproduction/autogen_gc/run_task.py --all --variant split4 --parallel 4
 ```
+
+Results are namespaced by variant: `runs/autogen_gc/<variant>/<uid8>/run_*`, and
+each `result.json` carries a `variant` field, so A/B is a slice by `variant`.
 
 ### Knobs (env vars)
 | var | default | effect |
@@ -141,7 +171,7 @@ the pass rate.
 Identical to the Magentic harness: the last `FINAL ANSWER: <x>` line in
 `console_log.txt` is captured and compared to the gold answer under `norm()`
 (lowercase, strip whitespace, drop `,$%`). `result.json` schema:
-`{uuid, run, rc, seconds, level, category, final_answer, expected_answer,
+`{uuid, variant, run, rc, seconds, level, category, final_answer, expected_answer,
 exact_match, original_success, speaker_turns, tool_calls, n_agents_spoke,
 single_agent}`.
 Strict exact-match understates substantive correctness (same normalizer caveats as
