@@ -124,7 +124,9 @@ def to_input_items(messages):
 
 def to_responses_body(body):
     items, n_images = to_input_items(body.get('messages', []))
-    out = dict(model=TARGET_MODEL, store=False, input=items)
+    # NB: do NOT send `store` — Perplexity's /responses rejects it as an unknown
+    # field ("invalid request body: json: unknown field \"store\"").
+    out = dict(model=TARGET_MODEL, input=items)
     for src, dst in (('temperature', 'temperature'), ('top_p', 'top_p'),
                      ('max_tokens', 'max_output_tokens'),
                      ('max_completion_tokens', 'max_output_tokens'),
@@ -152,21 +154,14 @@ def to_responses_body(body):
                           or dict(type='object', properties={})))
     if tools:
         out['tools'] = tools
-    tc = body.get('tool_choice')
-    if isinstance(tc, str) and tc in ('auto', 'none', 'required'):
-        out['tool_choice'] = tc
-    elif isinstance(tc, dict) and tc.get('type') == 'function':
-        out['tool_choice'] = dict(type='function',
-                                  name=tc.get('function', {}).get('name'))
-    rf = body.get('response_format')
-    if isinstance(rf, dict) and rf.get('type') in ('json_object', 'json_schema'):
-        fmt = dict(type=rf['type'])
-        if rf.get('type') == 'json_schema':
-            js = rf.get('json_schema', {})
-            fmt.update(name=js.get('name', 'response'), schema=js.get('schema', {}))
-            if js.get('strict') is not None:
-                fmt['strict'] = js['strict']
-        out['text'] = dict(format=fmt)
+    # NB: do NOT send `tool_choice` — Perplexity's /responses rejects it
+    # ("unknown field tool_choice"); the model picks tools on its own (== auto,
+    # which is what WebSurfer/the orchestrator request anyway).
+    # NB: do NOT translate response_format -> text.format. Perplexity's
+    # /responses rejects the `format` field ("invalid request body: json:
+    # unknown field \"format\""). Callers that need JSON (e.g. the Magentic-One
+    # orchestrator, json_output=True) enforce it via their prompt, so dropping
+    # the structured-output hint is safe for this reproduction.
     return out, n_images
 
 
@@ -209,9 +204,23 @@ def from_responses_body(j, req_model, max_out=None):
 
 
 # --------------------------------------------------------------- upstream ----
+def _unknown_field(text):
+    """Name of the field Perplexity rejected, from a 400 body, else None."""
+    import re
+    try:
+        p = json.loads(text).get('error', {}).get('param')
+        if p:
+            return p
+    except Exception:
+        pass
+    m = re.search(r'unknown field \\?"([^"\\]+)\\?"', text)
+    return m.group(1) if m else None
+
+
 def call_upstream(rbody):
+    rbody = dict(rbody)  # local copy; we may strip drifted fields below
     last = None
-    for attempt in range(5):
+    for attempt in range(8):
         try:
             r = requests.post(f'{UPSTREAM}/responses', json=rbody, timeout=600,
                               headers={'Authorization': f'Bearer {KEY}'})
@@ -222,6 +231,14 @@ def call_upstream(rbody):
         if r.status_code == 200:
             return 200, r.json()
         last = (r.status_code, r.text[:2000])
+        # Perplexity's /responses has tightened over time and 400s on fields the
+        # OpenAI schema permits (store, tool_choice, ...). Auto-heal: strip the
+        # named top-level unknown field and retry instead of failing the call.
+        if r.status_code == 400:
+            fld = _unknown_field(r.text)
+            if fld and fld in rbody:
+                rbody.pop(fld, None)
+                continue
         if r.status_code in (429, 500, 502, 503, 504):
             time.sleep(2 ** (attempt + 1))
             continue
