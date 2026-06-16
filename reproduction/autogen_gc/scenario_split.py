@@ -222,12 +222,24 @@ CRITIC_SYS = (
 FINALIZER_SYS = (
     "You are the Finalizer. You have NO tools. You act only AFTER the Critic has "
     "reviewed. Read the Critic's review and the evidence the team posted.\n\n"
-    "- If the Critic raised any unresolved concern (a missing fact, an uncomputed "
-    "result, an unhonored constraint), do NOT finalize: briefly state what still "
-    "needs to be done and from whom, then STOP so the team can address it.\n"
-    "- Only when the Critic's concerns are resolved and the answer is fully supported "
-    "by the posted evidence, output the final answer on its own line in EXACTLY this "
-    "format:\n\n"
+    "- If the Critic raised an unresolved concern that the team can still realistically "
+    "act on (a fact not yet searched, a computation not yet run), do NOT finalize: "
+    "briefly state what is needed and from whom, then STOP so the team can address it.\n"
+    "- When the Critic's concerns are resolved and the answer is fully supported by the "
+    "posted evidence, output the final answer (format below).\n\n"
+    "STALL / GIVE-UP RULE — this OVERRIDES the 'do not finalize' rule above. The run "
+    "will loop forever if you keep deferring on a concern the team cannot satisfy. You "
+    "MUST recognize a stall and finalize anyway when ANY of these hold:\n"
+    "  * the team has already been asked for the SAME missing item and has reported it "
+    "unobtainable / not found two or more times;\n"
+    "  * the recent messages are repeating with no NEW evidence or progress;\n"
+    "  * the Critic is demanding evidence that the available tools cannot produce "
+    "(e.g. a specific source's raw historical data that only renders in a browser).\n"
+    "In any of those cases, do NOT defer again. Finalize NOW with the best-supported "
+    "answer the posted evidence allows. If the evidence genuinely supports no defensible "
+    "answer, output 'FINAL ANSWER: cannot be determined'. A timely best-effort answer "
+    "(or an explicit 'cannot be determined') is ALWAYS better than another deferral.\n\n"
+    "Final answer format — output it on its own line EXACTLY as:\n\n"
     "FINAL ANSWER: <answer>\n\n"
     "Match the question's required answer format precisely (a number, a name, or a "
     "short phrase; no extra words, no units unless the gold answer has them)."
@@ -280,7 +292,12 @@ async def main() -> None:
         model_client=mc,
         termination_condition=termination,
         selector_prompt=SELECTOR_PROMPT,
-        allow_repeated_speaker=True,
+        # AutoGen's default. Each agent does its deep work in ONE turn (internal ReAct
+        # loop) and publishes once, so a CONSECUTIVE repeat adds nothing and is the
+        # shape of the structural-stall loops (e.g. 08cae58d: WebResearcher picked 8x
+        # in a row). Forcing rotation preserves legitimate re-speaking (WR->Critic->WR
+        # is non-consecutive) while killing the degenerate same-speaker grind.
+        allow_repeated_speaker=False,
     )
 
     await Console(team.run_stream(task=prompt))
