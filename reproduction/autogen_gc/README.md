@@ -1,5 +1,11 @@
 # AutoGen SelectorGroupChat — second MAS baseline
 
+> ⚠️ **Current state lives in [`EXPERIMENT_LOG.md`](EXPERIMENT_LOG.md), not here.**
+> This README describes the *original* 3-agent design (`selector3`: WebResearcher /
+> Analyst / Verifier). The **live system is the 4-agent `split4` variant** (WebResearcher
+> / Analyst / Critic / Finalizer) in `scenario_split.py`, with stall fixes the README
+> predates. Where they disagree, the log wins.
+
 A peer-topology multi-agent system, built as the topology contrast to the
 Magentic-One reproduction in `reproduction/magentic/`. Same benchmark (GAIA),
 same model (`gpt-4o` alias → `gpt-5.4-mini` via the proxy), same Perplexity
