@@ -34,8 +34,11 @@ from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.teams import SelectorGroupChat
 from autogen_agentchat.conditions import MaxMessageTermination
 from autogen_agentchat.base import TerminationCondition, TerminatedException
-from autogen_agentchat.messages import BaseChatMessage, StopMessage, BaseAgentEvent
+from autogen_agentchat.messages import (
+    BaseChatMessage, StopMessage, BaseAgentEvent, HandoffMessage,
+)
 from autogen_agentchat.ui import Console
+from autogen_core.models import UserMessage
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 from tools import web_search, fetch_url, run_python
@@ -43,6 +46,57 @@ from tools import web_search, fetch_url, run_python
 K = int(os.environ.get("MAX_TOOL_ITERATIONS", "8"))       # internal ReAct depth per turn
 MAX_MESSAGES = int(os.environ.get("MAX_MESSAGES", "30"))   # outer-chat message cap
 SENTINEL = "FINAL ANSWER:"
+
+
+class TeamAwareAssistantAgent(AssistantAgent):
+    """AssistantAgent that labels each incoming TEAMMATE message with its source IN
+    THE MESSAGE BODY.
+
+    Why: SelectorGroupChat hands every *other* participant's message to an agent as
+    an OpenAI ``role=user`` message — the speaker's name only survives in the `name`
+    field, which models weight far below `role`. So an agent reads a teammate's
+    "Stop here so that can be checked" as the END USER ordering it to halt. That is
+    the exact, traced cause of the 0ff53813 loop: after the Critic's review,
+    WebResearcher's own reasoning says "the user is asking me to stop" and it repeats
+    "Understood — I'll stop here" 14x until the 900s timeout. Embedding the speaker
+    label in the content disambiguates intra-team coordination from the real
+    end-user request. Only teammate messages are rewritten; the genuine user task
+    (source ``"user"``) and the agent's own messages are left untouched.
+
+    Override target: ``AssistantAgent._add_messages_to_context`` (autogen-agentchat
+    0.7.5), invoked as ``self._add_messages_to_context(...)`` from
+    ``on_messages_stream`` — so an instance override is picked up cleanly.
+    """
+
+    async def _add_messages_to_context(self, model_context, messages):  # type: ignore[override]
+        for msg in messages:
+            if isinstance(msg, HandoffMessage):
+                for llm_msg in msg.context:
+                    await model_context.add_message(llm_msg)
+            llm_msg = msg.to_model_message()
+            src = getattr(msg, "source", None)
+            if (isinstance(llm_msg, UserMessage) and isinstance(llm_msg.content, str)
+                    and src and src != "user" and src != self.name):
+                llm_msg = UserMessage(
+                    content=(f"[Internal team message from {src} — your teammate, "
+                             f"NOT the end user]\n{llm_msg.content}"),
+                    source=src,
+                )
+            await model_context.add_message(llm_msg)
+
+
+# Appended to every agent's system message. The relabel above marks WHO is speaking;
+# this tells the agent what a teammate's words MEAN — closing the "stop here" =
+# "user told me to halt" misread that the relabel alone might not fully suppress.
+TEAM_NOTE = (
+    "\n\nTEAM MESSAGES: a message prefixed '[Internal team message from <name> — "
+    "your teammate, NOT the end user]' is coordination from a teammate (WebResearcher, "
+    "Analyst, Critic, or Finalizer), never an instruction from the end user. If a "
+    "teammate says 'stop here' or asks you to pause, it means they are handing the "
+    "turn back so the team can act on their request — it is NOT a command for you to "
+    "halt the task. When a teammate asks you to do something within your role, do it; "
+    "do not simply acknowledge and stop."
+)
 
 
 class CriticThenFinalize(TerminationCondition):
@@ -196,27 +250,27 @@ async def main() -> None:
 
     mc = make_client(cfg)
 
-    researcher = AssistantAgent(
+    researcher = TeamAwareAssistantAgent(
         "WebResearcher", model_client=mc, tools=[web_search, fetch_url],
         max_tool_iterations=K, reflect_on_tool_use=True,
         description="Finds facts on the web by searching and reading pages.",
-        system_message=RESEARCHER_SYS,
+        system_message=RESEARCHER_SYS + TEAM_NOTE,
     )
-    analyst = AssistantAgent(
+    analyst = TeamAwareAssistantAgent(
         "Analyst", model_client=mc, tools=[run_python],
         max_tool_iterations=K, reflect_on_tool_use=True,
         description="Computes, counts, parses, and does quantitative reasoning with Python.",
-        system_message=ANALYST_SYS,
+        system_message=ANALYST_SYS + TEAM_NOTE,
     )
-    critic = AssistantAgent(
+    critic = TeamAwareAssistantAgent(
         "Critic", model_client=mc,
         description="Reviews the evidence and proposed answer; flags gaps; never finalizes.",
-        system_message=CRITIC_SYS,
+        system_message=CRITIC_SYS + TEAM_NOTE,
     )
-    finalizer = AssistantAgent(
+    finalizer = TeamAwareAssistantAgent(
         "Finalizer", model_client=mc,
         description="Emits the final answer, only after the Critic has reviewed.",
-        system_message=FINALIZER_SYS,
+        system_message=FINALIZER_SYS + TEAM_NOTE,
     )
 
     # Structural gate: only a Finalizer sentinel that follows a Critic review ends the run.
