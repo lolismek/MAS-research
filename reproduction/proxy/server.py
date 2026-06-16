@@ -46,6 +46,22 @@ RAW = os.environ.get('PROXY_DUMP', os.path.join(HERE, 'raw_calls.jsonl'))
 _log_lock = threading.Lock()
 _raw_lock = threading.Lock()
 
+# Two upstream backends, selected per-request by route prefix:
+#   /t/<tag>/...  -> PPLX   (Perplexity reselling openai/gpt-5.4-mini; NO reasoning
+#                            item is ever returned — verified, it's stripped upstream)
+#   /o/<tag>/...  -> OPENAI (OpenAI direct; with reasoning.summary set, /responses
+#                            returns a reasoning summary item, even on tool-call turns)
+# The reasoning summary is captured into raw_calls.jsonl (the trace source) so the
+# per-turn "what the model was thinking before it acted" gap becomes observable.
+PPLX = dict(name='pplx', base=UPSTREAM, key=KEY, model=TARGET_MODEL, reasoning=None)
+OPENAI = dict(
+    name='openai',
+    base=os.environ.get('OPENAI_BASE', 'https://api.openai.com/v1'),
+    key=os.environ.get('OPENAI_API_KEY', ''),
+    model=os.environ.get('OPENAI_MODEL', 'gpt-5.4-mini'),
+    reasoning=dict(summary=os.environ.get('REASONING_SUMMARY', 'detailed'),
+                   effort=os.environ.get('REASONING_EFFORT', 'medium')))
+
 
 def _redact_images(messages):
     """Copy messages with image payloads replaced by '<image sha1 ...>' stubs."""
@@ -122,11 +138,15 @@ def to_input_items(messages):
     return items, n_images
 
 
-def to_responses_body(body):
+def to_responses_body(body, backend):
     items, n_images = to_input_items(body.get('messages', []))
     # NB: do NOT send `store` — Perplexity's /responses rejects it as an unknown
     # field ("invalid request body: json: unknown field \"store\"").
-    out = dict(model=TARGET_MODEL, input=items)
+    out = dict(model=backend['model'], input=items)
+    # OpenAI direct: ask for a reasoning summary (Perplexity has reasoning=None and
+    # rejects the summary field, so this is OpenAI-only).
+    if backend.get('reasoning'):
+        out['reasoning'] = dict(backend['reasoning'])
     for src, dst in (('temperature', 'temperature'), ('top_p', 'top_p'),
                      ('max_tokens', 'max_output_tokens'),
                      ('max_completion_tokens', 'max_output_tokens'),
@@ -217,13 +237,13 @@ def _unknown_field(text):
     return m.group(1) if m else None
 
 
-def call_upstream(rbody):
+def call_upstream(rbody, backend):
     rbody = dict(rbody)  # local copy; we may strip drifted fields below
     last = None
     for attempt in range(8):
         try:
-            r = requests.post(f'{UPSTREAM}/responses', json=rbody, timeout=600,
-                              headers={'Authorization': f'Bearer {KEY}'})
+            r = requests.post(f"{backend['base']}/responses", json=rbody, timeout=600,
+                              headers={'Authorization': f"Bearer {backend['key']}"})
         except requests.RequestException as e:
             last = (599, str(e))
             time.sleep(2 ** (attempt + 1))
@@ -261,38 +281,68 @@ def models():
                                                TARGET_MODEL)])
 
 
+def _reasoning_summary(j):
+    """Join any reasoning-summary text from an OpenAI /responses body. Perplexity
+    never returns reasoning items; OpenAI does when reasoning.summary is set —
+    including on tool-call turns (the pre-action 'thinking' we otherwise can't see)."""
+    texts = []
+    for o in j.get('output', []):
+        if o.get('type') == 'reasoning':
+            for s in o.get('summary', []) or []:
+                if s.get('type') == 'summary_text' and s.get('text'):
+                    texts.append(s['text'])
+    return '\n\n'.join(texts) or None
+
+
 @app.post('/t/{tag}/v1/chat/completions')
 @app.post('/t/{tag}/chat/completions')
 @app.post('/v1/chat/completions')
 @app.post('/chat/completions')
 async def chat(req: Request, tag: str = ''):
+    return await _handle(req, tag, PPLX)
+
+
+@app.post('/o/{tag}/v1/chat/completions')
+@app.post('/o/{tag}/chat/completions')
+@app.post('/o/v1/chat/completions')
+@app.post('/o/chat/completions')
+async def chat_openai(req: Request, tag: str = ''):
+    return await _handle(req, tag, OPENAI)
+
+
+async def _handle(req: Request, tag: str, backend: dict):
     body = await req.json()
-    rbody, n_images = to_responses_body(body)
+    rbody, n_images = to_responses_body(body, backend)
     t0 = time.time()
-    status, j = call_upstream(rbody)
+    status, j = call_upstream(rbody, backend)
     dur = time.time() - t0
     if status != 200:
-        log_call(dict(ts=t0, tag=tag, dur=round(dur, 2), error=status,
-                      detail=str(j)[:300]))
+        log_call(dict(ts=t0, tag=tag, backend=backend['name'], dur=round(dur, 2),
+                      error=status, detail=str(j)[:300]))
         return JSONResponse(status_code=status if isinstance(status, int) else 500,
                             content=dict(error=dict(
                                 message=f'upstream {status}: {j}',
                                 type='upstream_error', code=status)))
-    resp = from_responses_body(j, body.get('model', TARGET_MODEL),
+    resp = from_responses_body(j, body.get('model', backend['model']),
                                rbody.get('max_output_tokens'))
+    reasoning = _reasoning_summary(j)
     with _raw_lock, open(RAW, 'a') as f:
         f.write(json.dumps(dict(
-            ts=t0, tag=tag, messages=_redact_images(body.get('messages', [])),
+            ts=t0, tag=tag, backend=backend['name'],
+            messages=_redact_images(body.get('messages', [])),
             tools=[t.get('function', t).get('name')
                    for t in body.get('tools') or []],
             response_format=body.get('response_format'),
+            reasoning=reasoning,
             reply=resp['choices'][0]['message'])) + '\n')
     cost = ((j.get('usage') or {}).get('cost') or {}).get('total_cost')
-    log_call(dict(ts=t0, tag=tag, dur=round(dur, 2), model=body.get('model'),
+    log_call(dict(ts=t0, tag=tag, backend=backend['name'], dur=round(dur, 2),
+                  model=body.get('model'),
                   prompt_tokens=resp['usage']['prompt_tokens'],
                   completion_tokens=resp['usage']['completion_tokens'],
                   cost=cost, n_msgs=len(body.get('messages', [])),
                   n_images=n_images, tools=bool(rbody.get('tools')),
+                  has_reasoning=bool(reasoning),
                   finish=resp['choices'][0]['finish_reason'],
                   stream=bool(body.get('stream'))))
 

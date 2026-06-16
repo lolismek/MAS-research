@@ -41,11 +41,14 @@ VARIANTS = {
 }
 
 
-def make_config(tag):
+def make_config(tag, backend='pplx'):
     # /t/<tag>/v1 routes through the proxy's tagged endpoint so every
     # calls.jsonl / raw_calls.jsonl entry is attributable to this run.
+    # /o/<tag>/v1 routes to OpenAI direct (reasoning summaries captured); /t to
+    # Perplexity (no reasoning). Same chat.completions wire on the client side.
     base, v1 = PROXY.rsplit('/', 1)
-    return {'model': 'gpt-4o', 'base_url': f'{base}/t/{tag}/{v1}', 'api_key': 'dummy'}
+    seg = 'o' if backend == 'openai' else 't'
+    return {'model': 'gpt-4o', 'base_url': f'{base}/{seg}/{tag}/{v1}', 'api_key': 'dummy'}
 
 
 def norm(s):
@@ -72,9 +75,11 @@ def participation(text):
                 n_agents_spoke=n_spoke, single_agent=n_spoke <= 1)
 
 
-def run_one(task, variant='selector3'):
+def run_one(task, variant='selector3', backend='pplx'):
     uid8 = task['uuid'][:8]
-    runs_v = os.path.join(RUNS, variant)
+    # OpenAI-backed runs are namespaced separately (…/<variant>_openai/) so they
+    # never mix with the Perplexity runs of the same variant/uid.
+    runs_v = os.path.join(RUNS, variant if backend == 'pplx' else f'{variant}_{backend}')
     n = 1
     while os.path.exists(os.path.join(runs_v, uid8, f'run_{n}')):
         n += 1
@@ -92,8 +97,10 @@ def run_one(task, variant='selector3'):
     with open(os.path.join(rundir, 'expected_answer.txt'), 'w') as f:
         f.write(str(task['expected_answer']))
     shutil.copy(VARIANTS[variant], os.path.join(rundir, 'scenario.py'))
+    btag = '' if backend == 'pplx' else f'{backend}_'
     with open(os.path.join(rundir, 'config.yaml'), 'w') as f:
-        json.dump(make_config(f'agc_{variant}_{uid8}_run{n}'), f)  # JSON is valid YAML
+        # JSON is valid YAML; tag encodes backend so raw_calls.jsonl stays attributable.
+        json.dump(make_config(f'agc_{variant}_{btag}{uid8}_run{n}', backend), f)
 
     print(f'[{variant}/{uid8}] run_{n} starting (timeout {TIMEOUT}s)', flush=True)
     t0 = time.time()
@@ -115,7 +122,7 @@ def run_one(task, variant='selector3'):
     final = m[-1].strip() if m else None
     expected = task['expected_answer']
     part = participation(tail)
-    result = dict(uuid=task['uuid'], variant=variant, run=n, rc=rc, seconds=round(dur, 1),
+    result = dict(uuid=task['uuid'], variant=variant, backend=backend, run=n, rc=rc, seconds=round(dur, 1),
                   level=task.get('level'), category=task.get('category'),
                   final_answer=final, expected_answer=expected,
                   exact_match=final is not None and norm(final) == norm(expected),
@@ -145,11 +152,18 @@ def main():
         args = args[:i] + args[i + 2:]
     if variant not in VARIANTS:
         sys.exit(f'unknown --variant {variant!r}; choose from {list(VARIANTS)}')
+    backend = 'pplx'
+    if '--backend' in args:
+        i = args.index('--backend')
+        backend = args[i + 1]
+        args = args[:i] + args[i + 2:]
+    if backend not in ('pplx', 'openai'):
+        sys.exit(f'unknown --backend {backend!r}; choose from pplx, openai')
     sel = TASKS if args == ['--all'] else [
         t for t in TASKS if any(t['uuid'].startswith(a) for a in args)]
     if args != ['--all'] and len(sel) != len(args):
         sys.exit(f'unmatched uuid prefixes; matched {[t["uuid"][:8] for t in sel]}')
-    run = functools.partial(run_one, variant=variant)
+    run = functools.partial(run_one, variant=variant, backend=backend)
     if par == 1:
         results = [run(t) for t in sel]
     else:
