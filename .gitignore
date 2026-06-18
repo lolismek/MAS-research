@@ -1,0 +1,32 @@
+# eval-clean — consolidated 3-MAS benchmark
+#
+# IMPORTANT: do NOT add a blanket `traces/` or `runs/` rule here. Raw traces are
+# COMMITTED on purpose — a prior setup gitignored the run dirs and the ChatDev
+# traces were permanently lost. Only true regenerables, secrets, and external
+# code clones are ignored below.
+
+# ---- Secrets (.env.example IS tracked; it holds placeholders only) ----
+.env
+*.env
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+
+# ---- OS ----
+.DS_Store
+
+# ---- External code clones (re-clone via the per-MAS harness READMEs) ----
+**/chatdev_repo/
+**/mast_repo/
+
+# ---- Large regenerable proxy wire dumps ----
+# Not committed: the analysis products that depend on them (verdicts, inputs_md,
+# viewer traces.json) ARE committed, so these are only needed to RE-derive analysis.
+**/raw_calls.jsonl
+**/calls.jsonl
+
+# ---- Regenerable analysis intermediate ----
+# inputs/ is fully contained in the committed viewer_postfix/traces.json;
+# rebuild with autogen_gc/judging/analysis_postfix/build_inputs.py if needed.
+**/analysis_*/inputs/
