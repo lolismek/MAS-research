@@ -49,6 +49,11 @@ pre-fix ChatDev numbers and the Magentic-One pass — is in `FAILURE_ANALYSIS.md
 - **Strict info-flow (2.4/2.5):** **borderline** — no agent *withheld* or *distorted* a correct value on a hand-off in the 2.4/2.5 sense; the Tester's correct contribution (L9911) was received, not ignored, and the Reviewer's note (L1529) was partially acted on. The fabricated "moved left" claim (L12111) is best coded 2.6 (action–reasoning mismatch) rather than 2.4/2.5, since it is the agent misdescribing its *own* output, not suppressing/ignoring a peer's correct input. Borderline because the Programmer effectively nullified the Tester's correct report by pretending to have addressed it.
 - **Structural factors:** capability (Programmer can't do the grid arithmetic — dominant root cause); verification-design (fixed 3-cycle Test/Review caps, reviewer == no independent geometry validator, no re-run after a claimed fix); harness (test env lacks `_tkinter`, so cycles 1–2 burned on a Tkinter error that masked the real bug until cycle 3, leaving only one cycle to fix the geometry); prompt (Reviewer told to give "one comment with the highest priority", which deprioritized the geometry note behind the missing-GUI comment).
 - **Confidence:** high — built/ran the code (uncaught `ValueError` at startup, BEE (2,5)→(2,7)); L1529 (Reviewer's geometry warning), L9911 (Tester's correct bug report cycle 3), L11322 vs L12111 (data unchanged while docstring claims the fix), L12184/L13216 (chain advances past the broken Test phase).
+- **Illustrative excerpts** (verbatim; `…` marks elision):
+  - *CodeReview cycle 1 — Code Reviewer (L1529):* "There is also a logic concern in the default puzzle: some clue entries appear to overlap or conflict … verify that every across/down answer fits the same grid coordinates without collisions and that `black_squares` matches the intended layout."
+  - *Test cycle 3 — Software Test Engineer (L9924):* "… puzzle = build_default_puzzle() … raise ValueError … ValueError: Clue 5-across goes out of bounds at (2, 7)."
+  - *Final TestModification — Programmer (L11303):* "Clue 5 originally started too far to the right and went out of bounds. … It has been moved left so the answer \"BEE\" fits entirely within the grid."  ← the claimed fix
+  - *but `puzzle.py` (L120) is unchanged:* `Clue(5, "across", …, "BEE", (2, 5))`  ← BEE at col 5 spans 5–7, out of bounds in a 7-wide grid
 
 ---
 
@@ -62,6 +67,11 @@ pre-fix ChatDev numbers and the Magentic-One pass — is in `FAILURE_ANALYSIS.md
 - **Strict info-flow (2.4/2.5):** **NO** — no capable agent distorted, withheld, or ignored a correct in-system contribution. The reviewer's correct diagnoses were received and acted upon (just not successfully executed); no valid puzzle solution was ever produced for anyone to drop.
 - **Structural factors:** capability (dominant — hand-authoring a 48-cell exact-cover Strands board is beyond the Programmer); verification-design (ChatDev runs the program once for a smoke test; a missing-Tk import error counts as the run, masking the deeper startup crash — the "Test Pass!" is structurally hollow); harness/env (no Tk in test sandbox); prompt (spec carried cleanly, so not a factor).
 - **Confidence:** high — reproduced `ValueError` from `StrandsGame()`; L8396 (reviewer predicts the startup crash), L10615 (`_tkinter` masks it), L12638–12644 ("Test Pass!"), puzzles.py L4–81 (final broken data).
+- **Illustrative excerpts** (verbatim; `…` marks elision):
+  - *CodeReview cycle 3 — Code Reviewer (L8396):* "The app currently assumes puzzle loading is always successful in `StrandsApp.__init__()`, so a validation failure crashes the GUI on startup."  ← correctly predicts the crash
+  - *CodeReviewModification — Programmer (L3888):* "…'whisk': [(2, 0), (2, 1), (2, 2), (2, 3), (3, 4)],…"  ← engages but can't author a valid board
+  - *Test cycle 1 — runtime (L10620):* "ModuleNotFoundError: No module named '_tkinter'"  ← masks the real startup crash
+  - *Test cycle 2 — Software Test Engineer (L12644):* "…Test Pass!"  ← hollow certification
 
 ---
 
@@ -75,6 +85,10 @@ pre-fix ChatDev numbers and the Magentic-One pass — is in `FAILURE_ANALYSIS.md
 - **Strict info-flow (2.4/2.5):** NO — no capable agent distorted, withheld, or ignored a correct in-system contribution. The gui.py loss was a store-extraction failure, not an agent hiding or ignoring a teammate's correct output; the Reviewer in fact acted on what it found. The stale cycle-2 comment is over-suspicion of correct code (no MAST "trusted too little" code) and had no effect.
 - **Structural factors:** store/harness (ChatDev's code-extraction parser dropped a fenced Tkinter file into a stub — the distinctive inter-phase memory surface); verification-design (review+test cycles here worked *for* the team rather than rubber-stamping — a positive instance). No capability ceiling, no budget/loop pressure.
 - **Confidence:** high — L638 (intact Tkinter gui.py produced), L1610 (store stub), L1895/L1957 (review catches both bugs), L2399+/game.py L156–219 (fixes applied), L7384/L7941 (EOFError fix), L8782 (Test Pass); executed the committed code to confirm captures, chaining, kinging, and signature consistency.
+- **Illustrative excerpts** (verbatim; `…` marks elision):
+  - *CodeReview handoff — store `codes` field (L1610):* "…game.py … gui.py\npython\npython main.py…"  ← store/handoff dropped the Coding-phase Tkinter gui.py (L638) down to a one-line `python main.py` stub
+  - *CodeReviewComment — Code Reviewer (L1895):* "Highest-priority comment: **The project is not directly operable because `gui.py` is missing/invalid, and `main.py` depends on `CheckersGUI` that is never defined or imported.** Right now `python main.py` will fail immediately…"  ← flags the missing/stubbed GUI
+  - *CodeReviewModification — Programmer (L2705):* "gui.py … '''command-line interface for the checkers game application''' … class CheckersGUI: … def run(self): … move_text = input(…) … result = self.game.apply_move(src_row, src_col, dst_row, dst_col)…"  ← restores a full, runnable CLI GUI with the correct `apply_move(...)` call
 
 ---
 
@@ -88,6 +102,10 @@ pre-fix ChatDev numbers and the Magentic-One pass — is in `FAILURE_ANALYSIS.md
 - **Strict info-flow (2.4/2.5):** **NO** — no capable agent distorted, withheld, or ignored a correct in-system contribution. The GUI loss was an automated-extractor artifact, not an agent act; once it was in the store the Reviewer surfaced it and the Programmer acted on it.
 - **Structural factors:** harness (code-extraction regex mis-binding a trailing bash block to the prior filename — the root of the transient GUI loss); environment (no `_tkinter`, non-interactive stdin — both real sandbox limits the agents handled gracefully, not code defects); verification-design (review+test cycles here were genuinely productive). Capability of the Programmer was high throughout (correct logic on the first pass, correct EOF/Tk hardening).
 - **Confidence:** high — L161/L242 (clean seeds), L484–649 vs L1185 (full GUI emitted but `python main.py` persisted), L1344 (review catch), L1116 (repair), L5349/L6704 (env errors), L8539/L8545 (final pass); win logic re-verified by direct execution of the committed code.
+- **Illustrative excerpts** (verbatim; `…` marks elision):
+  - *CodeReviewComment store dump — Programmer→store (L1185):* "…'codes': '…gomoku_gui.py\npython\npython main.py\n\n\n'…"  ← store/handoff dropped the GUI body
+  - *CodeReviewComment — Code Reviewer (L1344):* "…`gomoku_gui.py` is missing entirely, but `main.py` imports `GomokuGUI`, and the only content shown for `gomoku_gui.py` is `python main.py`, which is not valid Python code … the application cannot start."  ← catches it
+  - *CodeReviewModification — Programmer (L2186):* "-python main.py / +'''\n+Tkinter-based GUI for playing Gomoku on a 15x15 board.\n+''' … +class GomokuGUI:"  ← restores it
 
 ---
 
@@ -101,6 +119,11 @@ pre-fix ChatDev numbers and the Magentic-One pass — is in `FAILURE_ANALYSIS.md
 - **Strict info-flow (2.4/2.5):** NO — no capable agent distorted, withheld, or ignored a correct in-system contribution; every Reviewer finding was correct and was adopted by the Programmer, and no agent suppressed a correct value.
 - **Structural factors:** harness/environment (test runner lacks `_tkinter`, forcing a 3-cycle loop on an un-fixable-by-code error); verification-design (ChatDev's import-level test cannot exercise a GUI game, so gameplay correctness was never machine-verified — it happens to be correct anyway); capability is fine (the model produced sound match-3 logic and responded correctly to every review).
 - **Confidence:** high — board.py L101-128, game_controller.py L53-92, game_ui.py L8-41/L208; reviewer comments L2083/L4156/L6388; test loop L8063/L8107; verified by direct execution (5000 swaps no crash; fallback app runs).
+- **Illustrative excerpts** (verbatim; `…` marks elision):
+  - *CodeReview — Code Reviewer (L2083):* "<BUG> High priority: `game_ui.py` is missing entirely, but `GameController` imports `GameUI` and calls `run()`, `set_status()`, `render()`, `update_hud()`, and `show_game_over()`. As written, the program cannot start and will fail immediately with an import error…"  ← real defect caught
+  - *CodeReviewModification — Programmer (L2487):* "game_ui.py … '''Tkinter-based user interface for the Match-3 puzzle game.''' … class GameUI: \"\"\"Graphical user interface for rendering the board and handling user input.\"\"\" …"  ← applied (empty `python main.py` stub replaced with a real `GameUI` class)
+  - *Test cycle — runtime (L8063):* "ModuleNotFoundError: No module named '_tkinter'"  ← harness loop, not a coordination break
+  - *Test cycle — Programmer "fix" (L8107, repeated identically at L9636, L11465):* "pip install _tkinter"  ← same non-fix re-issued across all 3 cycles (MAST 1.3), an environment limitation rather than a teammate breakdown
 
 ---
 
@@ -115,6 +138,11 @@ pre-fix ChatDev numbers and the Magentic-One pass — is in `FAILURE_ANALYSIS.md
 - **Strict info-flow (2.4/2.5):** **NO** — no capable agent distorted, withheld, or ignored a correct in-system contribution. Every Reviewer comment was correct and was acted on; the Programmer never dropped a peer's input. The closest "loss" event (L1162) is the markdown/codebook extraction channel, an artifact-class issue, not an agent withholding.
 - **Structural factors:** ChatDev's code-store extraction is brittle (captured `python3 main.py` as the module body, L1162) but the multi-cycle review caught it; harness cannot feed stdin to an interactive program (forced `EOFError`, L4293), handled gracefully. Capability: the Programmer's first draft was already strong; the Reviewer added the daily-word and robustness polish.
 - **Confidence:** high — L1195 (caught empty list), L2161–2188 (daily-word fix), L3219 (crash fix), L4293/L5642 (test crash→pass), final `wordle_game.py` L98–124/L130–137 + execution verification (win, loss-reveal, duplicate-letter scoring, date-seeded 233-word list).
+
+- **Illustrative excerpts** (verbatim; `…` marks elision):
+  - *CodeReviewComment — Code Reviewer (L2162):* "Highest priority issue: The project does **not meet the "provide a daily 5-letter English language word" requirement safely because the daily answer is randomized … not guaranteed to be unique/daily-stable … clearly deterministic per calendar day … because the same list is used for both answer and validation, the game can reject common valid 5-letter English words…"  ← flags the insufficient word list / daily-word weakness
+  - *CodeReviewComment — Code Reviewer (L2167–2168):* "Using a truly deterministic daily selection based on the current date … `index = (date.toordinal() + offset) % len(answer_list)` … Separating `answer_list` from `valid_guess_list`…"  ← prescribes the exact fix
+  - *CodeReviewModification — Programmer (L2506, L2525–2527):* "from word_list import ANSWER_LIST, VALID_GUESS_LIST … today = date.today().toordinal() … index = today % len(ANSWER_LIST) … return ANSWER_LIST[index]"  ← fixes it (delivered-and-acted-on)
 
 ---
 

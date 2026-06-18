@@ -8,3 +8,8 @@
 - **Strict info-flow (2.4/2.5):** **NO** — no capable agent distorted, withheld, or ignored a correct in-system contribution. The reviewer's correct diagnoses were received and acted upon (just not successfully executed); no valid puzzle solution was ever produced for anyone to drop.
 - **Structural factors:** capability (dominant — hand-authoring a 48-cell exact-cover Strands board is beyond the Programmer); verification-design (ChatDev runs the program once for a smoke test; a missing-Tk import error counts as the run, masking the deeper startup crash — the "Test Pass!" is structurally hollow); harness/env (no Tk in test sandbox); prompt (spec carried cleanly, so not a factor).
 - **Confidence:** high — reproduced `ValueError` from `StrandsGame()`; L8396 (reviewer predicts the startup crash), L10615 (`_tkinter` masks it), L12638–12644 ("Test Pass!"), puzzles.py L4–81 (final broken data).
+- **Illustrative excerpts** (verbatim; `…` marks elision):
+  - *CodeReview cycle 3 — Code Reviewer (L8396):* "The app currently assumes puzzle loading is always successful in `StrandsApp.__init__()`, so a validation failure crashes the GUI on startup."  ← correctly predicts the crash
+  - *CodeReviewModification — Programmer (L3888):* "…'whisk': [(2, 0), (2, 1), (2, 2), (2, 3), (3, 4)],…"  ← engages but can't author a valid board
+  - *Test cycle 1 — runtime (L10620):* "ModuleNotFoundError: No module named '_tkinter'"  ← masks the real startup crash
+  - *Test cycle 2 — Software Test Engineer (L12644):* "…Test Pass!"  ← hollow certification
