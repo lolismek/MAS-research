@@ -23,6 +23,8 @@ Headline results live in each MAS's `judging/` (don't restate them from memory):
 - **ChatDev** — prior (now-stale) judging flagged 2.4 *Information Withholding* heavily;
   to be re-confirmed after regenerating traces.
 
+Cross-system, broad-lens (Magentic-One vs ChatDev) side-by-side: [`RELATIONAL_COMPARISON.md`](RELATIONAL_COMPARISON.md).
+
 ## Layout (uniform per MAS)
 
 ```
