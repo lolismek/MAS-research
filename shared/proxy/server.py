@@ -138,7 +138,7 @@ def to_input_items(messages):
     return items, n_images
 
 
-def to_responses_body(body, backend):
+def to_responses_body(body, backend, tag=''):
     items, n_images = to_input_items(body.get('messages', []))
     # NB: do NOT send `store` — Perplexity's /responses rejects it as an unknown
     # field ("invalid request body: json: unknown field \"store\"").
@@ -153,10 +153,18 @@ def to_responses_body(body, backend):
                      ('parallel_tool_calls', 'parallel_tool_calls')):
         if body.get(src) is not None:
             out[dst] = body[src]
-    # ChatDev computes max_tokens = 4096 - tiktoken(prompt) for "gpt-4o"; once
-    # the prompt outgrows that budget the value goes <= 0 and the API rejects
-    # every retry. Drop the param instead (upstream default applies).
-    if out.get('max_output_tokens') is not None and out['max_output_tokens'] < 16:
+    # ChatDev sets max_tokens = num_max_token_map["gpt-4o"](=4096) - tiktoken(prompt)
+    # on EVERY call (camel/model_backend.py). That budget is a stale gpt-4o-era
+    # constant, not a meaningful limit: as the dialogue accumulates the codebase the
+    # residual shrinks, so late phases (CodeReviewModification, Manual) get only a
+    # few hundred tokens and the more-verbose gpt-5.4-mini is cut off MID-LINE -- a
+    # systemic truncation source the trace judge misreads as inter-agent failure
+    # (ChatDev judging confound "A"). ChatDev runs are tagged /t/cd_*, so drop the
+    # cap entirely for them (the model-max default applies). For the other systems
+    # (Magentic/AutoGen) keep their cap, but still drop a non-positive value, which
+    # the API would otherwise 400 on in a fatal retry loop.
+    cap = out.get('max_output_tokens')
+    if cap is not None and (tag.startswith('cd_') or cap < 16):
         del out['max_output_tokens']
     tools = []
     for t in body.get('tools') or []:
@@ -312,7 +320,7 @@ async def chat_openai(req: Request, tag: str = ''):
 
 async def _handle(req: Request, tag: str, backend: dict):
     body = await req.json()
-    rbody, n_images = to_responses_body(body, backend)
+    rbody, n_images = to_responses_body(body, backend, tag)
     t0 = time.time()
     status, j = call_upstream(rbody, backend)
     dur = time.time() - t0

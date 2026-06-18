@@ -46,7 +46,14 @@ stays attributable. Suggested N: 3.
 2. Code executor runs on the host, not in agbench's Docker container (same executor
    class; `scenario` unchanged). Consider Docker for a full sweep if generated code
    needs isolation.
-3. The proxy translates chat.completions ⇄ Perplexity `/v1/responses`, and drops a
-   non-positive `max_tokens` (ChatDev's hardcoded 4096-gpt-4o budget can go ≤0 because
-   gpt-5.4-mini writes longer code) — otherwise a fatal 400-retry loop, i.e. an infra
-   crash, not a research-relevant failure.
+3. The proxy translates chat.completions ⇄ Perplexity `/v1/responses`, and **drops
+   ChatDev's `max_tokens` cap entirely** on the `/t/cd_*` routes. ChatDev sets
+   `max_tokens = num_max_token_map["gpt-4o"](=4096) − prompt_tokens` on every call
+   (`camel/model_backend.py`); that stale gpt-4o-era budget shrinks as the dialogue
+   accumulates the codebase, so late phases (CodeReviewModification, Manual) get only
+   a few hundred tokens and the more-verbose gpt-5.4-mini is cut off **mid-line** — a
+   systemic truncation source the trace judge misreads as inter-agent failure
+   (judging confound "A"). Dropping the cap (model-max default applies) keeps ChatDev
+   source unmodified while removing the artifact. The earlier reason for the drop
+   still holds for any residual case: a ≤0 budget would otherwise 400 in a fatal
+   retry loop, i.e. an infra crash, not a research-relevant failure.

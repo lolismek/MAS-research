@@ -22,6 +22,14 @@ shared/proxy/server.py   (localhost:8744)
 - **`/t/` vs `/o/`**: `/t/` = Perplexity (the default for ChatDev + Magentic);
   `/o/` = OpenAI-direct, used by the AutoGen `split4_openai` batch because
   Perplexity hides reasoning summaries.
+- **ChatDev `max_tokens` drop** (`/t/cd_*` routes only): ChatDev sets
+  `max_tokens = 4096 − prompt_tokens` on every call (a stale gpt-4o-era constant in
+  `camel/model_backend.py`), which starves late phases and truncates the verbose
+  gpt-5.4-mini mid-line. The proxy drops the cap entirely for `cd_*`-tagged routes
+  so the model-max default applies; other systems keep their cap (a non-positive
+  value is still dropped to avoid a fatal 400 loop). See
+  `../../chatdev/judging/README.md` (confound "A"). The fix lives here, not in
+  ChatDev source, so the system under test stays unmodified.
 
 ## Run
 

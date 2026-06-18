@@ -16,6 +16,37 @@ MAST_MODES = ['1.1', '1.2', '1.3', '1.4', '1.5',
               '2.1', '2.2', '2.3', '2.4', '2.5', '2.6',
               '3.1', '3.2', '3.3']
 
+# Injected into both stages. ChatDev's logger renders its inter-phase STATE-DUMP
+# blocks (the "[SystemMessage]" / "| Parameter | Value |" tables and "**[<phase>]**"
+# argument dumps) through a markdown+HTML pass that visibly mangles any code shown
+# INSIDE those blocks — but never the live dialogue. Without this note the judge
+# reads the mangling as code/state corruption between agents and fires inter-agent
+# misalignment modes on it (confound "B"). The note is identical for both eras
+# (both logs are mangled the same way), so it does not skew old-vs-new comparisons.
+RENDERING_ARTIFACTS = """\
+IMPORTANT — TRACE-RENDERING ARTIFACTS (NOT behavior of the system under test):
+ChatDev's logger renders its inter-phase state-dump blocks (the "[SystemMessage]"
+and "| Parameter | Value |" tables, and "**[<phase_name>]**" argument dumps) through
+a markdown + HTML pass. This MANGLES code shown inside those blocks ONLY:
+  - "__init__"/"__name__"/"__main__"/"__future__" lose their underscores and appear
+    as "init"/"name"/"main"/"future" (e.g. "def init(self)", "if name == \\"main\\"",
+    "from future import annotations", "Flask(name)");
+  - angle-bracket strings inside quotes (e.g. an event id like "<Button-1>") are
+    stripped to "" (e.g. self.canvas.bind("", ...));
+  - the characters < > & " appear as &lt; &gt; &amp; &quot;.
+The ACTUAL code the agents produced and exchanged is the fenced ```...``` code in the
+DIALOGUE turns, which is intact (e.g. real "__init__" appears there many times). Do
+NOT report any of the above patterns as code corruption, state corruption,
+serialization/parsing loss, or information distortion BETWEEN agents — they are a
+cosmetic logging-rendering artifact, present identically when the run succeeds.
+(This does not excuse genuinely EMPTY state, e.g. an empty `requirements`/`ideas`
+value — that is real content, judge it normally.)
+
+Separately: any bracketed "[EVALUATION-HARNESS NOTE: ... elided ...]" marker is
+inserted by the judging harness to fit the context window. It is NOT a ChatDev event;
+do not treat it, or the trace ending early because of it, as a finding.
+"""
+
 STAGE_A = """\
 You are an expert analyst of multi-agent LLM systems. Below is the full \
 execution trace of a multi-agent system attempting a task. Close-read it and \
@@ -29,6 +60,8 @@ disappears between steps, and missed opportunities all count.
 Pay particular attention to information flow BETWEEN agents: what each agent \
 knew, what it passed on, what was dropped, distorted, ignored, or re-derived \
 from scratch.
+
+{ARTIFACTS}
 
 Respond with a JSON object, and nothing else:
 {
@@ -85,6 +118,8 @@ the superficial check that was performed in place of a real one. Such \
 quotes count as valid evidence for these modes.
 - A mode can be present even if the task ultimately succeeded.
 
+{ARTIFACTS}
+
 Respond with a JSON object, and nothing else:
 {
   "task_success": <true|false>,
@@ -111,11 +146,13 @@ Respond with a JSON object, and nothing else:
 
 
 def build_stage_a(trace):
-    return STAGE_A.replace('{TRACE}', trace)
+    return (STAGE_A.replace('{ARTIFACTS}', RENDERING_ARTIFACTS)
+            .replace('{TRACE}', trace))
 
 
 def build_stage_b(trace, definitions, examples, findings_json):
-    return (STAGE_B.replace('{DEFINITIONS}', definitions)
+    return (STAGE_B.replace('{ARTIFACTS}', RENDERING_ARTIFACTS)
+            .replace('{DEFINITIONS}', definitions)
             .replace('{EXAMPLES}', examples)
             .replace('{FINDINGS}', findings_json)
             .replace('{TRACE}', trace))

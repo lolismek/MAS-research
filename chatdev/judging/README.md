@@ -26,6 +26,33 @@ fresh run.
   script is a **cross-system** (ChatDev+Magentic) generator from the old combined branch;
   it is a stale reference here and must be adapted before regenerating.
 
+## Trace-artifact confounds (why the stale numbers over-count misalignment)
+
+Close reading of the stale judgments found that much of the apparent inter-agent
+misalignment is **trace/harness artifacts**, not MAS behavior. The current code
+neutralizes three of the four; the re-judge will reflect the fixes:
+
+- **A — mid-line completion truncation.** ChatDev's `max_tokens = 4096 − prompt`
+  budget truncates the verbose gpt-5.4-mini, and incomplete code reads as
+  withholding / ignored-fix / weak-verification. Fixed in the **proxy** (drops the
+  cap on `/t/cd_*`); see `../harness/README.md` deviation 3. *Requires regenerating
+  traces* to take effect.
+- **B — markdown-mangled state dumps.** ChatDev's logger renders its `[SystemMessage]`
+  / `| Parameter | Value |` state tables through markdown+HTML, mangling code shown
+  there (`__init__`→`init`, `<Button-1>`→``, `<`→`&lt;`) while the dialogue stays
+  intact — the judge read this as code/state corruption *between agents*. Fixed by an
+  artifact note injected into both judge stages (`prompts.py:RENDERING_ARTIFACTS`),
+  identical for both eras so old-vs-new stays comparable. (The note explicitly does
+  **not** excuse genuinely empty state like an empty `requirements` — confound "D",
+  a real but single-agent extraction issue, is left to be judged normally.)
+- **C — the judge's own input truncation.** `[MIDDLE OF TRACE TRUNCATED]` was inserted
+  by `judge.py` for traces over the char cap, then misreported as a ChatDev event.
+  `MAX_TRACE_CHARS` raised 400K→1M (env-overridable) and the marker is now explicitly
+  attributed to the harness, with a matching note in both prompts.
+
+Net effect on the **already-written** `judged/` files: none — they are stale and must
+be regenerated. These fixes change what the *next* judge run sees.
+
 ## Run
 
 ```bash

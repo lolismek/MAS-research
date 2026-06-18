@@ -39,7 +39,13 @@ JUDGE_MODEL = os.environ.get('JUDGE_MODEL', 'openai/gpt-5.5')
 BASE = 'https://api.perplexity.ai/v1'
 KEY = os.environ['PERPLEXITY_API_KEY']
 OUT = os.path.join(ROOT, 'judging', 'judged')
-MAX_TRACE_CHARS = 400_000  # head+tail truncation beyond this
+# Head+tail elision guard for the judge's own context window. Set well above the
+# largest traces (originals run to ~414K chars; full-completion gpt-5.4-mini reruns
+# are larger once the max_tokens truncation is removed), so a complete trace is
+# normally judged whole. When a trace IS over the limit the inserted marker is
+# explicitly attributed to this harness (confound "C") so the judge does not report
+# its own elision as a ChatDev finding.
+MAX_TRACE_CHARS = int(os.environ.get('MAX_TRACE_CHARS', 1_000_000))
 # MAST 14-mode taxonomy lives in the external mast_repo clone (gitignored).
 # Set MAST_REPO to that clone; defaults to shared/mast/mast_repo. See shared/mast/README.md.
 MAST_REPO = os.environ.get('MAST_REPO', os.path.join(REPO_ROOT, 'shared', 'mast', 'mast_repo'))
@@ -91,7 +97,10 @@ def truncate(t):
     if len(t) <= MAX_TRACE_CHARS:
         return t
     h = MAX_TRACE_CHARS // 2
-    return t[:h] + '\n...[MIDDLE OF TRACE TRUNCATED]...\n' + t[-h:]
+    return (t[:h] + '\n\n...[EVALUATION-HARNESS NOTE: the middle of this trace was '
+            'elided by the judge to fit its context window. This is NOT part of the '
+            'ChatDev run and is not a ChatDev event -- do not treat it as a '
+            'finding.]...\n\n' + t[-h:])
 
 
 def judge_trace(trace_text, meta):
