@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Magentic-One — GAIA trace failure analysis</title>
+<style>
+  :root{
+    --bg:#0f1116; --panel:#161922; --panel2:#1d2130; --line:#2a2f3e; --txt:#e7e9ee;
+    --muted:#8b91a3; --accent:#6ea8fe;
+    --orc:#a47be0; --web:#4d8bf0; --ast:#3fb27f; --fs:#2bb6b0; --ct:#e0a13a; --us:#6b7280;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--txt);height:100vh;overflow:hidden}
+  .app{display:grid;grid-template-columns:330px 1fr;height:100vh}
+  .side{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;display:flex;flex-direction:column}
+  .side h1{font-size:13px;margin:0;padding:14px 14px 4px;letter-spacing:.04em;color:var(--muted);text-transform:uppercase}
+  .stats{padding:0 14px 8px;font-size:11px;color:var(--muted);line-height:1.7}
+  .stats b{color:var(--txt)}
+  .stats .seg{display:inline-block;margin-right:9px;white-space:nowrap}
+  .search{margin:6px 10px 8px;padding:7px 9px;background:var(--panel2);border:1px solid var(--line);border-radius:7px;color:var(--txt);font-size:13px}
+  .tlist{flex:1;overflow-y:auto;padding:0 6px 20px}
+  .titem{padding:8px 9px;border-radius:8px;cursor:pointer;margin-bottom:3px;border:1px solid transparent}
+  .titem:hover{background:var(--panel2)}
+  .titem.active{background:var(--panel2);border-color:var(--accent)}
+  .titem .uid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--accent)}
+  .titem .q{color:var(--muted);font-size:12px;margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .badges{margin-top:5px;display:flex;flex-wrap:wrap;gap:4px}
+  .b{font-size:10px;padding:1px 6px;border-radius:20px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .b.ok{color:#7fd8a8;border-color:#2e5b43}.b.no{color:#e0c060;border-color:#5b522e}.b.wr{color:#f0928f;border-color:#5b2e2e}
+  .b.sub{color:#7fd8a8;border-color:#2e5b43;background:#13241b}
+  .b.gen-partial{color:#ff8a8a;border-color:#7a2e2e;background:#2a1414}
+  .b.gen-borderline{color:#ffc06a;border-color:#6b4a1e;background:#241a0e}
+  .b.cat{background:var(--panel)}
+  .main{overflow-y:auto;position:relative}
+  .wrap{max-width:940px;margin:0 auto;padding:22px 26px 140px}
+  .task{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:18px}
+  .task .qtext{font-size:15px;margin:2px 0 12px;white-space:pre-wrap}
+  .kv{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;margin-bottom:6px}
+  .kv .lab{color:var(--muted)}
+  .uidm{font-family:ui-monospace,Menlo,monospace;color:var(--accent)}
+  .verdict{margin-top:12px;border-top:1px solid var(--line);padding-top:12px}
+  .vrow{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;margin-bottom:8px;align-items:center}
+  .chip{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:#cfd3de;background:var(--panel2)}
+  .chip.mast{font-family:ui-monospace,Menlo,monospace;color:#9fd0ff;border-color:#2e4a6b}
+  .chip.hl{color:#d8c4ff;border-color:#46356b;background:#1a1426}
+  .cause{margin:10px 0 4px;padding:10px 12px;background:#1a1410;border:1px solid #4a3a22;border-radius:9px;color:#f3d9b8;font-size:13.5px;white-space:pre-wrap}
+  .cause .lab{color:#c79a5e;text-transform:uppercase;font-size:10px;letter-spacing:.06em;display:block;margin-bottom:3px}
+  details.v{margin:6px 0}
+  details.v>summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:600;list-style:none}
+  details.v>summary::-webkit-details-marker{display:none}
+  details.v>summary:before{content:"▸ ";color:var(--muted)}
+  details.v[open]>summary:before{content:"▾ "}
+  details.v .body{padding:8px 4px 4px;color:#cfd3de;white-space:pre-wrap}
+  h2.sec{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:6px 0 6px}
+  .note{font-size:12px;color:var(--muted);background:var(--panel);border:1px dashed var(--line);border-radius:8px;padding:8px 11px;margin:0 0 14px}
+  .msg{display:flex;margin:10px 0;gap:10px}
+  .msg .av{width:38px;height:38px;border-radius:8px;flex:0 0 38px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff}
+  .bubble{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 13px;cursor:pointer;flex:1;border-left-width:3px;min-width:0}
+  .bubble:hover{background:var(--panel2)}
+  .bubble .who{font-weight:700;font-size:12.5px;margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .bubble .meta{font-size:11px;color:var(--muted);font-weight:400}
+  .bubble .txt{white-space:pre-wrap;color:#dfe2ea;font-size:13.5px;overflow:hidden;text-overflow:ellipsis}
+  .src-MagenticOneOrchestrator{--c:var(--orc)} .src-WebSurfer{--c:var(--web)} .src-Assistant{--c:var(--ast)}
+  .src-FileSurfer{--c:var(--fs)} .src-ComputerTerminal{--c:var(--ct)} .src-user{--c:var(--us)} .src-q{--c:var(--us)}
+  .av{background:var(--c)} .bubble{border-left-color:var(--c)}
+  .who .who-name{color:var(--c)}
+  .kindtag{font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:0 7px;margin-left:6px}
+  .bubble.k-final{background:#15281d;border-color:#2e5b43}
+  .bubble.k-final .txt{color:#9be7bd;font-weight:700;font-family:ui-monospace,Menlo,monospace}
+  .bubble.k-ledger{border-style:dashed}
+  .drawer{position:fixed;top:0;right:0;width:min(720px,58vw);height:100vh;background:var(--panel);border-left:1px solid var(--line);box-shadow:-20px 0 50px rgba(0,0,0,.5);transform:translateX(100%);transition:transform .18s ease;overflow-y:auto;z-index:20}
+  .drawer.open{transform:translateX(0)}
+  .drawer .dhead{position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--line);padding:14px 18px;display:flex;justify-content:space-between;align-items:center;z-index:2}
+  .drawer .dhead .x{cursor:pointer;color:var(--muted);font-size:20px;line-height:1}
+  .drawer .dbody{padding:16px 18px 80px}
+  .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:14px 0 5px}
+  .pub{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:11px 13px;white-space:pre-wrap;color:#dfe2ea;font-size:13.5px}
+  .pub.hub{background:#181426;border-color:#3a2f54}
+  .code{font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;padding:11px 13px;color:#c7ccd9;background:#0d0f15;border:1px solid var(--line);border-radius:9px}
+  .hint{color:var(--muted);font-size:12px}
+  .empty{padding:60px;text-align:center;color:var(--muted)}
+  .err{margin:40px auto;max-width:560px;background:#241a1a;border:1px solid #5b2e2e;border-radius:10px;padding:18px}
+  code.cmd{background:#000;padding:2px 7px;border-radius:5px;color:#7fd8a8;font-family:ui-monospace,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="side">
+    <h1>magentic-one · failure analysis</h1>
+    <div class="stats" id="stats"></div>
+    <input class="search" id="search" placeholder="filter by id / level / outcome / misalignment / MAST…">
+    <div class="tlist" id="tlist"></div>
+  </div>
+  <div class="main"><div class="wrap" id="wrap"><div class="empty">Loading traces…</div></div></div>
+</div>
+<div class="drawer" id="drawer"><div class="dhead"><div id="dtitle"></div><div class="x" onclick="closeDrawer()">✕</div></div><div class="dbody" id="dbody"></div></div>
+
+<script>
+const ABBR={MagenticOneOrchestrator:'ORC',WebSurfer:'WEB',Assistant:'AST',FileSurfer:'FS',ComputerTerminal:'CT',user:'YOU'};
+const KIND={ledger:'📋 Task Ledger · team · facts · plan',instruction:'🧭 orchestrator → instruction',final:'🏁 finalization',normal:'',task:''};
+let TRACES=[], cur=null;
+const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const imgify=s=>esc(s).replace(/&lt;image&gt;/g,'🖼 [screenshot]');
+const outClass=o=>o==='correct'?'ok':o==='no_answer'?'no':'wr';
+const misClass=m=>m&&m!=='none'?'gen-'+m:'';
+
+function renderStats(){
+  const c={correct:0,wrong_answer:0,no_answer:0}, m={none:0,borderline:0,partial:0}; let sub=0;
+  TRACES.forEach(t=>{c[t.outcome]=(c[t.outcome]||0)+1;m[t.misalign]=(m[t.misalign]||0)+1;if(t.substantive)sub++;});
+  const seg=(n,lab)=>`<span class="seg"><b>${n||0}</b> ${lab}</span>`;
+  document.getElementById('stats').innerHTML=
+    `${seg(c.correct,'correct')}${seg(c.wrong_answer,'wrong')}${seg(c.no_answer,'no-answer')}<br>`+
+    `${seg(sub,'substantive (incl. artifacts)')}<br>`+
+    `misalign: ${seg(m.none,'none')}${seg(m.borderline,'borderline')}${seg(m.partial,'partial')}`;
+}
+
+function renderList(filter=''){
+  const f=filter.toLowerCase();
+  const el=document.getElementById('tlist'); el.innerHTML='';
+  TRACES.forEach((t,i)=>{
+    const hay=`${t.uid8} ${t.task_type} l${t.level} ${t.outcome} ${t.misalign} ${(t.mast_codes||[]).join(' ')} ${t.verdict.headline||''}`.toLowerCase();
+    if(f && !hay.includes(f)) return;
+    const d=document.createElement('div');
+    d.className='titem'+(cur===i?' active':'');
+    d.onclick=()=>select(i);
+    d.innerHTML=`<div class="uid">${t.uid8}</div>
+      <div class="q">${esc(t.question).slice(0,120)}</div>
+      <div class="badges">
+        <span class="b cat">${t.task_type} · L${t.level}</span>
+        <span class="b ${outClass(t.outcome)}">${t.outcome}${t.exact_match?' ✓':''}</span>
+        ${t.substantive&&t.outcome!=='correct'?`<span class="b sub">~correct</span>`:''}
+        ${t.misalign!=='none'?`<span class="b ${misClass(t.misalign)}">misalign:${t.misalign}</span>`:''}
+      </div>`;
+    el.appendChild(d);
+  });
+}
+
+function select(i){cur=i;renderList(document.getElementById('search').value);renderTrace(TRACES[i]);closeDrawer();document.querySelector('.main').scrollTop=0;}
+
+function verdictBlock(t){
+  const v=t.verdict; if(!v.fields||!v.fields.length) return '';
+  const codes=(t.mast_codes||[]).map(c=>`<span class="chip mast">${esc(c)}</span>`).join(' ')||'<span class="hint">none</span>';
+  // 'Task' and 'What happened' open by default; everything else collapsed.
+  const openLabels=new Set(['task','what happened']);
+  const causeF=v.fields.find(f=>/root cause/i.test(f.label));
+  const sections=v.fields.filter(f=>!/^outcome$|root cause/i.test(f.label)).map(f=>{
+    const open=openLabels.has(f.label.toLowerCase())?' open':'';
+    const summary=f.label.toLowerCase()==='task'?'What the task asks (read me first)':esc(f.label);
+    return `<details class="v"${open}><summary>${summary}</summary><div class="body">${esc(f.text)}</div></details>`;
+  }).join('');
+  return `<div class="verdict">
+    <div class="vrow">
+      <span class="chip hl">${esc(v.headline)}</span>
+      <span class="chip ${outClass(t.outcome)}">${t.outcome}</span>
+      ${t.substantive?`<span class="chip" style="color:#7fd8a8;border-color:#2e5b43">substantively correct</span>`:''}
+      <span><span class="lab">misalignment:</span> <b style="color:${t.misalign==='none'?'var(--muted)':'#ffc06a'}">${t.misalign}</b></span>
+    </div>
+    ${causeF?`<div class="cause"><span class="lab">${esc(causeF.label)}</span>${esc(causeF.text)}</div>`:''}
+    <div class="vrow" style="margin-top:10px"><span class="lab">MAST codes:</span> ${codes}</div>
+    ${sections}
+  </div>`;
+}
+
+function renderTrace(t){
+  const cnt=Object.entries(t.counts||{}).map(([k,n])=>`${ABBR[k]||k}:${n}`).join(' · ');
+  let html=`<div class="task src-user">
+    <div class="kv"><span class="uidm">${t.uid8}</span>
+      <span class="b cat">${t.task_type} · L${t.level}</span>
+      <span class="b ${outClass(t.outcome)}">${t.outcome}</span>
+      <span class="lab">${t.seconds}s · rc=${esc(t.rc)} · run #${t.run}</span></div>
+    <div class="qtext">${esc(t.question)}</div>
+    <div class="kv"><span><span class="lab">expected:</span> <b>${esc(t.expected_answer)}</b></span>
+      <span><span class="lab">final:</span> <b>${t.final_answer==null?'<i>—</i>':esc(t.final_answer)}</b></span>
+      <span><span class="lab">messages:</span> ${cnt||'—'}</span></div>
+    ${verdictBlock(t)}
+  </div>`;
+
+  if(t.no_data || !t.timeline.length){
+    html+=`<div class="empty">No usable transcript was committed for this run — nothing to replay.</div>`;
+    document.getElementById('wrap').innerHTML=html; return;
+  }
+
+  html+=`<h2 class="sec">Hub-and-spoke transcript — click any message for its full text</h2>
+  <div class="note">The <b>MagenticOneOrchestrator</b> is the hub: it writes the Task Ledger, routes an instruction to one spoke (WebSurfer / Assistant / …), reads the reply, and self-grades — there is no Selector agent and no private reasoning layer in these console traces, so the orchestrator's internal progress-ledger JSON (the <code class="cmd">is_in_loop</code> / <code class="cmd">is_request_satisfied</code> flags the verdict cites) is not shown here.${t.backend?` &nbsp;Search backend: <code class="cmd">${esc(t.backend.replace(/^\[|\]$/g,''))}</code>.`:''}</div>`;
+
+  t.timeline.forEach((m,idx)=>{
+    if(m.role==='user'){
+      html+=`<div class="msg src-q"><div class="av">YOU</div><div class="bubble" style="cursor:default"><div class="who"><span class="who-name">Task</span></div><div class="txt">${esc(m.text)}</div></div></div>`;
+      return;
+    }
+    const tag=KIND[m.kind]?`<span class="kindtag">${KIND[m.kind]}</span>`:'';
+    html+=`<div class="msg src-${m.source}">
+      <div class="av">${ABBR[m.source]||'?'}</div>
+      <div class="bubble k-${m.kind}" onclick="showMsg(${idx})">
+        <div class="who"><span class="who-name">${esc(m.source)}</span><span class="meta">${tag} ${m.chars} chars ▸</span></div>
+        <div class="txt">${imgify(m.preview)||'<span class=hint>(empty)</span>'}</div>
+      </div></div>`;
+  });
+  document.getElementById('wrap').innerHTML=html;
+}
+
+function showMsg(idx){
+  const t=TRACES[cur], m=t.timeline[idx];
+  const mono=m.source==='WebSurfer'||m.source==='ComputerTerminal'||m.chars>900;
+  const cls=mono?'code':('pub'+(m.role==='hub'?' hub':''));
+  let h=`<div class="lbl">${m.role==='hub'?'Orchestrator (hub)':m.source} · ${KIND[m.kind]||'message'}</div>`;
+  h+=`<div class="${cls}">${imgify(m.text)||'(empty)'}</div>`;
+  openDrawer(`${ABBR[m.source]||'?'} · ${esc(m.source)} · msg ${idx+1}`, h);
+}
+
+function openDrawer(title,html){document.getElementById('dtitle').innerHTML=`<b>${title}</b>`;document.getElementById('dbody').innerHTML=html;document.getElementById('drawer').classList.add('open');}
+function closeDrawer(){document.getElementById('drawer').classList.remove('open');}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
+document.getElementById('search').addEventListener('input',e=>renderList(e.target.value));
+
+fetch('traces.json').then(r=>r.json()).then(d=>{
+  TRACES=d; renderStats(); renderList(); select(0);
+}).catch(err=>{
+  document.getElementById('wrap').innerHTML=`<div class="err"><b>Could not load traces.json.</b><br><br>
+   Browsers block <code class="cmd">fetch()</code> from <code class="cmd">file://</code>. Serve this folder over HTTP:<br><br>
+   <code class="cmd">cd magentic_one/judging/viewer &amp;&amp; python3 -m http.server 8014</code><br><br>
+   then open <code class="cmd">http://localhost:8014/</code><br><br><span class="hint">${esc(err)}</span></div>`;
+});
+</script>
+</body>
+</html>
