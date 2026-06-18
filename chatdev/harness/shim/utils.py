@@ -13,8 +13,11 @@ containerized per task, so the contamination could not occur there.)
 import importlib.util as _ilu
 import os as _os
 
-_real = _os.path.abspath(_os.path.join(
-    _os.path.dirname(__file__), '..', '..', 'chatdev_repo', 'ecl', 'utils.py'))
+# chatdev_repo lives one level up from this shim dir (chatdev/harness/chatdev_repo);
+# honor CHATDEV_REPO so the shim and run_task.py resolve to the same clone.
+_repo = _os.environ.get('CHATDEV_REPO') or _os.path.join(
+    _os.path.dirname(__file__), '..', 'chatdev_repo')
+_real = _os.path.abspath(_os.path.join(_repo, 'ecl', 'utils.py'))
 _spec = _ilu.spec_from_file_location('utils', _real)
 _mod = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)

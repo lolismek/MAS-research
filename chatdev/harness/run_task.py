@@ -44,6 +44,7 @@ def run_one(task):
     # auto-pip-installs shadowing ecl/utils.py — see shim/utils.py docstring.
     env = dict(os.environ, OPENAI_API_KEY='dummy',
                PYTHONPATH=os.path.join(HERE, 'shim'),
+               CHATDEV_REPO=REPO,  # so shim/utils.py resolves the same clone
                BASE_URL=f'{base}/t/cd_{slug}_run{n}/{v1}')
     print(f'[{slug}] run_{n} starting', flush=True)
     t0 = time.time()
