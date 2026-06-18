@@ -1,0 +1,392 @@
+{
+ "meta": {
+  "era": "new",
+  "system": "chatdev",
+  "id": "Wordle_run_1",
+  "trace": "/Users/alexjerpelea/MAS-memory-research/reproduction/runs/chatdev/Wordle/run_1/warehouse/Wordle_DefaultOrganization_20260610014143.log",
+  "task": "Wordle",
+  "original_solved": "MAYBE",
+  "human_cat2": [
+   "2.2"
+  ],
+  "cat2_screened": "medium"
+ },
+ "judge_model": "openai/gpt-5.5",
+ "stage_a": {
+  "narrative": "The run selected an Application/Python approach for a terminal Wordle game, then the coding phase produced a multi-file Python implementation despite a contradictory GUI instruction injected by configuration. The initial code mostly matched the requested terminal game, but contained a limited word list including at least one six-letter word, and the review cycle introduced churn: the reviewer first falsely flagged already-correct duplicate-letter logic, the programmer changed validation to call a nonexistent function, and a later review caught the import mismatch. Several modification outputs were visibly truncated or only partially applied, and some internal code placeholders became corrupted between phases. Automated testing then ran the interactive program without stdin, got EOFError, and the system \u201cfixed\u201d this by making the program exit immediately in non-interactive contexts; the next test passed only because the game no longer reached gameplay under that harness. Requirements and manual phases followed, but the generated requirements content appears not to have propagated into the manual phase, and the final manual output is visibly cut off mid-sentence. The final project therefore has useful code, but the run\u2019s validation was superficial and some user-facing/documentation and latent correctness issues remain.",
+  "task_outcome": {
+   "completed": false,
+   "basis": "A runnable terminal app was generated and the superficial test passed, but the final artifact still has latent game-breaking word-list risk, was not actually tested through gameplay, and the manual output is incomplete."
+  },
+  "findings": [
+   {
+    "description": "The global configuration enabled GUI design even though the user explicitly requested a Linux terminal game with no dedicated GUI platform.",
+    "agents": [
+     "System"
+    ],
+    "evidence": "ChatDevConfig.gui_design: True",
+    "impact": "This later injected contradictory GUI requirements into the coding prompt, creating avoidable ambiguity.",
+    "possibly_innocent": false,
+    "kind": "config conflict"
+   },
+   {
+    "description": "The online logging Flask app repeatedly failed or was unavailable throughout the run.",
+    "agents": [
+     "System"
+    ],
+    "evidence": "flask app.py did not start for online log",
+    "impact": "No direct product impact observed, but it indicates degraded observability and repeated noisy logging.",
+    "possibly_innocent": true,
+    "kind": "logging failure"
+   },
+   {
+    "description": "The DemandAnalysis phase instructed agents to discuss only modality, but the agents discussed implementation details such as Python, validation, colored feedback, and win/lose logic.",
+    "agents": [
+     "Chief Product Officer",
+     "Chief Executive Officer"
+    ],
+    "evidence": "Note that we must ONLY discuss the product modality and do not discuss anything else!; supporting interactive guesses, color-coded feedback, input validation, 6 attempts, and win/lose handling directly in Linux Terminal.",
+    "impact": "No harmful outcome observed, but it violated the phase constraint and duplicated later design reasoning.",
+    "possibly_innocent": true,
+    "kind": "scope drift"
+   },
+   {
+    "description": "The LanguageChoose phase terminated after the CTO selected Python without a visible separate CEO opinion, despite the instruction that all express opinions and agree unanimously.",
+    "agents": [
+     "Chief Technology Officer",
+     "Chief Executive Officer"
+    ],
+    "evidence": "Once we all have expressed our opinion(s) and agree with the results of the discussion unanimously; <INFO> Python",
+    "impact": "No observed harm because Python was appropriate, but the consensus protocol was shortened.",
+    "possibly_innocent": true,
+    "kind": "premature consensus"
+   },
+   {
+    "description": "The Coding prompt injected a GUI requirement that contradicted both the user request and the earlier modality rationale.",
+    "agents": [
+     "Chief Technology Officer",
+     "Programmer",
+     "System"
+    ],
+    "evidence": "The software should be equipped with graphical user interface (GUI) so that user can visually and graphically use it; so you must choose a GUI framework",
+    "impact": "Created conflicting instructions; the programmer had to decide to ignore the GUI requirement.",
+    "possibly_innocent": false,
+    "kind": "prompt contradiction"
+   },
+   {
+    "description": "The Programmer explicitly overrode the GUI instruction and implemented a terminal app only.",
+    "agents": [
+     "Programmer"
+    ],
+    "evidence": "Note: although the prompt mentions GUI, the customer explicitly requested a Linux Terminal game, so I implemented a terminal app only.",
+    "impact": "This was probably the right product decision, but it was an instruction conflict resolved unilaterally by one agent.",
+    "possibly_innocent": true,
+    "kind": "instruction override"
+   },
+   {
+    "description": "The Programmer did not strictly follow the coding phase's requested output format; it added headings, explanatory prose, component descriptions, and optional follow-up offers around the file blocks.",
+    "agents": [
+     "Programmer"
+    ],
+    "evidence": "Below is a complete Python terminal-based Wordle game implementation using a clean multi-file architecture.; If you want, I can also provide:",
+    "impact": "The parser still extracted files, but extra prose increases the chance of extraction errors.",
+    "possibly_innocent": true,
+    "kind": "format looseness"
+   },
+   {
+    "description": "The initial word list included a non-5-letter entry, violating the core daily 5-letter requirement and creating a latent runtime failure if selected as the daily solution.",
+    "agents": [
+     "Programmer",
+     "Code Reviewer"
+    ],
+    "evidence": "\"dance\", \"death\", \"debate\", \"delay\"; the list contains `\"debate\"` which is 6 letters.",
+    "impact": "If `debate` is selected by the date hash, the solution length becomes 6 while the game only accepts 5-letter guesses, causing incorrect or crashing gameplay.",
+    "possibly_innocent": false,
+    "kind": "invalid word list"
+   },
+   {
+    "description": "The first Code Reviewer falsely claimed the duplicate-letter scoring code had a bug and possible KeyError, even though the shown code already checked the key with `solution_counts.get(g, 0) > 0` before decrementing `solution_counts[g]`.",
+    "agents": [
+     "Code Reviewer"
+    ],
+    "evidence": "this can produce wrong feedback or even a `KeyError` when the guessed letter was not in `solution_counts` as a key; if solution_counts.get(g, 0) > 0:",
+    "impact": "Wasted a review/modification cycle and caused unnecessary churn in already-correct logic.",
+    "possibly_innocent": false,
+    "kind": "false review"
+   },
+   {
+    "description": "The first review mixed its highest-priority duplicate-letter claim with a separate validation-policy concern, even though it was asked to propose one highest-priority comment.",
+    "agents": [
+     "Code Reviewer"
+    ],
+    "evidence": "propose one comment with the highest priority; Also, the current validation rejects guesses not in `WORD_LIST`, which is stricter than the task requirement",
+    "impact": "The programmer changed validation naming/design in response, which introduced an import bug.",
+    "possibly_innocent": false,
+    "kind": "multi-issue review"
+   },
+   {
+    "description": "The Programmer attempted to address the validation comment by importing and calling `is_allowed_guess`, but did not successfully add that function to `word_bank.py`.",
+    "agents": [
+     "Programmer",
+     "Code Reviewer"
+    ],
+    "evidence": "from word_bank import get_daily_word, is_allowed_guess; if not is_allowed_guess(guess):; word_bank.py only defines `is_valid_word`",
+    "impact": "Introduced a startup `ImportError` until a later review caught it.",
+    "possibly_innocent": false,
+    "kind": "introduced bug"
+   },
+   {
+    "description": "The modification output after the first review was visibly truncated in the trace while listing `word_bank.py`, so intended changes to the word bank were not fully available to the code updater.",
+    "agents": [
+     "Programmer",
+     "System"
+    ],
+    "evidence": "word_bank.py\n```python\n'''\nDaily word selection and word validation utilities.\n'''\nfrom __future__ import annotations\n\nfrom datetime import date\nimport hashlib\n\n# A curated list of common 5-letter English words.\nWORD_LIST = [\n    \"about\", \"above\", \"actor\", \"admit\", \"adopt\", \"adult\", \"after\", \"again\", \"agent\", \"agree\",\n    \"album\", \"alert\", \"allow\", \"alone\", \"along\", \"anger\", \"apart\", \"apple\", \"apply",
+    "impact": "Only `wordle_game.py` and `wordle_logic.py` were updated; the missing `is_allowed_guess` function and invalid word-list issue remained.",
+    "possibly_innocent": false,
+    "kind": "truncated output"
+   },
+   {
+    "description": "Internal code state became corrupted in a later placeholder, showing malformed Python that differed from the code previously written.",
+    "agents": [
+     "System"
+    ],
+    "evidence": "if name == \"main\":; from future import annotations; print(f\"\nCongratulations! You guessed the word in {len(self.attempts)} attempt(s).\")",
+    "impact": "This indicates lossy or unsafe code serialization between agents; later prompts could have misled reviewers or programmers.",
+    "possibly_innocent": false,
+    "kind": "state corruption"
+   },
+   {
+    "description": "The second Code Reviewer correctly caught the import mismatch caused by the previous modification.",
+    "agents": [
+     "Code Reviewer"
+    ],
+    "evidence": "`WordleGame` imports `is_allowed_guess` from `word_bank`, but `word_bank.py` only defines `is_valid_word`. This will cause an `ImportError` at startup",
+    "impact": "Prevented a fatal startup error, but only after an avoidable extra cycle.",
+    "possibly_innocent": true,
+    "kind": "bug recovery"
+   },
+   {
+    "description": "Visible feedback state between the import-bug review and the next modification became inconsistent: the trace shows later modification comments focused again on duplicate-letter handling and `debate`, not the just-stated import mismatch.",
+    "agents": [
+     "Code Reviewer",
+     "Programmer",
+     "System"
+    ],
+    "evidence": "Highest priority issue: `WordleGame` imports `is_allowed_guess` from `word_bank`; Comments on Codes:\n\"<COMMENT>\nHighest-priority issue: the Wordle feedback logic has a bug in duplicate-letter handling",
+    "impact": "Suggests comments may have been overwritten, merged, or distorted between phases; the final programmer nevertheless fixed the import.",
+    "possibly_innocent": false,
+    "kind": "feedback drift"
+   },
+   {
+    "description": "The Code Reviewer later repeated a duplicate-letter criticism even though the displayed recommended implementation was essentially the same two-pass algorithm already present.",
+    "agents": [
+     "Code Reviewer"
+    ],
+    "evidence": "Recommended corrected implementation:; if remaining_counts.get(g, 0) > 0:\n            result[i] = \"yellow\"\n            remaining_counts[g] -= 1",
+    "impact": "More redundant review work; it may have distracted from the actually unresolved non-5-letter word-list problem.",
+    "possibly_innocent": false,
+    "kind": "repeated review"
+   },
+   {
+    "description": "A later Programmer modification output was again visibly truncated during `wordle_logic.py`, and the updater only applied a small `wordle_game.py` change.",
+    "agents": [
+     "Programmer",
+     "System"
+    ],
+    "evidence": "remaining_counts[s] = remaining_counts.get(s,; wordle_game.py updated.",
+    "impact": "Potentially intended full-code fixes were not applied; unresolved issues such as `debate` remained.",
+    "possibly_innocent": false,
+    "kind": "partial application"
+   },
+   {
+    "description": "Automated testing ran the interactive program without stdin, producing EOFError twice rather than simulating user input.",
+    "agents": [
+     "Software Test Engineer",
+     "System"
+    ],
+    "evidence": "EOFError: EOF when reading a line",
+    "impact": "The test did not exercise Wordle gameplay, validation, coloring, win/loss, or scoring behavior.",
+    "possibly_innocent": false,
+    "kind": "bad test harness"
+   },
+   {
+    "description": "The test error summary correctly identified the EOF as a non-interactive environment issue, but still framed it as a bug to fix in the application.",
+    "agents": [
+     "Programmer",
+     "Software Test Engineer"
+    ],
+    "evidence": "This is not a logic bug in the Wordle rules themselves; it means the program was run in a non-interactive environment where no stdin input was available.; Recommended fix\nWrap the input call in `try/except EOFError`",
+    "impact": "The subsequent fix optimized for the test harness rather than validating real interactive functionality.",
+    "possibly_innocent": true,
+    "kind": "test-driven workaround"
+   },
+   {
+    "description": "The final test fix added an early `sys.stdin.isatty()` exit, so the automated test passed without playing the game at all.",
+    "agents": [
+     "Programmer",
+     "System",
+     "Software Test Engineer"
+    ],
+    "evidence": "if not sys.stdin.isatty():\n            print(\n                \"\\nThis game must be run in an interactive terminal.\\n\"\n                \"No stdin input was detected.\\n\"\n            )\n            return; The software run successfully without errors.",
+    "impact": "The reported pass is superficial: it verifies non-interactive graceful exit, not the requested interactive Wordle behavior.",
+    "possibly_innocent": false,
+    "kind": "hollow pass"
+   },
+   {
+    "description": "The final `isatty()` gate may make legitimate automated or piped usage impossible, even though the game otherwise could have accepted scripted input for tests.",
+    "agents": [
+     "Programmer"
+    ],
+    "evidence": "This game must be run in an interactive terminal.; No stdin input was detected.",
+    "impact": "Reduces testability and flexibility; mostly acceptable for the explicit terminal-interactive requirement but still suboptimal.",
+    "possibly_innocent": true,
+    "kind": "overstrict input"
+   },
+   {
+    "description": "The environment documentation phase produced a `requirements.txt`, but the later Manual phase received an empty Requirements placeholder.",
+    "agents": [
+     "Programmer",
+     "Chief Product Officer",
+     "System"
+    ],
+    "evidence": "requirements.txt\n\n```txt\n# No external third-party dependencies are required.; Requirements:\n\n\"\"",
+    "impact": "Dependency information was dropped between agents; the manual had to infer dependencies from code instead of using the generated requirements artifact.",
+    "possibly_innocent": false,
+    "kind": "lost artifact"
+   },
+   {
+    "description": "The requirements reflection redundantly rewrote the already adequate requirements text, adding another seminar conclusion with an `<INFO>` wrapper.",
+    "agents": [
+     "Programmer",
+     "Chief Executive Officer",
+     "Counselor"
+    ],
+    "evidence": "Programmer: requirements.txt\n```txt\n# No external third-party dependencies are required.; <INFO> requirements.txt\n```txt\n# This project has no external third-party dependencies.",
+    "impact": "No observed product harm, but it added unnecessary cost and may have contributed to artifact propagation confusion.",
+    "possibly_innocent": true,
+    "kind": "redundant reflection"
+   },
+   {
+    "description": "Despite producing requirements content, the final software info still reports `env_lines=-1`, suggesting the environment file may not have been counted or persisted as expected.",
+    "agents": [
+     "System"
+    ],
+    "evidence": "\ud83d\udccb**env_lines**=-1",
+    "impact": "Possible artifact accounting or file-generation issue; no direct runtime impact observed because no external dependencies are needed.",
+    "possibly_innocent": true,
+    "kind": "artifact accounting"
+   },
+   {
+    "description": "The manual generated by the Chief Product Officer is visibly incomplete, ending mid-sentence in the Word validation section.",
+    "agents": [
+     "Chief Product Officer"
+    ],
+    "evidence": "## Word validation\n\nBefore scoring a guess, the game",
+    "impact": "The user manual is incomplete and omits later sections promised in the table of contents, such as project structure, notes, and troubleshooting.",
+    "possibly_innocent": false,
+    "kind": "truncated manual"
+   },
+   {
+    "description": "The final manual claims proper Wordle-style scoring and dictionary validation, but these claims were not meaningfully tested after the `isatty()` workaround, and the dictionary still includes a six-letter word.",
+    "agents": [
+     "Chief Product Officer",
+     "Software Test Engineer",
+     "Programmer"
+    ],
+    "evidence": "Proper Wordle-style feedback scoring; The software run successfully without errors.; \"dance\", \"death\", \"debate\", \"delay\"",
+    "impact": "User-facing documentation overstates assurance; latent correctness problems remain despite a pass report.",
+    "possibly_innocent": false,
+    "kind": "overstated validation"
+   }
+  ]
+ },
+ "stage_b": {
+  "task_success": false,
+  "summary": "The system produced a terminal Wordle app but left latent task violations and incomplete artifacts while relying on superficial testing and losing/ignoring key review and dependency information.",
+  "modes": {
+   "1.1": {
+    "present": true,
+    "evidence": "Task: \"Design a standard wordle game by providing a daily 5-letter English language word.\"\nWORD_LIST = [\n    \"about\", \"above\", \"actor\", \"admit\", \"adopt\", \"adult\", \"after\", \"again\", \"agent\", \"agree\",\n    \"album\", \"alert\", \"allow\", \"alone\", \"along\", \"anger\", \"apart\", \"apple\", \"apply\", \"arena\",\n    \"argue\", \"arise\", \"aside\", \"asset\", \"audio\", \"audit\", \"avoid\", \"awake\", \"award\", \"basic\",\n    \"basis\", \"beach\", \"begin\", \"being\", \"below\", \"blame\", \"blind\", \"board\", \"brain\", \"brand\",\n    \"bread\", \"break\", \"breed\", \"brief\", \"bring\", \"broad\", \"brown\", \"build\", \"buyer\", \"cable\",\n    \"camel\", \"candy\", \"carry\", \"catch\", \"cause\", \"chain\", \"chair\", \"chart\", \"chase\", \"cheap\",\n    \"check\", \"chest\", \"chief\", \"child\", \"class\", \"clean\", \"clear\", \"clock\", \"close\", \"coach\",\n    \"coast\", \"could\", \"count\", \"court\", \"cover\", \"crash\", \"cream\", \"crime\", \"crowd\", \"daily\",\n    \"dance\", \"death\", \"debate\", \"delay\", \"deter\", \"diner\", \"doubt\", \"draft\", \"drama\", \"dream\",",
+    "note": "The final allowed/daily word list still includes the six-letter word \u201cdebate,\u201d violating the five-letter requirement."
+   },
+   "1.2": {
+    "present": false,
+    "evidence": null,
+    "note": null
+   },
+   "1.3": {
+    "present": true,
+    "evidence": "Programmer: **Programmer<->Chief Technology Officer on : EnvironmentDoc, turn 0**\n\nrequirements.txt\n\n```txt\n# No external third-party dependencies are required.\n# This project uses only Python's standard library:\n# - dataclasses\n# - datetime\n# - hashlib\n# - sys\n```\n\nChief Executive Officer: **Chief Executive Officer<->Counselor on : Reflection, turn 0**\n\nrequirements.txt\n```txt\n# This project has no external third-party dependencies.\n# It uses only Python standard library modules.\n```",
+    "note": "The requirements artifact was redundantly rewritten in a reflection phase."
+   },
+   "1.4": {
+    "present": true,
+    "evidence": "'codes': 'main.py\\npython\\n\\'\\'\\'\\nEntry point for the terminal Wordle game.\\n\\'\\'\\'\\nfrom wordle_game import WordleGame\\ndef main() -&amp;gt; None:\\n    \"\"\"Start the Wordle game.\"\"\"\\n    game = WordleGame()\\n    game.run()\\nif name == \"main\":\\n    main()\\n\\n\\nwordle_game.py\\npython\\n\\'\\'\\'\\nGame controller for the terminal Wordle application.\\n\\'\\'\\'\\nfrom future import annotations",
+    "note": "A later prompt showed corrupted prior code state, losing the earlier correct `__name__` and `__future__` forms."
+   },
+   "1.5": {
+    "present": false,
+    "evidence": null,
+    "note": null
+   },
+   "2.1": {
+    "present": false,
+    "evidence": null,
+    "note": null
+   },
+   "2.2": {
+    "present": true,
+    "evidence": "It should be playable from Linux Terminal, and does not require me to access a dedicated UX or GUI platform, i.e. print the results on terminal at each stage and let me play it there by entering inputs.\n\nThe software should be equipped with graphical user interface (GUI) so that user can visually and graphically use it; so you must choose a GUI framework (e.g., in Python, you can implement GUI via tkinter, Pygame, Flexx, PyGUI, etc,).\n\nNote: although the prompt mentions GUI, the customer explicitly requested a Linux Terminal game, so I implemented a terminal app only.",
+    "note": "The programmer proceeded on a unilateral interpretation of conflicting GUI versus terminal requirements without asking for clarification."
+   },
+   "2.3": {
+    "present": false,
+    "evidence": null,
+    "note": null
+   },
+   "2.4": {
+    "present": true,
+    "evidence": "Programmer: **Programmer<->Chief Technology Officer on : EnvironmentDoc, turn 0**\n\nrequirements.txt\n\n```txt\n# No external third-party dependencies are required.\n# This project uses only Python's standard library:\n# - dataclasses\n# - datetime\n# - hashlib\n# - sys\n```\n\n| **placeholders** | {'task': 'Design a standard wordle game by providing a daily 5-letter English language word. The game should allow a player to take 6 turns to guess the word. Correct guess for each letter is colored by green (correct letter in correct position), grey for invalid letter, or yellow for correct letter in wrong position. It should be playable from Linux Terminal, and does not require me to access a dedicated UX or GUI platform, i.e. print the results on terminal at each stage and let me play it there by entering inputs. If the player guesses the word within the allowed number of attempts, they win. If not, the solution is revealed. Validate each guess for proper feedback.', 'modality': 'application', 'ideas': '', 'language': ' Python', 'codes': 'main.py\\npython... ', 'requirements': ''} |",
+    "note": "The generated requirements information was not passed into the Manual phase, whose requirements placeholder was empty."
+   },
+   "2.5": {
+    "present": true,
+    "evidence": "Additional important note: the current validator accepts only words from `WORD_LIST`, which is fine for gameplay, but the list contains `\"debate\"` which is 6 letters. Remove any non-5-letter entries from `WORD_LIST` to avoid violating the 5-letter requirement.\n\nWORD_LIST = [\n    \"about\", \"above\", \"actor\", \"admit\", \"adopt\", \"adult\", \"after\", \"again\", \"agent\", \"agree\",\n    \"album\", \"alert\", \"allow\", \"alone\", \"along\", \"anger\", \"apart\", \"apple\", \"apply\", \"arena\",\n    \"argue\", \"arise\", \"aside\", \"asset\", \"audio\", \"audit\", \"avoid\", \"awake\", \"award\", \"basic\",\n    \"basis\", \"beach\", \"begin\", \"being\", \"below\", \"blame\", \"blind\", \"board\", \"brain\", \"brand\",\n    \"bread\", \"break\", \"breed\", \"brief\", \"bring\", \"broad\", \"brown\", \"build\", \"buyer\", \"cable\",\n    \"camel\", \"candy\", \"carry\", \"catch\", \"cause\", \"chain\", \"chair\", \"chart\", \"chase\", \"cheap\",\n    \"check\", \"chest\", \"chief\", \"child\", \"class\", \"clean\", \"clear\", \"clock\", \"close\", \"coach\",\n    \"coast\", \"could\", \"count\", \"court\", \"cover\", \"crash\", \"cream\", \"crime\", \"crowd\", \"daily\",\n    \"dance\", \"death\", \"debate\", \"delay\", \"deter\", \"diner\", \"doubt\", \"draft\", \"drama\", \"dream\",",
+    "note": "The reviewer\u2019s substantive instruction to remove the non-five-letter word was not applied in the final code."
+   },
+   "2.6": {
+    "present": true,
+    "evidence": "Highest priority issue: `wordle_logic.evaluate_guess()` has a bug in the yellow-letter accounting, which breaks standard Wordle feedback for guesses with repeated letters. In the second pass, the code checks `solution_counts.get(g, 0) > 0` but then decrements `solution_counts[g]` instead of the correct matched letter count; this can produce wrong feedback or even a `KeyError` when the guessed letter was not in `solution_counts` as a key.\n\nFix `evaluate_guess()` by decrementing the count for the guessed letter only after confirming it exists in `solution_counts`, and ensure repeated-letter handling follows standard Wordle rules. For example, keep a per-letter remaining-count map for unmatched solution letters, then in the second pass do:\n- if `result[i] != \"green\"` and `solution_counts.get(g, 0) > 0`:\n  - set `result[i] = \"yellow\"`\n  - decrement `solution_counts[g] -= 1`",
+    "note": "The reviewer claimed decrementing `solution_counts[g]` was the bug while recommending the same guarded decrement as the fix."
+   },
+   "3.1": {
+    "present": true,
+    "evidence": "## Word validation\n\nBefore scoring a guess, the game\n\n[2026-10-06 01:47:51 INFO] **[Post Info]**\n\nSoftware Info:",
+    "note": "The run terminated after producing a visibly incomplete manual."
+   },
+   "3.2": {
+    "present": true,
+    "evidence": "if not sys.stdin.isatty():\n            print(\n                \"\\nThis game must be run in an interactive terminal.\\n\"\n                \"No stdin input was detected.\\n\"\n            )\n            return\n\n[2026-10-06 01:47:02 INFO] **[Test Reports]**:\n\nThe software run successfully without errors.\n\n[2026-10-06 01:47:02 INFO] **[Test Info]**\n\nAI User (Software Test Engineer):\nTest Pass!",
+    "note": "The final pass only verified graceful non-interactive exit, not Wordle gameplay."
+   },
+   "3.3": {
+    "present": true,
+    "evidence": "[2026-10-06 01:46:08 INFO] **[Test Reports]**:\n\nTraceback (most recent call last):\n  File \"main.py\", line 10, in <module>\n    main()\n  File \"main.py\", line 8, in main\n    game.run()\n  File \"wordle_game.py\", line 21, in run\n    guess = input(\nEOFError: EOF when reading a line\n\n[2026-10-06 01:47:02 INFO] **[Test Reports]**:\n\nThe software run successfully without errors.",
+    "note": "The test procedure did not simulate user input and then accepted a non-gameplay exit as success."
+   }
+  }
+ },
+ "usage": {
+  "stage_a": {
+   "input_tokens": 128735,
+   "output_tokens": 5103,
+   "cost": 0.79677
+  },
+  "stage_b": {
+   "input_tokens": 155169,
+   "output_tokens": 5333,
+   "cost": 0.84483
+  }
+ }
+}
