@@ -2,14 +2,23 @@
 
 Appendix to `FAILURE_ANALYSIS.md`. One block per trace, produced 2026-06-15 by a
 subagent that read the console transcript + the orchestrator wire-log digest.
-Format per the shared rubric: outcome · what-happened · failure chain · root cause
-· MAST codes · genuine-inter-agent-misalignment verdict · structural factors ·
-confidence + evidence quotes.
+Format per the shared rubric: outcome · task (the question, what a correct answer
+requires, and the gold) · what-happened · failure chain · root cause · MAST codes
+· genuine-inter-agent-misalignment verdict · structural factors · confidence +
+evidence quotes. The per-trace **Task** summaries were added 2026-06-18 for
+standalone readability, sourced from `../tasks/magentic_gaia_tasks.json`; they
+describe the GAIA item itself (not this run), so this appendix can be read on its
+own without cross-referencing the task set.
 
 ---
 
 ## TRACE 0383a3ee (L1) — SUCCESS / control
 - **Outcome:** correct.
+- **Task:** *"On the BBC Earth YouTube video of the Top 5 Silliest Animal
+  Moments, what species of bird is featured?"* (L1). A correct answer requires
+  locating that one named BBC Earth video and reading off the bird species it
+  features — a single-fact web lookup, no computation. Gold: **Rockhopper
+  penguin** (a short, time-stable proper noun).
 - **What happened:** Orchestrator planned a single web lookup; WebSurfer's SERP
   already named the species (*"We start with rockhopper penguins scaling a steep
   island cliff"*, console L70); orchestrator added one confirmatory page-open
@@ -33,6 +42,13 @@ confidence + evidence quotes.
 
 ## TRACE 27d5d136 (L1) — grading artifact (substantively correct)
 - **Outcome:** grading-artifact-only.
+- **Task:** Six biconditional statements of propositional logic are given;
+  *"Which of the above is not logically equivalent to the rest? Provide the full
+  statement that doesn't fit."* (L1). A correct answer requires checking each
+  biconditional: five are standard tautologies (De Morgan ×2, contrapositive,
+  material implication, and the negated-implication identity), while statement 5,
+  `(¬A → B) ↔ (A ∨ ¬B)`, is false — since `¬A → B ≡ A ∨ B`, not `A ∨ ¬B`. Pure
+  reasoning, zero tools. Gold: **`(¬A → B) ↔ (A ∨ ¬B)`** (the full statement).
 - **What happened:** The Assistant correctly identified statement 5 as the odd one
   out and the orchestrator emitted exactly that formula — but in LaTeX
   (`(\neg A \to B) \leftrightarrow (A \lor \neg B)`) vs the gold's Unicode
@@ -58,6 +74,11 @@ confidence + evidence quotes.
 
 ## TRACE 5d0080cb (L1) — harness artifact (substantively correct)
 - **Outcome:** correct value produced, recorded as no-answer.
+- **Task:** *"What was the volume in m³ of the fish bag that was calculated in
+  the University of Leicester paper 'Can Hiccup Supply Enough Fish to Maintain a
+  Dragon's Diet?'"* (L1). A correct answer requires finding that specific
+  student-journal paper and reading off the bag volume it computes; the value is
+  stated verbatim in the text, so it is pure retrieval, no math. Gold: **0.1777**.
 - **What happened:** WebSurfer's first search returned the paper snippet with the
   value verbatim (console L68: *"∴ V_bag = 0.1777 m3 … the bag has a capacity of
   0.1777 m3"*); the orchestrator flipped `is_request_satisfied=true` and then, at
@@ -77,6 +98,15 @@ confidence + evidence quotes.
 
 ## TRACE 023e9d44 (L2) — harness artifact + over-literal loop (substantively correct)
 - **Outcome:** correct value produced at turn-cap, recorded as no-answer.
+- **Task:** A GAIA word problem (L2): it is May 2023; the user drives from
+  California (Los Angeles) to Augusta, Maine, drinking 5 twelve-ounce bottles per
+  100 miles (total trip miles rounded to nearest 100) and recycles them in Maine —
+  *"how many dollars will I get back according to Wikipedia?"* A correct answer
+  requires: (1) the total LA→Augusta driving distance ≈ 3,200 mi (round to 3,200);
+  (2) bottles = 3,200/100 × 5 = 160; (3) Maine's container deposit, which
+  Wikipedia lists as 5¢ for bottled water; 160 × $0.05 = $8. The stipulated
+  I-40/I-90 route is a distractor, and "according to Wikipedia" binds the *deposit
+  value*, not the mileage. Gold: **8**.
 - **What happened:** Team correctly found Maine's 5¢ deposit (call 10) and
   LA→Cincinnati ≈ 2,200 mi (call 21); WebSurfer returned a usable Cincinnati→Augusta
   distance (call 26: *"1,022.8 mi … route follows I-80, I-84, I-71, I-95 … I-90:
@@ -104,6 +134,12 @@ confidence + evidence quotes.
 ## TRACE 5a0c1adf (L1) — over-strict verify loop, never finalized (~substantively right)
 - **Outcome:** no-answer-emitted (terminal content "Claus" = correct first name,
   never wrapped as FINAL ANSWER).
+- **Task:** *"What is the first name of the only Malko Competition recipient from
+  the 20th Century (after 1977) whose nationality on record is a country that no
+  longer exists?"* (L1). A correct answer requires scanning the list of post-1977
+  Malko Competition winners, finding the one whose recorded nationality is a
+  defunct state — Claus Peter Flor (1983), listed as **East Germany** — and
+  returning his first name. Gold: **Claus**.
 - **What happened:** First search returned the answer (console L76:
   *"|1983|Claus Peter Flor|b. 1953|East Germany|"*); call 4 orchestrator reads it
   correctly (*"first name … 'Claus'"*) but dispatches WebSurfer to "confirm" on the
@@ -130,6 +166,12 @@ confidence + evidence quotes.
 
 ## TRACE 3f57289b (L1) — wrong: orchestrator misread the table
 - **Outcome:** wrong-answer (589 vs gold 519).
+- **Task:** *"How many at bats did the Yankee with the most walks in the 1977
+  regular season have that same season?"* (L1). A correct answer requires pulling
+  the 1977 Yankees team batting table, finding the player with the team-high walks
+  (BB) total — Roy White, 75 BB — and reading the at-bats (AB) in his row: 519.
+  It is a two-step table lookup (argmax over the BB column, then read AB). Gold:
+  **519**.
 - **What happened:** The retrieved StatsCrew table had the answer
   (`|Roy White|143|606|519|…|75|58|` → 75 BB team-high, 519 AB = gold; Reggie
   Jackson 74 BB also visible). The orchestrator misread the walks column, declared
@@ -151,6 +193,14 @@ confidence + evidence quotes.
 
 ## TRACE 7673d772 (L1) — wrong: orchestrator mis-alphabetized → derailment
 - **Outcome:** wrong-answer (`titleholders` vs gold `inference`).
+- **Task:** *"On Cornell Law School website's legal information institute, under
+  the fifth section of federal rules alphabetically, what word was deleted in the
+  last amendment to the first rule in the article that has 'witnesses' in the most
+  titles as of 2021?"* (L1). A correct answer requires: (1) alphabetizing the
+  federal-rules sets on Cornell LII and taking the fifth — the Federal Rules of
+  **Evidence**; (2) finding the article whose rule titles most often contain
+  "witnesses"; (3) taking that article's first rule and identifying the word
+  removed in its most recent amendment. Gold: **inference**.
 - **What happened:** The orchestrator listed the LII federal-rules index in its
   *display* order and called it alphabetical (digest L192: *"the fifth section
   alphabetically is Federal Rules of Bankruptcy Procedure"* — alphabetically the
@@ -174,6 +224,13 @@ confidence + evidence quotes.
 
 ## TRACE 08cae58d (L2) — wrong: spec misread + un-fetchable data
 - **Outcome:** wrong-answer (1987 vs gold 2018).
+- **Task:** *"According to Google Finance, when was the first year the Apple stock
+  went above $50 (without adjusting for stock split)?"* (L2). A correct answer
+  requires reading Google Finance's *displayed* Apple price chart — which is
+  split-adjusted — and finding the first year that shown price crosses $50, ≈2018.
+  The "without adjusting for stock split" clause means "read the chart as Google
+  Finance presents it," not "hunt for raw pre-split historical prices." Gold:
+  **2018**.
 - **What happened:** "According to Google Finance … without adjusting for split"
   means *read Google Finance's displayed (split-adjusted) chart*, which first
   crosses $50 ≈ 2018. The orchestrator instead recast it as "find raw pre-split
@@ -196,6 +253,16 @@ confidence + evidence quotes.
 
 ## TRACE 04a04a9b (L2) — wrong: statistical-reasoning failure
 - **Outcome:** wrong-answer (0 vs gold 41).
+- **Task:** *"If we assume all articles published by Nature in 2020 (articles
+  only … ) relied on statistical significance … and on average came to a p-value
+  of 0.04, how many papers would be incorrect as to their claims of statistical
+  significance? Round the value up to the next integer."* (L2). A correct answer
+  requires two pieces: (1) the count of 2020 Nature research "Article"-type papers
+  (≈1001 under the strict Article filter; the page also shows 1037 as the year
+  total); (2) reading p = 0.04 as the false-positive (Type I) rate, so ~4% of
+  significance claims are expected wrong: count × 0.04, ceiling-rounded. Gold:
+  **41** (1001 × 0.04 = 40.04 → 41). The trap is reading "0.04 < 0.05 ⇒ all
+  significant ⇒ 0 wrong."
 - **What happened:** WebSurfer correctly retrieved the Nature-2020 article count
   (1037, console L116). The Assistant then did no real computation, reasoning
   *"Since 0.04 < 0.05 … the number incorrect … is 0"* — discarding the count and
@@ -217,6 +284,15 @@ confidence + evidence quotes.
 
 ## TRACE 3cef3a44 (L1) — wrong: Assistant mis-categorized, verification skipped
 - **Outcome:** wrong-answer (missing "fresh basil"; 4 items vs gold 5).
+- **Task:** A grocery-list categorization problem (L1): from a 19-item list, the
+  user (whose mom is *"a real stickler"* botanist) asks to *"create a list of just
+  the vegetables … make sure that no botanical fruits end up on the vegetable list
+  … alphabetize … comma separated."* A correct answer requires strict botanical
+  categorization — excluding items that are botanically fruits (e.g. green beans,
+  corn, bell pepper, zucchini, plums) and keeping only true vegetables
+  (roots/stems/leaves/flowers): broccoli, celery, fresh basil, lettuce, sweet
+  potatoes, alphabetized. Gold: **broccoli, celery, fresh basil, lettuce, sweet
+  potatoes** (5 items).
 - **What happened:** Call 0 correctly flags "fresh basil" among items to confirm and
   plans to consult WebSurfer if needed; call 2 decides the Assistant can answer
   "directly without further lookup" (WebSurfer never invoked — every call
@@ -240,6 +316,12 @@ confidence + evidence quotes.
 
 ## TRACE 72e110e7 (L1) — wrong: tool/env dead-end + SEO-spam poisoning
 - **Outcome:** wrong-answer (Nepal vs gold Guatemala).
+- **Task:** *"Under DDC 633 on Bielefeld University Library's BASE, as of 2020,
+  from what country was the unknown language article with a flag unique from the
+  others?"* (L1). A correct answer requires navigating BASE (Bielefeld Academic
+  Search Engine), browsing the DDC 633 (field & plantation crops) class, locating
+  the record whose language is listed as unknown and whose country flag is unique
+  among that result set, and reading its country. Gold: **Guatemala**.
 - **What happened:** The one real search returned an SEO-spam SERP that literally
   pre-answered "Nepal" (console L80–81, `smazsh.online` / "solution Country … Nepal").
   WebSurfer then detoured through a German DNB page and landed on
@@ -264,6 +346,11 @@ confidence + evidence quotes.
 
 ## TRACE 05407167 (L2) — wrong: plan-narration loop, ignored correct URL
 - **Outcome:** wrong-answer (`Remove Empty Lines` vs gold `Format Document`).
+- **Task:** *"In the 2018 VSCode blog post on replit.com, what was the command
+  they clicked on in the last video to remove extra lines?"* (L2). A correct
+  answer requires finding the 2018 VSCode-related blog post on replit.com, opening
+  the last embedded video, and reading the editor command clicked to remove the
+  extra/blank lines. Gold: **Format Document**.
 - **What happened:** Only ~4 real browser actions across 61 calls. Call 0 lists the
   gold answer "Format Document" as an educated guess, then discards it. SERP-2
   surfaced the correct post ("Zero Setup VSCode Intelligence", `/blog/intel`, console
@@ -287,6 +374,15 @@ confidence + evidence quotes.
 
 ## TRACE 00d579ea (L3) — wrong: modality wall + asymmetric trust
 - **Outcome:** wrong-answer (`Jerome Wiesner` vs gold `Claude Shannon`).
+- **Task:** *"Assuming scientists in the famous youtube video The Thinking Machine
+  (Artificial Intelligence in the 1960s) were interviewed the same year, what is
+  the name of the scientist predicting the sooner thinking machines or robots?
+  Answer using the format First name Last name."* (L3). A correct answer requires
+  comprehending the 1960s video's audio/visual content, comparing the timelines
+  the interviewed scientists give, and naming the one who predicts the *soonest*
+  arrival — Claude Shannon's "10–15 years" being shorter than the others'. This
+  needs video transcription, a modality the WebSurfer cannot reach. Gold:
+  **Claude Shannon**.
 - **What happened:** The answer lives only in the video's audio/visual content;
   WebSurfer could never reach a transcript (clicks on player menus yielded nothing;
   one candidate URL was dead). The team inferred "Jerome Wiesner" from a
