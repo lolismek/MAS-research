@@ -8,10 +8,15 @@ runs — the committed console transcript is the public record, so the timeline 
 simply the ordered sequence of messages.
 
 Inputs (all under ../.. = the magentic_one/ MAS dir):
-  tasks/magentic_gaia_tasks.json        (question, level, expected per uuid)
-  judging/results_13tasks.json          (final/expected/exact_match/seconds/rc/run)
-  judging/FAILURE_ANALYSIS_verdicts.md  (per-trace verdict prose, by uid8)
-  traces/<uid8>/run_<run>/console_log.txt   (the transcript to replay)
+  tasks/magentic_gaia_tasks.json                  (question, level, expected per uuid)
+  judging/results_13tasks.json                    (final/expected/exact_match/seconds/rc/run)
+  judging/relational/FAILURE_ANALYSIS_verdicts.md (per-trace verdict prose, by uid8 —
+                                                   the BROAD-LENS re-judging, 2026-06-18)
+  traces/<uid8>/run_<run>/console_log.txt         (the transcript to replay)
+
+This view reflects the broad inter-agent-misalignment re-judging
+(`judging/relational/`). The misalignment field carries a 4-level strength
+(none / weak / moderate / strong) instead of the strict-lens none/borderline/partial.
 
 Output:
   ./traces.json   (consumed by index.html)
@@ -22,7 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MAS = os.path.dirname(os.path.dirname(HERE))          # the magentic_one/ dir
 TASKS = os.path.join(MAS, 'tasks', 'magentic_gaia_tasks.json')
 RESULTS = os.path.join(MAS, 'judging', 'results_13tasks.json')
-VERDICTS = os.path.join(MAS, 'judging', 'FAILURE_ANALYSIS_verdicts.md')
+VERDICTS = os.path.join(MAS, 'judging', 'relational', 'FAILURE_ANALYSIS_verdicts.md')
 TRACES = os.path.join(MAS, 'traces')
 
 MSG_RE = re.compile(r'^-{6,}\s*(.+?)\s*-{6,}\s*$')
@@ -111,6 +116,9 @@ def parse_verdicts(path):
         if not hm:
             continue
         uid8, lvl, headline = hm.group(1), hm.group(2), hm.group(3).strip()
+        # the broad-lens headlines end with "… — misalignment: <strength>";
+        # drop that suffix since the strength is shown as its own badge.
+        headline = re.sub(r'\s*[—-]\s*misalignment:.*$', '', headline, flags=re.I).strip()
         fields, cur = [], None
         for line in b.splitlines()[1:]:
             if line.strip() == '---':
@@ -122,18 +130,16 @@ def parse_verdicts(path):
             elif cur is not None and line.strip():
                 cur['text'] += '\n' + line.strip()
         fmap = {f['label'].lower(): f['text'] for f in fields}
+        # broad-lens strength: the misalignment bullet text leads with the
+        # strength word, e.g. "**strong** — …" or "**none.**".
         mis_txt = next((v for k, v in fmap.items() if 'misalign' in k), '') or ''
-        mu = mis_txt.upper()
-        if 'PARTIAL' in mu or mu.startswith('YES'):
-            misalign = 'partial'
-        elif 'BORDERLINE' in mu:
-            misalign = 'borderline'
-        else:
-            misalign = 'none'
+        sm = re.match(r'\s*\**\s*(none|weak|moderate|strong)\b', mis_txt, re.I)
+        misalign = sm.group(1).lower() if sm else 'none'
+        # substantive = the right answer was reached even if scored wrong
+        # (control / grading / harness-envelope / value-at-cap cases).
         hl = headline.lower()
-        substantive = any(s in hl for s in (
-            'substantively correct', 'substantively right', 'grading artifact',
-            'harness artifact', 'success'))
+        substantive = bool(re.search(
+            r'substantiv|grading|harness|envelope|lost to|~correct|\(correct|control', hl))
         # Don't surface codes the prose explicitly negates: 'none. Notably
         # avoided 1.3 …' (clean traces) or '… Not 2.4/2.5' (3cef3a44). Cut the
         # text only at a negation word directly followed by a code, so a stray
@@ -196,7 +202,7 @@ def main():
             'seconds': r.get('seconds'), 'rc': r.get('rc'),
             'backend': backend, 'no_data': no_data,
             'outcome': outcome,
-            'substantive': v.get('substantive', False),
+            'substantive': v.get('substantive', False) or outcome == 'correct',
             'misalign': v.get('misalign', 'none'),
             'mast_codes': v.get('mast_codes', []),
             'counts': counts,

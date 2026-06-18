@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Magentic-One — GAIA trace failure analysis</title>
+<title>Magentic-One — inter-agent misalignment (broad lens)</title>
 <style>
   :root{
     --bg:#0f1116; --panel:#161922; --panel2:#1d2130; --line:#2a2f3e; --txt:#e7e9ee;
@@ -29,8 +29,9 @@
   .b{font-size:10px;padding:1px 6px;border-radius:20px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
   .b.ok{color:#7fd8a8;border-color:#2e5b43}.b.no{color:#e0c060;border-color:#5b522e}.b.wr{color:#f0928f;border-color:#5b2e2e}
   .b.sub{color:#7fd8a8;border-color:#2e5b43;background:#13241b}
-  .b.gen-partial{color:#ff8a8a;border-color:#7a2e2e;background:#2a1414}
-  .b.gen-borderline{color:#ffc06a;border-color:#6b4a1e;background:#241a0e}
+  .b.mis-weak{color:#ffe08a;border-color:#6b5f2e;background:#221f0e}
+  .b.mis-moderate{color:#ffc06a;border-color:#6b4a1e;background:#241a0e}
+  .b.mis-strong{color:#ff8a8a;border-color:#7a2e2e;background:#2a1414}
   .b.cat{background:var(--panel)}
   .main{overflow-y:auto;position:relative}
   .wrap{max-width:940px;margin:0 auto;padding:22px 26px 140px}
@@ -87,7 +88,7 @@
 <body>
 <div class="app">
   <div class="side">
-    <h1>magentic-one · failure analysis</h1>
+    <h1>magentic-one · inter-agent misalignment</h1>
     <div class="stats" id="stats"></div>
     <input class="search" id="search" placeholder="filter by id / level / outcome / misalignment / MAST…">
     <div class="tlist" id="tlist"></div>
@@ -101,18 +102,20 @@ const ABBR={MagenticOneOrchestrator:'ORC',WebSurfer:'WEB',Assistant:'AST',FileSu
 const KIND={ledger:'📋 Task Ledger · team · facts · plan',instruction:'🧭 orchestrator → instruction',final:'🏁 finalization',normal:'',task:''};
 let TRACES=[], cur=null;
 const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const md=s=>esc(s).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');   // render **bold** in verdict prose
 const imgify=s=>esc(s).replace(/&lt;image&gt;/g,'🖼 [screenshot]');
 const outClass=o=>o==='correct'?'ok':o==='no_answer'?'no':'wr';
-const misClass=m=>m&&m!=='none'?'gen-'+m:'';
+const misClass=m=>m&&m!=='none'?'mis-'+m:'';
+const MISCOLOR={none:'var(--muted)',weak:'#ffe08a',moderate:'#ffc06a',strong:'#ff8a8a'};
 
 function renderStats(){
-  const c={correct:0,wrong_answer:0,no_answer:0}, m={none:0,borderline:0,partial:0}; let sub=0;
+  const c={correct:0,wrong_answer:0,no_answer:0}, m={none:0,weak:0,moderate:0,strong:0}; let sub=0;
   TRACES.forEach(t=>{c[t.outcome]=(c[t.outcome]||0)+1;m[t.misalign]=(m[t.misalign]||0)+1;if(t.substantive)sub++;});
   const seg=(n,lab)=>`<span class="seg"><b>${n||0}</b> ${lab}</span>`;
   document.getElementById('stats').innerHTML=
     `${seg(c.correct,'correct')}${seg(c.wrong_answer,'wrong')}${seg(c.no_answer,'no-answer')}<br>`+
     `${seg(sub,'substantive (incl. artifacts)')}<br>`+
-    `misalign: ${seg(m.none,'none')}${seg(m.borderline,'borderline')}${seg(m.partial,'partial')}`;
+    `misalign: ${seg(m.none,'none')}${seg(m.weak,'weak')}${seg(m.moderate,'moderate')}${seg(m.strong,'strong')}`;
 }
 
 function renderList(filter=''){
@@ -141,22 +144,23 @@ function select(i){cur=i;renderList(document.getElementById('search').value);ren
 function verdictBlock(t){
   const v=t.verdict; if(!v.fields||!v.fields.length) return '';
   const codes=(t.mast_codes||[]).map(c=>`<span class="chip mast">${esc(c)}</span>`).join(' ')||'<span class="hint">none</span>';
-  // 'Task' and 'What happened' open by default; everything else collapsed.
-  const openLabels=new Set(['task','what happened']);
-  const causeF=v.fields.find(f=>/root cause/i.test(f.label));
-  const sections=v.fields.filter(f=>!/^outcome$|root cause/i.test(f.label)).map(f=>{
+  // Task, What happened, and the misalignment judgment open by default.
+  const openLabels=new Set(['task','what happened','inter-agent misalignment']);
+  // the open-ended pinpoint ("Where it went wrong") gets the highlighted box.
+  const causeF=v.fields.find(f=>/where it went wrong|root cause/i.test(f.label));
+  const sections=v.fields.filter(f=>!/^outcome$|where it went wrong|root cause/i.test(f.label)).map(f=>{
     const open=openLabels.has(f.label.toLowerCase())?' open':'';
     const summary=f.label.toLowerCase()==='task'?'What the task asks (read me first)':esc(f.label);
-    return `<details class="v"${open}><summary>${summary}</summary><div class="body">${esc(f.text)}</div></details>`;
+    return `<details class="v"${open}><summary>${summary}</summary><div class="body">${md(f.text)}</div></details>`;
   }).join('');
   return `<div class="verdict">
     <div class="vrow">
       <span class="chip hl">${esc(v.headline)}</span>
       <span class="chip ${outClass(t.outcome)}">${t.outcome}</span>
-      ${t.substantive?`<span class="chip" style="color:#7fd8a8;border-color:#2e5b43">substantively correct</span>`:''}
-      <span><span class="lab">misalignment:</span> <b style="color:${t.misalign==='none'?'var(--muted)':'#ffc06a'}">${t.misalign}</b></span>
+      ${t.substantive&&t.outcome!=='correct'?`<span class="chip" style="color:#7fd8a8;border-color:#2e5b43">substantively correct</span>`:''}
+      <span><span class="lab">misalignment:</span> <b style="color:${MISCOLOR[t.misalign]||'var(--muted)'}">${t.misalign}</b></span>
     </div>
-    ${causeF?`<div class="cause"><span class="lab">${esc(causeF.label)}</span>${esc(causeF.text)}</div>`:''}
+    ${causeF?`<div class="cause"><span class="lab">${esc(causeF.label)}</span>${md(causeF.text)}</div>`:''}
     <div class="vrow" style="margin-top:10px"><span class="lab">MAST codes:</span> ${codes}</div>
     ${sections}
   </div>`;
@@ -182,7 +186,7 @@ function renderTrace(t){
   }
 
   html+=`<h2 class="sec">Hub-and-spoke transcript — click any message for its full text</h2>
-  <div class="note">The <b>MagenticOneOrchestrator</b> is the hub: it writes the Task Ledger, routes an instruction to one spoke (WebSurfer / Assistant / …), reads the reply, and self-grades — there is no Selector agent and no private reasoning layer in these console traces, so the orchestrator's internal progress-ledger JSON (the <code class="cmd">is_in_loop</code> / <code class="cmd">is_request_satisfied</code> flags the verdict cites) is not shown here.${t.backend?` &nbsp;Search backend: <code class="cmd">${esc(t.backend.replace(/^\[|\]$/g,''))}</code>.`:''}</div>`;
+  <div class="note">The <b>MagenticOneOrchestrator</b> is the hub: it writes the Task Ledger, routes an instruction to one spoke (WebSurfer / Assistant / …), reads the reply, and self-grades — there is no Selector agent and no private reasoning layer in these console traces. The orchestrator's internal progress-ledger JSON (<code class="cmd">is_in_loop</code> / <code class="cmd">is_request_satisfied</code>) was not committed, so every verdict here is grounded purely in this public console transcript.${t.backend?` &nbsp;Search backend: <code class="cmd">${esc(t.backend.replace(/^\[|\]$/g,''))}</code>.`:''}</div>`;
 
   t.timeline.forEach((m,idx)=>{
     if(m.role==='user'){
