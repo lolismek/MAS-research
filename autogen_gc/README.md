@@ -14,6 +14,9 @@ run. Model: `gpt-5.4-mini` via `shared/proxy`. Web access is function tools (no 
   is the runner; `tools.py` = web_search / fetch_url / run_python.
   **`EXPERIMENT_LOG.md` is authoritative** for what's current vs superseded (it wins over
   `README.md` where they disagree). Env: `autogen_gc` (autogen ≥0.6.2).
+- **Shared "thinking memory" board** (`--shared-memory`, OFF by default) — an optional
+  plug-and-play shared scratchpad layered on `split4` (every participant writes/reads
+  free-form in-process notes); see `harness/SHARED_MEMORY.md`.
 - **`traces/split4_openai/`** — the canonical batch: 28 task-UUID dirs (≤5 runs each),
   OpenAI-direct backend (`/o/` route, so reasoning summaries are captured). Committed
   (~9.6 MB). The `split4_openai` namespace is the runner's `<variant>_<backend>` convention.

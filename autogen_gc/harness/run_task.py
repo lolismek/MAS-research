@@ -22,6 +22,11 @@ Usage (from the eval-clean repo root):
   conda run -n autogen_gc python autogen_gc/harness/run_task.py --all
   conda run -n autogen_gc python autogen_gc/harness/run_task.py --all --parallel 4
   conda run -n autogen_gc python autogen_gc/harness/run_task.py --all --variant split4 --parallel 4
+  conda run -n autogen_gc python autogen_gc/harness/run_task.py --all --variant split4 --shared-memory --parallel 4
+
+Add --shared-memory to enable the shared "thinking memory" board (board runs are
+namespaced traces/split4_board/...). Add --no-selector-board alongside it for the
+agents-only ablation (board on for agents, selector left stock).
 """
 import functools, json, os, re, shutil, subprocess, sys, time
 
@@ -79,11 +84,15 @@ def participation(text):
                 n_agents_spoke=n_spoke, single_agent=n_spoke <= 1)
 
 
-def run_one(task, variant='selector3', backend='pplx'):
+def run_one(task, variant='selector3', backend='pplx', shared_memory=False, selector_board=True):
     uid8 = task['uuid'][:8]
-    # OpenAI-backed runs are namespaced separately (…/<variant>_openai/) so they
-    # never mix with the Perplexity runs of the same variant/uid.
-    runs_v = os.path.join(RUNS, variant if backend == 'pplx' else f'{variant}_{backend}')
+    # Board runs get their own namespace so A/B arms never mix; the agents-only ablation
+    # (selector left stock) is namespaced again. OpenAI-backed runs are suffixed
+    # (…_openai) so they never mix with the Perplexity runs of the same arm.
+    label = variant
+    if shared_memory:
+        label += '_board' if selector_board else '_board_agentsonly'
+    runs_v = os.path.join(RUNS, label if backend == 'pplx' else f'{label}_{backend}')
     n = 1
     while os.path.exists(os.path.join(runs_v, uid8, f'run_{n}')):
         n += 1
@@ -104,7 +113,7 @@ def run_one(task, variant='selector3', backend='pplx'):
     btag = '' if backend == 'pplx' else f'{backend}_'
     with open(os.path.join(rundir, 'config.yaml'), 'w') as f:
         # JSON is valid YAML; tag encodes backend so raw_calls.jsonl stays attributable.
-        json.dump(make_config(f'agc_{variant}_{btag}{uid8}_run{n}', backend), f)
+        json.dump(make_config(f'agc_{label}_{btag}{uid8}_run{n}', backend), f)
 
     print(f'[{variant}/{uid8}] run_{n} starting (timeout {TIMEOUT}s)', flush=True)
     t0 = time.time()
@@ -112,6 +121,9 @@ def run_one(task, variant='selector3', backend='pplx'):
     # `import tools` (web_search / fetch_url / run_python).
     env = dict(os.environ)
     env['PYTHONPATH'] = HERE + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+    if shared_memory:
+        env['SHARED_MEMORY'] = '1'
+        env['SELECTOR_BOARD'] = '1' if selector_board else '0'
     with open(os.path.join(rundir, 'console_log.txt'), 'w') as log:
         try:
             rc = subprocess.run([sys.executable, 'scenario.py'], cwd=rundir,
@@ -126,12 +138,21 @@ def run_one(task, variant='selector3', backend='pplx'):
     final = m[-1].strip() if m else None
     expected = task['expected_answer']
     part = participation(tail)
+    board_stats = {}
+    if shared_memory:
+        btf = os.path.join(rundir, 'board_trace.jsonl')
+        evs = [json.loads(l) for l in open(btf) if l.strip()] if os.path.exists(btf) else []
+        board_stats = dict(shared_memory=True, selector_board=selector_board,
+                           board_event_count=len(evs),
+                           board_note_count=sum(1 for e in evs if e.get('op') == 'add'),
+                           board_revise_count=sum(1 for e in evs if e.get('op') == 'revise'),
+                           board_authors=sorted({e['agent'] for e in evs}))
     result = dict(uuid=task['uuid'], variant=variant, backend=backend, run=n, rc=rc, seconds=round(dur, 1),
                   level=task.get('level'), category=task.get('category'),
                   final_answer=final, expected_answer=expected,
                   exact_match=final is not None and norm(final) == norm(expected),
                   original_success=task.get('success'),
-                  **part)
+                  **part, **board_stats)
     with open(os.path.join(rundir, 'result.json'), 'w') as f:
         json.dump(result, f, indent=1)
     print(f'[{variant}/{uid8}] rc={rc} {dur:.0f}s final={final!r} expected={expected!r} '
@@ -163,11 +184,18 @@ def main():
         args = args[:i] + args[i + 2:]
     if backend not in ('pplx', 'openai'):
         sys.exit(f'unknown --backend {backend!r}; choose from pplx, openai')
+    shared_memory = '--shared-memory' in args
+    if shared_memory:
+        args = [a for a in args if a != '--shared-memory']
+    selector_board = '--no-selector-board' not in args
+    if not selector_board:
+        args = [a for a in args if a != '--no-selector-board']
     sel = TASKS if args == ['--all'] else [
         t for t in TASKS if any(t['uuid'].startswith(a) for a in args)]
     if args != ['--all'] and len(sel) != len(args):
         sys.exit(f'unmatched uuid prefixes; matched {[t["uuid"][:8] for t in sel]}')
-    run = functools.partial(run_one, variant=variant, backend=backend)
+    run = functools.partial(run_one, variant=variant, backend=backend,
+                            shared_memory=shared_memory, selector_board=selector_board)
     if par == 1:
         results = [run(t) for t in sel]
     else:

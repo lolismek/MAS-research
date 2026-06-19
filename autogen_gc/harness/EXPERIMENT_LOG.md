@@ -23,6 +23,12 @@ actually true right now, this file wins over `README.md` where they disagree.**
   - `--backend pplx` → proxy `/t/` route → Perplexity → **no reasoning summaries**.
   - `--backend openai` → proxy `/o/` route → OpenAI-direct → **reasoning summaries
     captured** (the only batch with private pre-action reasoning; see analyses).
+- **Shared "thinking memory" board (`--shared-memory`, OFF by default)** — a plug-and-play
+  shared scratchpad where every participant (4 agents **+ the selector**) writes free-form
+  in-process notes and reads everyone's. Append-by-default / revise-only-when-false;
+  self-authored (no side model); injected fresh each inference (no accumulation). Implemented
+  + smoke-validated (2026-06); see **`SHARED_MEMORY.md`** for design, the 3-arm ablation
+  (baseline / agents-only / full), flags, and caveats. Baseline runs are unchanged when off.
 - **Run it:**
   `conda run -n autogen_gc python reproduction/autogen_gc/run_task.py --all --variant split4 --backend openai --parallel 6`
   (proxy must be up; results → `reproduction/runs/autogen_gc/split4_openai/<uid8>/run_*`).
@@ -121,9 +127,11 @@ miscommunication is usually a weak agent fumbling a task it had everything to so
 
 ## File map (what's authoritative vs intermediate)
 
-- `scenario_split.py` — **the live system** (split4 + both fixes). Authoritative.
+- `scenario_split.py` — **the live system** (split4 + both fixes; + gated shared-memory board). Authoritative.
 - `scenario_template.py` — superseded `selector3` (3-agent). Contrast only.
-- `run_task.py` — runner. `--variant {selector3,split4}` × `--backend {pplx,openai}`.
+- `board.py` — shared-memory board (`Board`, `BoardInjectingContext`); used only when `--shared-memory`.
+- `SHARED_MEMORY.md` — design / validation / caveats for the shared "thinking memory" board.
+- `run_task.py` — runner. `--variant {selector3,split4}` × `--backend {pplx,openai}` × `--shared-memory [--no-selector-board]`.
 - `analysis_openai/` — PRE-fix per-trace analysis (build_inputs → render_md →
   subagent verdicts). `inputs/` is gitignored (regenerable). `MODE_B_walkthrough_08cae58d.md`
   is an annotated exemplar of the defer-forever loop.
@@ -143,3 +151,8 @@ miscommunication is usually a weak agent fumbling a task it had everything to so
   `0.1777 m^3`≡`0.1777`, `17 thousand hours`≡`17`). Several "wrong"/"no-answer" are
   scoring artifacts, not model errors.
 - **Reasoning summaries only exist on `--backend openai` runs.** Perplexity hides them.
+- **`--backend pplx` is currently broken for *all* `split4` runs (baseline included):**
+  Perplexity now rejects the custom tool name `web_search` (`400 … "web_search" is reserved`).
+  Use `--backend openai`, or rename the tool in `tools.py`. (Found 2026-06 during the
+  shared-memory smoke. Related: the proxy caches `OPENAI_API_KEY` at startup, so restart it
+  after editing `.env` or `/o/` returns `401 … key ''`.)

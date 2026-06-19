@@ -93,6 +93,16 @@ finalization (validated — the Critic cannot terminate; only the Finalizer can,
 only post-review). Note this fixes the *process*, not the lossy digest — the MAST 2.4
 distortion cases (info dropped at the publish bottleneck) need a separate fix.
 
+## Shared thinking memory (`--shared-memory`)
+
+An optional, plug-and-play shared scratchpad layered on `split4` to target exactly the
+publish-bottleneck distortion above: every participant (4 agents **+ the selector**) keeps a
+slice of free-form notes capturing its in-process reasoning, and reads everyone's notes at
+turn start. Off by default (baseline unchanged). Append-by-default / revise-only-when-false;
+self-authored; injected fresh per inference (no accumulation). Lives in `board.py` +
+`make_board_tools` (`tools.py`) + gated wiring in `scenario_split.py`. Full design, the 3-arm
+ablation (baseline / agents-only / full), flags, and caveats are in **`SHARED_MEMORY.md`**.
+
 ## Files
 
 | path | role |
@@ -141,6 +151,9 @@ each `result.json` carries a `variant` field, so A/B is a slice by `variant`.
 | `RUN_PYTHON_TIMEOUT` | 30 | `run_python` subprocess timeout (s) |
 | `TASK_TIMEOUT` | 1800 | per-task wall-clock cap (s) |
 | `PROXY_URL` | `http://127.0.0.1:8744/v1` | proxy base |
+| `SHARED_MEMORY` | `0` | enable the shared "thinking memory" board (set by `--shared-memory`; see `SHARED_MEMORY.md`) |
+| `SELECTOR_BOARD` | `1` | selector reads+writes the board (board mode only; `0` via `--no-selector-board`) |
+| `BOARD_NOTE_ITERS` | `3` | tool-loop budget for Critic/Finalizer in board mode |
 
 ## Task set (`autogen_gc_tasks.json`)
 
