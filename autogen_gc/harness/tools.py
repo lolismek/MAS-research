@@ -151,6 +151,62 @@ def run_python(code: str) -> str:
     return out.strip() or "(ran successfully, no stdout)"
 
 
+def make_board_tools(agent_name, board):
+    """Build this agent's [add_note, revise_note] tools, bound to its name and the
+    shared Board (board.py). Only constructed when SHARED_MEMORY=1 in scenario_split.py.
+
+    Each call returns an echo of THIS agent's current active notes (with ids) so the
+    model sees the new id immediately and can target a real id in a later revise_note.
+    The docstrings below are what the model reads (AutoGen uses them as the tool
+    description), so they carry the append-by-default / revise-only-when-false rule.
+    """
+    from autogen_core.tools import FunctionTool
+
+    def _echo(prefix):
+        mine = board.active_notes(agent_name)
+        if not mine:
+            return prefix + "\n(your scratchpad is now empty)"
+        body = "\n".join(f"  - {n.note_id}: {n.text}" for n in mine)
+        return f"{prefix}\nYour current notes:\n{body}"
+
+    def add_note(text: str) -> str:
+        """Append a NEW note to your slice of the shared team scratchpad.
+
+        Use this to transmit your in-process reasoning to teammates AS YOU WORK: what
+        you now believe, what you tried that failed, what you're stuck on — anything a
+        teammate would benefit from. Free-form text, no required format.
+
+        APPEND by default: add a new note whenever you learn or decide something. Do
+        NOT use this to correct an earlier note that turned out wrong — use revise_note
+        for that. Your earlier notes stay visible on purpose, because past reasoning is
+        often still useful later. This does NOT replace your posted message; still post
+        your findings to the team as usual. Returns your current notes with their ids.
+        """
+        note = board.add_note(agent_name, text)
+        return _echo(f"Added note {note.note_id}.")
+
+    def revise_note(note_id: str, text: str) -> str:
+        """Revise one of YOUR earlier notes — ONLY when that note has become FALSE.
+
+        Pass the note_id of the now-false note (ids are shown in the scratchpad and in
+        add_note's return) and the corrected text. The old note is kept in history but
+        hidden from the active view and replaced by this one. If the note still holds
+        and you simply learned more, use add_note instead. Returns your current notes
+        with their ids.
+        """
+        note = board.revise_note(agent_name, note_id, text)
+        if note is None:
+            ids = [n.note_id for n in board.active_notes(agent_name)]
+            return (f"ERROR: no active note {note_id!r} that you authored. Your note "
+                    f"ids are: {ids}. Use add_note to add a new note instead.")
+        return _echo(f"Revised {note_id} -> {note.note_id}.")
+
+    return [
+        FunctionTool(add_note, description=add_note.__doc__, name="add_note"),
+        FunctionTool(revise_note, description=revise_note.__doc__, name="revise_note"),
+    ]
+
+
 if __name__ == "__main__":
     # Manual smoke: python tools.py
     print(run_python("print(1037 * 0.04)"))

@@ -41,11 +41,18 @@ from autogen_agentchat.ui import Console
 from autogen_core.models import UserMessage
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 
-from tools import web_search, fetch_url, run_python
+from board import Board, BoardInjectingContext
+from tools import web_search, fetch_url, run_python, make_board_tools
 
 K = int(os.environ.get("MAX_TOOL_ITERATIONS", "8"))       # internal ReAct depth per turn
 MAX_MESSAGES = int(os.environ.get("MAX_MESSAGES", "30"))   # outer-chat message cap
 SENTINEL = "FINAL ANSWER:"
+
+# Shared "thinking memory" board — OFF by default. When off, none of the board code
+# below is constructed and the run is behaviorally identical to the baseline.
+SHARED_MEMORY = os.environ.get("SHARED_MEMORY", "0") == "1"
+SELECTOR_BOARD = os.environ.get("SELECTOR_BOARD", "1") == "1"   # only meaningful if SHARED_MEMORY
+K_NOTE = int(os.environ.get("BOARD_NOTE_ITERS", "3"))          # tool-loop budget for the no-web/code agents
 
 
 class TeamAwareAssistantAgent(AssistantAgent):
@@ -69,6 +76,11 @@ class TeamAwareAssistantAgent(AssistantAgent):
     """
 
     async def _add_messages_to_context(self, model_context, messages):  # type: ignore[override]
+        # Bump the board's per-turn logical clock exactly once per agent turn (when new
+        # teammate/user messages arrive). No-op unless this is a BoardInjectingContext.
+        board = getattr(model_context, "_board", None)
+        if board is not None and messages:
+            board.mark_turn()
         for msg in messages:
             if isinstance(msg, HandoffMessage):
                 for llm_msg in msg.context:
@@ -171,6 +183,63 @@ Routing rules:
 
 Return only the member name."""
 
+# Board-mode selector prompt. Adds a {board} block (filled with the rendered scratchpad
+# at selection time) and asks for a one-line rationale BEFORE the name. The rationale is
+# captured and written back to the board so the chosen agent sees WHY it was picked.
+# Used only when SHARED_MEMORY and SELECTOR_BOARD; {board} is always substituted (with
+# "" when the board is empty) so str.format never sees a stray placeholder.
+SELECTOR_PROMPT_BOARD = """You are coordinating a small team answering one question.
+
+The team members and their roles:
+{roles}
+
+Conversation so far:
+{history}
+
+{board}
+
+Select the SINGLE next member from {participants} to act next.
+
+The members have STRICTLY PARTITIONED capabilities — no member can do another's
+job, so the answer almost always requires more than one of them:
+- WebResearcher: the ONLY member who can access the web (search + read pages).
+- Analyst: the ONLY member who can run code (compute, count, parse, date/number
+  reasoning). If the question needs ANY non-trivial calculation or counting, the
+  Analyst MUST take a turn — no one else may compute.
+- Critic: has no web/code tools (only the shared scratchpad). Reviews the evidence and
+  the proposed answer, says what is supported vs. unverified/missing, and delegates
+  gaps. The Critic NEVER finalizes.
+- Finalizer: has no web/code tools (only the shared scratchpad). The ONLY member who
+  may output the final answer, and only AFTER the Critic has reviewed and its concerns
+  are resolved.
+
+Routing rules:
+- Early on, pick WebResearcher to gather facts.
+- If a computation, count, or date/number step is needed, pick Analyst — do not let
+  another member do the math.
+- Once an answer has been proposed, route to the Critic to review it.
+- If the Critic raises an issue, route to the member who can address it
+  (WebResearcher for facts, Analyst for computation) BEFORE returning to the Critic.
+- Only route to the Finalizer once the Critic has reviewed and its concerns are
+  resolved. The Finalizer cannot run before the Critic.
+
+First, write ONE short sentence explaining your choice (you may reference the
+scratchpad and teammates). Then, on a NEW FINAL LINE, output ONLY the chosen member's
+name and nothing else."""
+
+# Appended to every agent's system message in board mode (the suggestions are exactly
+# that — suggestions; the scratchpad is intentionally open-ended).
+BOARD_NOTE = (
+    "\n\nSHARED SCRATCHPAD: you and your teammates share a scratchpad of free-form "
+    "notes, shown near the top of your context. Use add_note to record what you now "
+    "believe, what you tried that failed, or what you're stuck on, AS YOU WORK, so "
+    "teammates can build on your reasoning. APPEND a new note whenever you learn or "
+    "decide something; use revise_note ONLY to fix one of YOUR earlier notes that "
+    "turned out FALSE — older notes stay visible on purpose. Read teammates' notes "
+    "before acting. The scratchpad does NOT replace your posted message; still post "
+    "your findings to the team as usual."
+)
+
 RESEARCHER_SYS = (
     "You are WebResearcher on a team answering one question. You are the ONLY "
     "teammate who can access the web — use web_search and fetch_url to gather the "
@@ -254,6 +323,99 @@ def make_client(cfg):
     )
 
 
+def _make_board_selector_team(agents, board, mc, termination):
+    """Build a SelectorGroupChat whose manager (a) splices the rendered board into the
+    selector prompt and (b) writes its one-line routing rationale back to the board, so
+    the chosen agent sees WHY it was picked.
+
+    This reaches into a private AutoGen class (SelectorGroupChatManager) and re-creates a
+    version-specific factory, so the caller MUST wrap it in try/except and fall back to a
+    stock SelectorGroupChat. The eager factory probe at the end forces a signature drift
+    (e.g. a future AutoGen bump) to raise HERE — where the caller can fall back — rather
+    than deep inside run_stream. Verified against autogen-agentchat 0.7.5.
+    """
+    from autogen_agentchat.teams._group_chat._selector_group_chat import SelectorGroupChatManager
+    from autogen_agentchat.messages import MessageFactory
+
+    class BoardSelectorGroupChatManager(SelectorGroupChatManager):
+        def __init__(self, *args, board=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._board = board
+            self._last_rationale = ""
+
+        def _mentioned_agents(self, message_content, agent_names):
+            # Board mode elicits "<rationale>\n<NAME on the final line>". Parse ONLY the
+            # last non-empty line for the name (so a rationale mentioning other agents'
+            # names can't trip the >1-mention retry) and stash the rest as the rationale.
+            lines = [ln for ln in (message_content or "").splitlines() if ln.strip()]
+            if not lines:
+                self._last_rationale = ""
+                return super()._mentioned_agents(message_content, agent_names)
+            self._last_rationale = "\n".join(lines[:-1]).strip()
+            return super()._mentioned_agents(lines[-1], agent_names)
+
+        async def _select_speaker(self, roles, participants, max_attempts):
+            rendered = self._board.render(for_selector=True) if self._board is not None else ""
+            safe = rendered.replace("{", "{{").replace("}", "}}") if rendered else ""
+            original = self._selector_prompt
+            self._selector_prompt = original.replace("{board}", safe)
+            try:
+                return await super()._select_speaker(roles, participants, max_attempts)
+            finally:
+                self._selector_prompt = original
+
+        async def select_speaker(self, thread):
+            self._last_rationale = ""
+            result = await super().select_speaker(thread)
+            if self._board is not None:
+                name = result[0] if isinstance(result, list) else result
+                rationale = (self._last_rationale or "").strip()
+                if rationale:
+                    self._board.add_note("Selector", f"(chose {name}) {rationale}")
+            return result
+
+    class BoardSelectorGroupChat(SelectorGroupChat):
+        def __init__(self, *args, board=None, **kwargs):
+            self._board_obj = board
+            super().__init__(*args, **kwargs)
+
+        def _create_group_chat_manager_factory(
+            self, name, group_topic_type, output_topic_type, participant_topic_types,
+            participant_names, participant_descriptions, output_message_queue,
+            termination_condition, max_turns, message_factory,
+        ):
+            board = self._board_obj
+            def factory():
+                return BoardSelectorGroupChatManager(
+                    name, group_topic_type, output_topic_type, participant_topic_types,
+                    participant_names, participant_descriptions, output_message_queue,
+                    termination_condition, max_turns, message_factory,
+                    self._model_client, self._selector_prompt, self._allow_repeated_speaker,
+                    self._selector_func, self._max_selector_attempts, self._candidate_func,
+                    self._emit_team_events, self._model_context, self._model_client_streaming,
+                    board=board,
+                )
+            return factory
+
+    team = BoardSelectorGroupChat(
+        agents, model_client=mc, termination_condition=termination,
+        selector_prompt=SELECTOR_PROMPT_BOARD, allow_repeated_speaker=False, board=board,
+    )
+
+    # Eager probe: build the manager once via the private factory so a signature drift
+    # raises here (caught by the caller) instead of inside run_stream.
+    names = [a.name for a in agents]
+    _probe = team._create_group_chat_manager_factory(
+        name="probe", group_topic_type="probe_g", output_topic_type="probe_o",
+        participant_topic_types=list(names), participant_names=list(names),
+        participant_descriptions=[getattr(a, "description", "") for a in agents],
+        output_message_queue=asyncio.Queue(), termination_condition=None,
+        max_turns=None, message_factory=MessageFactory(),
+    )
+    _probe()  # instantiate once and discard; just validates the factory signature
+    return team
+
+
 async def main() -> None:
     with open("config.yaml") as f:
         cfg = json.load(f)
@@ -262,45 +424,92 @@ async def main() -> None:
 
     mc = make_client(cfg)
 
+    # Shared board (None when off). All board wiring below degrades to baseline when
+    # board is None: empty tool lists, model_context=None (the AssistantAgent default),
+    # and no BOARD_NOTE appended — so an OFF run behaves exactly like the baseline.
+    board = Board() if SHARED_MEMORY else None
+
+    def _board_ctx():
+        return BoardInjectingContext(board) if board is not None else None  # fresh per agent
+
+    def _board_tools(name):
+        return make_board_tools(name, board) if board is not None else []
+
+    def _sys(base):
+        return base + TEAM_NOTE + (BOARD_NOTE if board is not None else "")
+
     researcher = TeamAwareAssistantAgent(
-        "WebResearcher", model_client=mc, tools=[web_search, fetch_url],
+        "WebResearcher", model_client=mc,
+        tools=[web_search, fetch_url, *_board_tools("WebResearcher")],
         max_tool_iterations=K, reflect_on_tool_use=True,
         description="Finds facts on the web by searching and reading pages.",
-        system_message=RESEARCHER_SYS + TEAM_NOTE,
+        system_message=_sys(RESEARCHER_SYS), model_context=_board_ctx(),
     )
     analyst = TeamAwareAssistantAgent(
-        "Analyst", model_client=mc, tools=[run_python],
+        "Analyst", model_client=mc,
+        tools=[run_python, *_board_tools("Analyst")],
         max_tool_iterations=K, reflect_on_tool_use=True,
         description="Computes, counts, parses, and does quantitative reasoning with Python.",
-        system_message=ANALYST_SYS + TEAM_NOTE,
+        system_message=_sys(ANALYST_SYS), model_context=_board_ctx(),
     )
-    critic = TeamAwareAssistantAgent(
-        "Critic", model_client=mc,
+    # Critic & Finalizer have no web/code tools. In board mode they gain ONLY the
+    # scratchpad write-tools (with a small tool-loop budget so they write-then-speak);
+    # off, they are built exactly as before (no tools, no model_context) so the baseline
+    # is unchanged.
+    critic_kwargs = dict(
+        model_client=mc,
         description="Reviews the evidence and proposed answer; flags gaps; never finalizes.",
-        system_message=CRITIC_SYS + TEAM_NOTE,
+        system_message=_sys(CRITIC_SYS),
     )
-    finalizer = TeamAwareAssistantAgent(
-        "Finalizer", model_client=mc,
+    finalizer_kwargs = dict(
+        model_client=mc,
         description="Emits the final answer, only after the Critic has reviewed.",
-        system_message=FINALIZER_SYS + TEAM_NOTE,
+        system_message=_sys(FINALIZER_SYS),
     )
+    if board is not None:
+        critic_kwargs.update(tools=make_board_tools("Critic", board), max_tool_iterations=K_NOTE,
+                             reflect_on_tool_use=True, model_context=_board_ctx())
+        finalizer_kwargs.update(tools=make_board_tools("Finalizer", board), max_tool_iterations=K_NOTE,
+                                reflect_on_tool_use=True, model_context=_board_ctx())
+    critic = TeamAwareAssistantAgent("Critic", **critic_kwargs)
+    finalizer = TeamAwareAssistantAgent("Finalizer", **finalizer_kwargs)
 
     # Structural gate: only a Finalizer sentinel that follows a Critic review ends the run.
     termination = CriticThenFinalize() | MaxMessageTermination(MAX_MESSAGES)
-    team = SelectorGroupChat(
-        [researcher, analyst, critic, finalizer],
-        model_client=mc,
-        termination_condition=termination,
-        selector_prompt=SELECTOR_PROMPT,
-        # AutoGen's default. Each agent does its deep work in ONE turn (internal ReAct
-        # loop) and publishes once, so a CONSECUTIVE repeat adds nothing and is the
-        # shape of the structural-stall loops (e.g. 08cae58d: WebResearcher picked 8x
-        # in a row). Forcing rotation preserves legitimate re-speaking (WR->Critic->WR
-        # is non-consecutive) while killing the degenerate same-speaker grind.
-        allow_repeated_speaker=False,
-    )
+    agents = [researcher, analyst, critic, finalizer]
 
-    await Console(team.run_stream(task=prompt))
+    def stock_team():
+        return SelectorGroupChat(
+            agents,
+            model_client=mc,
+            termination_condition=termination,
+            selector_prompt=SELECTOR_PROMPT,
+            # AutoGen's default. Each agent does its deep work in ONE turn (internal ReAct
+            # loop) and publishes once, so a CONSECUTIVE repeat adds nothing and is the
+            # shape of the structural-stall loops (e.g. 08cae58d: WebResearcher picked 8x
+            # in a row). Forcing rotation preserves legitimate re-speaking (WR->Critic->WR
+            # is non-consecutive) while killing the degenerate same-speaker grind.
+            allow_repeated_speaker=False,
+        )
+
+    if board is not None and SELECTOR_BOARD:
+        try:
+            team = _make_board_selector_team(agents, board, mc, termination)
+        except Exception as e:  # the selector hook is the one version-fragile piece
+            print(f"[board] selector hook unavailable ({e!r}); using stock selector "
+                  f"(agents still read/write the board)", flush=True)
+            team = stock_team()
+    else:
+        team = stock_team()
+
+    try:
+        await Console(team.run_stream(task=prompt))
+    finally:
+        # Persist the board even if the run raised, so a crashed/partial run still
+        # leaves its belief-evolution trace for debugging and analysis.
+        if board is not None:
+            with open("board_trace.jsonl", "w") as f:
+                f.write(board.dump_events_jsonl())
     await mc.close()
 
 
