@@ -194,8 +194,10 @@ def make_board_tools(agent_name, board):
         APPEND a note when your thinking ADVANCES; do NOT re-post a note that says the
         same thing as one already on the board. To correct one of YOUR OWN earlier notes
         that became false, use revise_note instead; earlier notes otherwise stay visible
-        on purpose. This does NOT replace your posted message; still post your findings to
-        the team as usual. Returns your current notes with their ids.
+        on purpose. Calling this tool is the ONLY way to write to the scratchpad — it is a
+        SEPARATE channel from your posted message: do not type a 'scratchpad note' into
+        your message, and still post your findings to the team as a normal message.
+        Returns your current notes with their ids.
         """
         note = board.add_note(agent_name, text)
         return _echo(f"Added note {note.note_id}.{_cap_note()}")
