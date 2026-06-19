@@ -169,21 +169,36 @@ def make_board_tools(agent_name, board):
         body = "\n".join(f"  - {n.note_id}: {n.text}" for n in mine)
         return f"{prefix}\nYour current notes:\n{body}"
 
+    def _cap_note():
+        # Surface a cap-triggered archive to the author (otherwise the only signal is a
+        # later revise_note failing on the vanished id). "" when nothing was archived.
+        arch = board.last_archived
+        if not arch:
+            return ""
+        ids = ", ".join(n.note_id for n in arch)
+        noun = "note" if len(arch) == 1 else "notes"
+        verb = "was" if len(arch) == 1 else "were"
+        return f" (note cap reached — your oldest {noun} {ids} {verb} archived to history)"
+
     def add_note(text: str) -> str:
         """Append a NEW note to your slice of the shared team scratchpad.
 
-        Use this to transmit your in-process reasoning to teammates AS YOU WORK: what
-        you now believe, what you tried that failed, what you're stuck on — anything a
-        teammate would benefit from. Free-form text, no required format.
+        The scratchpad is the team's shared THINKING SPACE, read by your teammates — it
+        is NOT a message to a user (there is no user). Write in the first person about
+        your own reasoning; never phrase a note as a request to a 'user' (e.g. "please
+        provide X"). Think out loud AS YOU WORK: the intermediate steps, partial results,
+        the value or count you just computed (write the ACTUAL number), a fact you
+        established, a hypothesis you're testing, what you tried that failed, and exactly
+        what is blocking you — not just final conclusions.
 
-        APPEND by default: add a new note whenever you learn or decide something. Do
-        NOT use this to correct an earlier note that turned out wrong — use revise_note
-        for that. Your earlier notes stay visible on purpose, because past reasoning is
-        often still useful later. This does NOT replace your posted message; still post
-        your findings to the team as usual. Returns your current notes with their ids.
+        APPEND a note when your thinking ADVANCES; do NOT re-post a note that says the
+        same thing as one already on the board. To correct one of YOUR OWN earlier notes
+        that became false, use revise_note instead; earlier notes otherwise stay visible
+        on purpose. This does NOT replace your posted message; still post your findings to
+        the team as usual. Returns your current notes with their ids.
         """
         note = board.add_note(agent_name, text)
-        return _echo(f"Added note {note.note_id}.")
+        return _echo(f"Added note {note.note_id}.{_cap_note()}")
 
     def revise_note(note_id: str, text: str) -> str:
         """Revise one of YOUR earlier notes — ONLY when that note has become FALSE.
@@ -199,7 +214,7 @@ def make_board_tools(agent_name, board):
             ids = [n.note_id for n in board.active_notes(agent_name)]
             return (f"ERROR: no active note {note_id!r} that you authored. Your note "
                     f"ids are: {ids}. Use add_note to add a new note instead.")
-        return _echo(f"Revised {note_id} -> {note.note_id}.")
+        return _echo(f"Revised {note_id} -> {note.note_id}.{_cap_note()}")
 
     return [
         FunctionTool(add_note, description=add_note.__doc__, name="add_note"),
