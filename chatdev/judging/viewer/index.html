@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChatDev — trace viewer</title>
+<style>
+  :root{
+    --bg:#0f1116; --panel:#161922; --panel2:#1d2130; --line:#2a2f3e; --txt:#e7e9ee;
+    --muted:#8b91a3; --accent:#6ea8fe;
+    --ceo:#e0a13a; --cpo:#3fb27f; --cto:#4d8bf0; --prg:#a47be0; --rev:#e07a5a;
+    --tst:#3fb2a8; --cns:#8b91a3; --chro:#d06aa8; --sys:#6b7280;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--txt);height:100vh;overflow:hidden}
+  .app{display:grid;grid-template-columns:330px 1fr;height:100vh}
+  .side{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;display:flex;flex-direction:column}
+  .side h1{font-size:13px;margin:0;padding:14px 14px 4px;letter-spacing:.04em;color:var(--muted);text-transform:uppercase}
+  .stats{padding:0 14px 8px;font-size:11px;color:var(--muted);line-height:1.7}
+  .stats b{color:var(--txt)}
+  .stats .seg{display:inline-block;margin-right:9px;white-space:nowrap}
+  .search{margin:6px 10px 8px;padding:7px 9px;background:var(--panel2);border:1px solid var(--line);border-radius:7px;color:var(--txt);font-size:13px}
+  .tlist{flex:1;overflow-y:auto;padding:0 6px 20px}
+  .titem{padding:8px 9px;border-radius:8px;cursor:pointer;margin-bottom:3px;border:1px solid transparent}
+  .titem:hover{background:var(--panel2)}
+  .titem.active{background:var(--panel2);border-color:var(--accent)}
+  .titem .nm{font-weight:700;font-size:13px;color:#dfe2ea}
+  .titem .q{color:var(--muted);font-size:12px;margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .badges{margin-top:5px;display:flex;flex-wrap:wrap;gap:4px}
+  .b{font-size:10px;padding:1px 6px;border-radius:20px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .b.ok{color:#7fd8a8;border-color:#2e5b43}.b.no{color:#f0928f;border-color:#5b2e2e}.b.wr{color:#f0b27f;border-color:#5b412e}
+  .b.gen-strong{color:#ff8a8a;border-color:#7a2e2e;background:#2a1414}
+  .b.gen-moderate{color:#ffc06a;border-color:#6b4a1e;background:#241a0e}
+  .b.gen-weak{color:#d3b2f0;border-color:#46356b}
+  .b.gen-none{color:#7fb38d;border-color:#2e5b43}
+  .b.cat{background:var(--panel)}
+  .main{overflow-y:auto;position:relative}
+  .wrap{max-width:980px;margin:0 auto;padding:22px 26px 140px}
+  .task{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:14px}
+  .task .nm{font-size:18px;font-weight:700}
+  .task .qtext{font-size:13.5px;margin:8px 0 12px;color:#cfd3de;white-space:pre-wrap}
+  .kv{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;margin-bottom:4px;align-items:center}
+  .kv .lab{color:var(--muted)}
+  .si{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+  .si .pit{font-size:11px;color:#cfd3de;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:2px 8px}
+  .si .pit b{color:#fff}
+  .vsum{margin-top:12px;border-top:1px solid var(--line);padding-top:11px}
+  .vrow{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;align-items:center}
+  .chip{font-size:11px;padding:2px 9px;border-radius:20px;border:1px solid var(--line);color:#cfd3de;background:var(--panel2)}
+  .vsummary{margin-top:8px;font-size:14px;color:#e7e9ee}
+  .tabs{display:flex;gap:4px;margin-bottom:14px}
+  .tab{padding:7px 15px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--muted);background:var(--panel);border:1px solid var(--line)}
+  .tab:hover{color:var(--txt)}
+  .tab.on{color:#fff;background:var(--panel2);border-color:var(--accent)}
+  /* phase segment */
+  .seg{margin:18px 0 8px}
+  .seghead{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:5px}
+  .seghead .pn{color:#9fd0ff;font-weight:700;letter-spacing:.02em}
+  .seghead .rp{font-family:ui-monospace,Menlo,monospace;text-transform:none;font-size:11px}
+  /* message bubble */
+  .msg{display:flex;margin:10px 0;gap:10px}
+  .msg .av{width:34px;height:34px;border-radius:8px;flex:0 0 34px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;background:var(--c)}
+  .bubble{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--c);border-radius:12px;padding:10px 13px;flex:1;min-width:0}
+  .bubble .who{font-weight:700;font-size:12.5px;margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .bubble .who .who-name{color:var(--c)}
+  .bubble .meta{font-size:11px;color:var(--muted);font-weight:400}
+  .src-CEO{--c:var(--ceo)}.src-CPO{--c:var(--cpo)}.src-CTO{--c:var(--cto)}.src-PRG{--c:var(--prg)}
+  .src-REV{--c:var(--rev)}.src-TST{--c:var(--tst)}.src-CNS{--c:var(--cns)}.src-CHRO{--c:var(--chro)}.src-SYS{--c:var(--sys)}
+  /* markdown */
+  .md{font-size:13.5px;color:#dfe2ea;overflow-wrap:anywhere}
+  .md h1,.md h2,.md h3,.md h4{margin:10px 0 5px;line-height:1.3}
+  .md h1{font-size:16px}.md h2{font-size:15px}.md h3{font-size:14px}.md h4{font-size:13px;color:#cfd3de}
+  .md p{margin:6px 0}
+  .md ul,.md ol{margin:5px 0 5px 4px;padding-left:18px}
+  .md li{margin:2px 0}
+  .md code{background:#0d0f15;border:1px solid var(--line);border-radius:4px;padding:.5px 5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#9fd0ff}
+  .md a{color:var(--accent)}
+  .md hr{border:none;border-top:1px solid var(--line);margin:10px 0}
+  .md strong{color:#fff}
+  .md table{border-collapse:collapse;margin:6px 0;font-size:12px}
+  .md th,.md td{border:1px solid var(--line);padding:3px 8px;text-align:left}
+  .md th{background:var(--panel2)}
+  .md blockquote{border-left:3px solid var(--line);margin:6px 0;padding:2px 10px;color:var(--muted)}
+  /* folded context */
+  details.ctx{margin:5px 0}
+  details.ctx>summary{cursor:pointer;color:var(--muted);font-size:11px;list-style:none}
+  details.ctx>summary::-webkit-details-marker{display:none}
+  details.ctx>summary:before{content:"▸ role context";color:var(--sys)}
+  details.ctx[open]>summary:before{content:"▾ role context"}
+  details.ctx .cbody{font-size:11.5px;color:#9aa0b0;white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:8px 10px;margin-top:5px;font-family:ui-monospace,Menlo,monospace}
+  /* code widget */
+  .cw{border:1px solid var(--line);border-radius:8px;margin:7px 0;overflow:hidden;background:#0d0f15}
+  .cwh{display:flex;align-items:center;gap:10px;padding:6px 11px;cursor:pointer;background:#11141c;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .cwh:hover{background:#161a26}
+  .cwh .fn{color:#7fd8a8;font-weight:700}
+  .cwh .fn.noname{color:var(--muted);font-weight:400}
+  .cwh .cmeta{color:var(--muted);font-size:11px}
+  .cwh .delta{color:#e0c060;font-size:11px}
+  .cwh .exp{margin-left:auto;color:var(--muted)}
+  .cw .modes{display:flex;gap:4px;margin-left:6px}
+  .cw .mode{font-size:10px;padding:1px 7px;border-radius:12px;border:1px solid var(--line);color:var(--muted);cursor:pointer}
+  .cw .mode.on{color:#fff;border-color:var(--accent);background:var(--panel2)}
+  .cw .mode.dis{opacity:.35;cursor:not-allowed}
+  .cwb{font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre;overflow:auto;max-height:460px;padding:9px 11px;color:#c7ccd9;line-height:1.45}
+  .cwb .ln{display:block}
+  .cwb .add{background:#10301e;color:#9ff0c0}
+  .cwb .del{background:#3a1518;color:#f3a0a0}
+  .cwb .ctxln{color:#8b91a3}
+  /* verdict tab + final code */
+  .vfull{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 20px 18px}
+  .empty{padding:60px;text-align:center;color:var(--muted)}
+  .err{margin:40px auto;max-width:560px;background:#241a1a;border:1px solid #5b2e2e;border-radius:10px;padding:18px}
+  code.cmd{background:#000;padding:2px 7px;border-radius:5px;color:#7fd8a8;font-family:ui-monospace,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="side">
+    <h1>ChatDev · 15 traces</h1>
+    <div class="stats" id="stats"></div>
+    <input class="search" id="search" placeholder="filter by task / misalignment / outcome…">
+    <div class="tlist" id="tlist"></div>
+  </div>
+  <div class="main"><div class="wrap" id="wrap"><div class="empty">Loading traces…</div></div></div>
+</div>
+
+<script>
+const ABBR_ROLE={CEO:'Chief Executive Officer',CPO:'Chief Product Officer',CTO:'Chief Technology Officer',
+  PRG:'Programmer',REV:'Code Reviewer',TST:'Software Test Engineer',CNS:'Counselor',CHRO:'Chief Human Resource Officer'};
+let TRACES=[], cur=0, tab='transcript';
+let codeStore={}, codeId=0;
+const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const V=t=>t.verdict||{};
+
+/* ---------- tiny markdown renderer (code fences already extracted) ---------- */
+function inlineMd(s){
+  s=esc(s);
+  s=s.replace(/`([^`]+)`/g,(_,c)=>`<code>${c}</code>`);
+  s=s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  s=s.replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>');
+  s=s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return s;
+}
+function mdToHtml(src){
+  if(!src) return '';
+  const lines=String(src).split('\n');
+  let html='', i=0;
+  const closeList=st=>{ if(st.ul){html+='</ul>';st.ul=false} if(st.ol){html+='</ol>';st.ol=false} };
+  const st={ul:false,ol:false};
+  while(i<lines.length){
+    let ln=lines[i];
+    if(/^\s*$/.test(ln)){ closeList(st); i++; continue; }
+    let m;
+    if(m=ln.match(/^(#{1,6})\s+(.*)$/)){ closeList(st); const n=m[1].length; html+=`<h${n}>${inlineMd(m[2])}</h${n}>`; i++; continue; }
+    if(/^\s*([-*_])\1\1+\s*$/.test(ln)){ closeList(st); html+='<hr>'; i++; continue; }
+    if(/^\s*\|.*\|\s*$/.test(ln) && i+1<lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i+1])){
+      closeList(st);
+      const row=r=>r.trim().replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
+      const head=row(ln); i+=2; let body='';
+      while(i<lines.length && /^\s*\|.*\|\s*$/.test(lines[i])){ body+='<tr>'+row(lines[i]).map(c=>`<td>${inlineMd(c)}</td>`).join('')+'</tr>'; i++; }
+      html+=`<table><thead><tr>${head.map(c=>`<th>${inlineMd(c)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`;
+      continue;
+    }
+    if(m=ln.match(/^\s*[-*+]\s+(.*)$/)){ if(!st.ul){closeList(st);html+='<ul>';st.ul=true} html+=`<li>${inlineMd(m[1])}</li>`; i++; continue; }
+    if(m=ln.match(/^\s*\d+\.\s+(.*)$/)){ if(!st.ol){closeList(st);html+='<ol>';st.ol=true} html+=`<li>${inlineMd(m[1])}</li>`; i++; continue; }
+    if(m=ln.match(/^\s*>\s?(.*)$/)){ closeList(st); html+=`<blockquote>${inlineMd(m[1])}</blockquote>`; i++; continue; }
+    // paragraph: gather until blank
+    closeList(st); let para=[ln]; i++;
+    while(i<lines.length && !/^\s*$/.test(lines[i]) && !/^(\s*[-*+]\s|\s*\d+\.\s|#{1,6}\s|\s*>|\s*\|)/.test(lines[i])){ para.push(lines[i]); i++; }
+    html+=`<p>${inlineMd(para.join('\n'))}</p>`;
+  }
+  closeList(st);
+  return html;
+}
+
+/* ---------- line diff (LCS) ---------- */
+function lineDiff(a,b){
+  const A=a.split('\n'), B=b.split('\n'), n=A.length, m=B.length;
+  const dp=Array.from({length:n+1},()=>new Int32Array(m+1));
+  for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)
+    dp[i][j]=A[i]===B[j]?dp[i+1][j+1]+1:Math.max(dp[i+1][j],dp[i][j+1]);
+  const out=[]; let i=0,j=0;
+  while(i<n&&j<m){
+    if(A[i]===B[j]){out.push([' ',A[i]]);i++;j++;}
+    else if(dp[i+1][j]>=dp[i][j+1]){out.push(['-',A[i]]);i++;}
+    else{out.push(['+',B[j]]);j++;}
+  }
+  while(i<n)out.push(['-',A[i++]]);
+  while(j<m)out.push(['+',B[j++]]);
+  return out;
+}
+
+/* ---------- sidebar ---------- */
+function outClass(o){o=(o||'').toLowerCase();return /working|correct/.test(o)?'ok':/wrong|crash|does not run|broken/.test(o)?'wr':'no'}
+function renderStats(){
+  const m={};
+  TRACES.forEach(t=>{const k=V(t).misalignment||'n/a';m[k]=(m[k]||0)+1});
+  const seg=(o,l)=>`<span class="seg"><b>${o||0}</b> ${l}</span>`;
+  document.getElementById('stats').innerHTML=
+    `misalignment: ${seg(m.strong,'strong')}${seg(m.moderate,'moderate')}${seg(m.weak,'weak')}${seg(m.none,'none')}`;
+}
+function renderList(filter=''){
+  const f=filter.toLowerCase(), el=document.getElementById('tlist'); el.innerHTML='';
+  TRACES.forEach((t,i)=>{
+    const v=V(t);
+    const hay=`${t.task} ${v.misalignment} ${v.outcome} ${v.summary}`.toLowerCase();
+    if(f && !hay.includes(f)) return;
+    const g=v.misalignment||'n/a';
+    const d=document.createElement('div');
+    d.className='titem'+(cur===i?' active':'');
+    d.onclick=()=>select(i);
+    d.innerHTML=`<div class="nm">${esc(t.task)}</div>
+      <div class="q">${esc(v.summary||t.task_prompt).slice(0,120)}</div>
+      <div class="badges">
+        <span class="b ${outClass(v.outcome)}">${esc((v.outcome||'?').slice(0,22))}</span>
+        <span class="b gen-${g}">misalign:${g}</span>
+      </div>`;
+    el.appendChild(d);
+  });
+}
+function select(i){cur=i;tab='transcript';renderList(document.getElementById('search').value);renderTrace();document.querySelector('.main').scrollTop=0;}
+
+/* ---------- main render ---------- */
+function renderTrace(){
+  const t=TRACES[cur], v=V(t);
+  const si=t.software_info||{};
+  const pit=(k,lab)=>si[k]!==undefined?`<span class="pit">${lab} <b>${esc(si[k])}</b></span>`:'';
+  let html=`<div class="task">
+    <div class="kv"><span class="nm">${esc(t.task)}</span>
+      <span class="b cat">${esc(t.run)}</span>
+      <span class="b ${outClass(v.outcome)}">${esc(v.outcome||'?')}</span>
+      <span class="b gen-${v.misalignment}">misalign: ${esc(v.misalignment)}</span>
+      <span class="lab">${t.seconds}s · rc=${esc(t.rc)} · orig-solved ${esc(t.original_solved)} · cat2 ${esc(t.cat2)}</span></div>
+    <div class="qtext">${esc(t.task_prompt)}</div>
+    <div class="si">${pit('cost','💰')}${pit('code_lines','code')}${pit('num_code_files','files')}${pit('num_utterances','utterances')}${pit('version_updates','versions')}${pit('num_total_tokens','tokens')}${pit('duration','dur')}</div>
+    ${v.summary?`<div class="vsum"><div class="vsummary">${inlineMd(v.summary)}</div></div>`:''}
+  </div>
+  <div class="tabs">
+    <div class="tab ${tab==='transcript'?'on':''}" onclick="setTab('transcript')">Transcript</div>
+    <div class="tab ${tab==='verdict'?'on':''}" onclick="setTab('verdict')">Verdict</div>
+    <div class="tab ${tab==='files'?'on':''}" onclick="setTab('files')">Final code (${(t.files||[]).length})</div>
+  </div>`;
+
+  if(tab==='transcript') html+=renderTranscript(t);
+  else if(tab==='verdict') html+=`<div class="vfull md">${v.md?mdToHtml(v.md):'<div class="empty">No verdict.</div>'}</div>`;
+  else html+=renderFiles(t);
+
+  document.getElementById('wrap').innerHTML=html;
+}
+function setTab(x){tab=x;renderTrace();document.querySelector('.main').scrollTop=0;}
+
+function codeWidget(filename,lang,code,prev){
+  const id='c'+(codeId++);
+  codeStore[id]={code,prev,filename,lang};
+  const n=code.split('\n').length;
+  let delta='';
+  if(prev!=null && prev!==code){
+    const d=lineDiff(prev,code);
+    const add=d.filter(x=>x[0]==='+').length, del=d.filter(x=>x[0]==='-').length;
+    delta=`<span class="delta">+${add} −${del}</span>`;
+  }
+  const hasDiff=prev!=null;
+  return `<div class="cw" data-id="${id}">
+    <div class="cwh" onclick="toggleCode('${id}')">
+      <span class="fn ${filename?'':'noname'}">${esc(filename||(lang||'code'))}</span>
+      <span class="cmeta">${n} lines</span>${delta}
+      <span class="modes" onclick="event.stopPropagation()">
+        <span class="mode on" data-m="full" onclick="setMode('${id}','full')">full</span>
+        <span class="mode ${hasDiff?'':'dis'}" data-m="diff" ${hasDiff?`onclick="setMode('${id}','diff')"`:''}>diff</span>
+      </span>
+      <span class="exp">▸</span>
+    </div>
+    <div class="cwb" id="cwb-${id}" style="display:none"></div>
+  </div>`;
+}
+function toggleCode(id){
+  const body=document.getElementById('cwb-'+id);
+  const exp=document.querySelector(`.cw[data-id="${id}"] .exp`);
+  if(body.style.display==='none'){ body.style.display='block'; exp.textContent='▾';
+    if(!body.dataset.ready){ renderCodeBody(id,'full'); body.dataset.ready='1'; } }
+  else { body.style.display='none'; exp.textContent='▸'; }
+}
+function setMode(id,mode){
+  const cw=document.querySelector(`.cw[data-id="${id}"]`);
+  cw.querySelectorAll('.mode').forEach(e=>e.classList.toggle('on',e.dataset.m===mode));
+  const body=document.getElementById('cwb-'+id);
+  if(body.style.display==='none'){ body.style.display='block'; cw.querySelector('.exp').textContent='▾'; }
+  renderCodeBody(id,mode); body.dataset.ready='1';
+}
+function renderCodeBody(id,mode){
+  const c=codeStore[id], body=document.getElementById('cwb-'+id);
+  if(mode==='diff' && c.prev!=null){
+    const d=lineDiff(c.prev,c.code);
+    body.innerHTML=d.map(([s,l])=>{
+      const cls=s==='+'?'add':s==='-'?'del':'ctxln';
+      return `<span class="ln ${cls}">${esc((s===' '?'  ':s+' ')+l)}</span>`;
+    }).join('');
+  } else {
+    body.innerHTML=c.code.split('\n').map(l=>`<span class="ln">${esc(l)}</span>`).join('');
+  }
+}
+
+function renderTranscript(t){
+  let html='';
+  for(const seg of t.segments){
+    const roles=(seg.roles||[]).filter(Boolean);
+    html+=`<div class="seg"><div class="seghead"><span class="pn">${esc(seg.phase)}</span>`+
+      (roles.length?`<span class="rp">${esc(roles.join('  ↔  '))}</span>`:'')+`</div>`;
+    for(const m of seg.messages){
+      let parts='';
+      if(m.context) parts+=`<details class="ctx"><summary></summary><div class="cbody">${esc(m.context)}</div></details>`;
+      for(const p of m.parts){
+        if(p.t==='md') parts+=`<div class="md">${mdToHtml(p.text)}</div>`;
+        else {
+          const prev = p.filename ? (lastByFile[p.filename] ?? null) : null;
+          parts+=codeWidget(p.filename,p.lang,p.code,prev);
+          if(p.filename) lastByFile[p.filename]=p.code;
+        }
+      }
+      const meta=(m.kind==='start'?'opening':'turn '+(m.turn??0));
+      html+=`<div class="msg src-${m.abbr}">
+        <div class="av">${esc(m.abbr)}</div>
+        <div class="bubble"><div class="who"><span class="who-name">${esc(m.speaker)}</span><span class="meta">${meta}</span></div>${parts}</div>
+      </div>`;
+    }
+    html+=`</div>`;
+  }
+  return html;
+}
+let lastByFile={};
+function renderFiles(t){
+  if(!t.files||!t.files.length) return '<div class="empty">No product files captured.</div>';
+  return '<div class="vfull">'+t.files.map(f=>codeWidget(f.name,f.lang,f.content,null)).join('')+'</div>';
+}
+
+/* reset per-trace code state right before each render */
+const _renderTrace=renderTrace;
+renderTrace=function(){ codeStore={}; codeId=0; lastByFile={}; _renderTrace(); };
+
+document.getElementById('search').addEventListener('input',e=>renderList(e.target.value));
+fetch('traces.json').then(r=>r.json()).then(d=>{
+  TRACES=d; renderStats(); renderList(); select(0);
+}).catch(err=>{
+  document.getElementById('wrap').innerHTML=`<div class="err"><b>Could not load traces.json.</b><br><br>
+   Browsers block <code class="cmd">fetch()</code> from <code class="cmd">file://</code>. Serve this folder over HTTP:<br><br>
+   <code class="cmd">cd chatdev/judging/viewer &amp;&amp; python3 -m http.server 8014</code><br><br>
+   then open <code class="cmd">http://localhost:8014/</code><br><br><span class="hint">${esc(err)}</span></div>`;
+});
+</script>
+</body>
+</html>
