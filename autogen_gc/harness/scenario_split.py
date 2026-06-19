@@ -243,8 +243,11 @@ BOARD_NOTE = (
     "thinking actually ADVANCES; do NOT re-post a note that says the same thing as one "
     "already on the board, and use revise_note ONLY to correct one of YOUR notes that "
     "became FALSE — older notes otherwise stay visible on purpose. Read teammates' notes "
-    "before acting. The scratchpad does NOT replace your posted message; still post your "
-    "findings to the team as usual."
+    "before acting. The scratchpad and your posted message are SEPARATE channels: you "
+    "write to the scratchpad ONLY by calling the add_note / revise_note tools, never by "
+    "typing into your message. Your posted message is a normal message to the team — do "
+    "NOT label it (or any part of it) a 'scratchpad note', and still post your findings "
+    "to the team as usual."
 )
 
 RESEARCHER_SYS = (
