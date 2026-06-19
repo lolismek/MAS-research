@@ -183,11 +183,12 @@ Routing rules:
 
 Return only the member name."""
 
-# Board-mode selector prompt. Adds a {board} block (filled with the rendered scratchpad
-# at selection time) and asks for a one-line rationale BEFORE the name. The rationale is
-# captured and written back to the board so the chosen agent sees WHY it was picked.
-# Used only when SHARED_MEMORY and SELECTOR_BOARD; {board} is always substituted (with
-# "" when the board is empty) so str.format never sees a stray placeholder.
+# Board-mode selector prompt: identical to SELECTOR_PROMPT but with a {board} block
+# (filled with the rendered scratchpad at selection time) so routing is INFORMED by the
+# team's notes. The selector only READS the board — it writes nothing — so the output is
+# the stock "member name only" (no rationale elicitation, no CoT confound). Used only when
+# SHARED_MEMORY and SELECTOR_BOARD; {board} is always substituted (with "" when the board
+# is empty) so str.format never sees a stray placeholder.
 SELECTOR_PROMPT_BOARD = """You are coordinating a small team answering one question.
 
 The team members and their roles:
@@ -223,21 +224,27 @@ Routing rules:
 - Only route to the Finalizer once the Critic has reviewed and its concerns are
   resolved. The Finalizer cannot run before the Critic.
 
-First, write ONE short sentence explaining your choice (you may reference the
-scratchpad and teammates). Then, on a NEW FINAL LINE, output ONLY the chosen member's
-name and nothing else."""
+Return only the member name."""
 
 # Appended to every agent's system message in board mode (the suggestions are exactly
 # that — suggestions; the scratchpad is intentionally open-ended).
 BOARD_NOTE = (
-    "\n\nSHARED SCRATCHPAD: you and your teammates share a scratchpad of free-form "
-    "notes, shown near the top of your context. Use add_note to record what you now "
-    "believe, what you tried that failed, or what you're stuck on, AS YOU WORK, so "
-    "teammates can build on your reasoning. APPEND a new note whenever you learn or "
-    "decide something; use revise_note ONLY to fix one of YOUR earlier notes that "
-    "turned out FALSE — older notes stay visible on purpose. Read teammates' notes "
-    "before acting. The scratchpad does NOT replace your posted message; still post "
-    "your findings to the team as usual."
+    "\n\nSHARED SCRATCHPAD: you and your teammates keep a shared scratchpad of short "
+    "notes (shown near the top of your context) — treat it as the team's shared "
+    "THINKING SPACE, not a chat channel. There is no user here, only your teammates: "
+    "write notes about your OWN reasoning, addressed to no one in particular, and never "
+    "phrase a note as a request to a 'user' (e.g. 'please provide X'). Think out loud on "
+    "it as you work — jot the intermediate steps, partial results, and doubts, not just "
+    "final conclusions. Record what a teammate would need to continue your reasoning: a "
+    "value or count you computed (write the ACTUAL number), a fact you established, a "
+    "hypothesis you're testing, what you tried that failed, and precisely what is "
+    "blocking you. Prefer concrete reasoning over status — 'August_1's June revision "
+    "lists 3 X/Twitter refs' beats 'I still need the data.' APPEND a note only when your "
+    "thinking actually ADVANCES; do NOT re-post a note that says the same thing as one "
+    "already on the board, and use revise_note ONLY to correct one of YOUR notes that "
+    "became FALSE — older notes otherwise stay visible on purpose. Read teammates' notes "
+    "before acting. The scratchpad does NOT replace your posted message; still post your "
+    "findings to the team as usual."
 )
 
 RESEARCHER_SYS = (
@@ -324,9 +331,9 @@ def make_client(cfg):
 
 
 def _make_board_selector_team(agents, board, mc, termination):
-    """Build a SelectorGroupChat whose manager (a) splices the rendered board into the
-    selector prompt and (b) writes its one-line routing rationale back to the board, so
-    the chosen agent sees WHY it was picked.
+    """Build a SelectorGroupChat whose manager splices the rendered board into the selector
+    prompt so routing is INFORMED by the team's notes. The selector only READS the board; it
+    writes nothing (only the four agents write).
 
     This reaches into a private AutoGen class (SelectorGroupChatManager) and re-creates a
     version-specific factory, so the caller MUST wrap it in try/except and fall back to a
@@ -338,21 +345,14 @@ def _make_board_selector_team(agents, board, mc, termination):
     from autogen_agentchat.messages import MessageFactory
 
     class BoardSelectorGroupChatManager(SelectorGroupChatManager):
+        """Read-only board selector: splices the rendered scratchpad into the selector
+        prompt so routing is INFORMED by the team's notes. It writes NOTHING to the board
+        (only the four agents write), so there is no rationale elicitation and no custom
+        name-parsing — the selector returns the stock 'member name only'."""
+
         def __init__(self, *args, board=None, **kwargs):
             super().__init__(*args, **kwargs)
             self._board = board
-            self._last_rationale = ""
-
-        def _mentioned_agents(self, message_content, agent_names):
-            # Board mode elicits "<rationale>\n<NAME on the final line>". Parse ONLY the
-            # last non-empty line for the name (so a rationale mentioning other agents'
-            # names can't trip the >1-mention retry) and stash the rest as the rationale.
-            lines = [ln for ln in (message_content or "").splitlines() if ln.strip()]
-            if not lines:
-                self._last_rationale = ""
-                return super()._mentioned_agents(message_content, agent_names)
-            self._last_rationale = "\n".join(lines[:-1]).strip()
-            return super()._mentioned_agents(lines[-1], agent_names)
 
         async def _select_speaker(self, roles, participants, max_attempts):
             rendered = self._board.render(for_selector=True) if self._board is not None else ""
@@ -363,16 +363,6 @@ def _make_board_selector_team(agents, board, mc, termination):
                 return await super()._select_speaker(roles, participants, max_attempts)
             finally:
                 self._selector_prompt = original
-
-        async def select_speaker(self, thread):
-            self._last_rationale = ""
-            result = await super().select_speaker(thread)
-            if self._board is not None:
-                name = result[0] if isinstance(result, list) else result
-                rationale = (self._last_rationale or "").strip()
-                if rationale:
-                    self._board.add_note("Selector", f"(chose {name}) {rationale}")
-            return result
 
     class BoardSelectorGroupChat(SelectorGroupChat):
         def __init__(self, *args, board=None, **kwargs):

@@ -23,9 +23,11 @@ it **while the agent works** can.
 
 ## What it does
 
-- **One slice per participant** (WebResearcher, Analyst, Critic, Finalizer, **and the
-  Selector**). All four agents read **and** write; the Selector reads the board and writes
-  its one-line routing rationale ("why I picked X") so the chosen agent sees why.
+- **One slice per agent** (WebResearcher, Analyst, Critic, Finalizer). All four agents read
+  **and** write. The **Selector reads** the board (its routing is informed by everyone's
+  current notes) but **writes nothing** — this keeps it simple and keeps the selector arm a
+  clean "does letting the selector see the team's notes improve routing?" test (no rationale
+  elicitation, so no CoT confound).
 - **Notes are free-form** (no schema). The tool docstrings *suggest* "what I now believe /
   what I tried that failed / what I'm stuck on" but enforce nothing.
 - **Append by default; revise only when a prior note became FALSE.** `add_note` appends;
@@ -42,7 +44,7 @@ it **while the agent works** can.
 3. Self-authored — agents/selector write their own notes; **no side extractor model**.
 4. Tool-only auto-trigger for v1 (the agent decides when to write). No forced per-tool-round
    "beat" yet — add one only if the board comes up sparse (`board_note_count` measures it).
-5. All 4 agents **+ the selector** write; all read.
+5. All 4 agents write; all read. The **selector only reads** (it writes nothing).
 6. One guardrail only: a per-author active-note cap (bounds context).
 
 ## Mechanism (files)
@@ -59,17 +61,18 @@ it **while the agent works** can.
 - **`tools.py`** — `make_board_tools(agent_name, board)` → per-agent `add_note` /
   `revise_note` `FunctionTool`s (names set explicitly). Each returns an echo of that agent's
   current notes (with ids) so a later `revise_note` can target a real id; a bad id returns an
-  explicit error listing valid ids.
+  explicit error listing valid ids. When a write trips the active-note cap, the return also
+  names which of the author's oldest notes was archived (so the only signal isn't a later
+  `revise_note` failing on the vanished id).
 - **`scenario_split.py`** — all board code gated on `SHARED_MEMORY`. All 4 agents get the
   write-tools + a `BoardInjectingContext` + a `BOARD_NOTE` system-prompt addendum
   (Critic/Finalizer get a small `max_tool_iterations` so they write-then-speak). The Selector
   (when `SELECTOR_BOARD`) is a `BoardSelectorGroupChat` whose manager splices the board into
-  the selector prompt and captures the routing rationale via a robust **last-line** name parse
-  (so a rationale mentioning other agents can't trip AutoGen's multi-mention retry). The
-  selector subclass reaches into a **private** AutoGen class, so it is wrapped in `try/except`
-  with a fallback to the stock `SelectorGroupChat` (agents still read the board on fallback),
-  plus an eager factory probe so a future-version signature drift fails at construction, not
-  mid-run. The board is dumped to `board_trace.jsonl` in a `finally`, so even a crashed run
+  the selector prompt so routing is informed by the notes — it **reads only, writes nothing**,
+  and returns the stock "member name only" (no rationale parse). The selector subclass reaches
+  into a **private** AutoGen class, so it is wrapped in `try/except` with a fallback to the
+  stock `SelectorGroupChat` (agents still read/write the board on fallback), plus an eager
+  factory probe so a future-version signature drift fails at construction, not mid-run. The board is dumped to `board_trace.jsonl` in a `finally`, so even a crashed run
   keeps its trace.
 - **`run_task.py`** — `--shared-memory` (+ `--no-selector-board`), threaded into `run_one`;
   board namespace; `SHARED_MEMORY`/`SELECTOR_BOARD` env into the scenario subprocess; `board_*`
@@ -81,24 +84,26 @@ it **while the agent works** can.
 |---|---|---|---|
 | baseline | *(none)* | `traces/split4[_openai]/` | the current system, untouched |
 | board, agents-only | `--shared-memory --no-selector-board` | `…_board_agentsonly[_openai]/` | the board among **agents** only |
-| board, full | `--shared-memory` | `…_board[_openai]/` | board + the selector reading/writing |
+| board, full | `--shared-memory` | `…_board[_openai]/` | board + the selector **reading** the board |
 
-> **Confound to keep clean:** in the full arm the selector is also asked to *reason before
-> choosing* (eliciting a rationale is itself a CoT nudge), so the full arm changes the selector
-> in two ways at once. The **agents-only** arm exists to separate "shared memory among agents"
-> from "selector starts reasoning." Treat the treatment as the whole shared-memory system and
-> use the 3-arm ablation for attribution.
+> **Selector arm is now clean:** the full arm's selector only *reads* the board (no rationale
+> elicitation, no writes), so the only thing it adds over the agents-only arm is "the selector
+> sees the team's notes when routing" — no CoT confound. The **agents-only** arm
+> (`--no-selector-board`) keeps the selector fully blind to the board, isolating the board's
+> effect among the agents.
 
 ## Knobs (env vars, on top of the existing harness knobs)
 
 | var | default | effect |
 |---|---|---|
 | `SHARED_MEMORY` | `0` | master switch (set by `--shared-memory`) |
-| `SELECTOR_BOARD` | `1` | selector reads+writes the board (set to `0` by `--no-selector-board`) |
+| `SELECTOR_BOARD` | `1` | selector **reads** the board when routing (set to `0` by `--no-selector-board` → selector is blind to the board) |
 | `BOARD_NOTE_ITERS` | `3` | tool-loop budget for the no-web/code agents (Critic/Finalizer) in board mode |
 
 Active-note cap (`MAX_ACTIVE_NOTES_PER_AGENT=8`) and per-note char cap (`MAX_NOTE_CHARS=1200`)
-are constants in `board.py`.
+are constants in `board.py`. Exceeding the active-note cap archives the author's oldest note to
+history (kept in `board_trace.jsonl` as an `archive` event) and the write-tool's return tells the
+author; char-cap truncation is currently silent.
 
 ## Trace outputs
 
@@ -114,8 +119,9 @@ are constants in `board.py`.
   cap, render, empty→""), `BoardInjectingContext` no-accumulation, and the selector hook's
   eager probe (confirms the private-API factory on autogen 0.7.5).
 - **Live full run** (`0383a3ee`, board-full): **`exact_match: True`**, 3 agents; the board
-  flowed — Selector wrote routing rationales and **WebResearcher called `add_note`** ("Found
-  the bird … as a rockhopper penguin …"); run converged Critic→Finalizer.
+  flowed and **WebResearcher called `add_note`** ("Found the bird … as a rockhopper penguin …");
+  run converged Critic→Finalizer. (This smoke predates the read-only-selector change, so it
+  also shows old Selector-authored routing notes; the selector no longer writes.)
 - **No-accumulation on the wire log:** 9 requests, **max 1** scratchpad block each.
 - **OFF baseline intact:** runs correctly, **no `board_*` keys**, correct namespace.
 

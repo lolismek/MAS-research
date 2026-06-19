@@ -41,6 +41,7 @@ class Board:
         self._counters: Dict[str, int] = {}
         self.events: List[dict] = []   # append-only log; dumped to board_trace.jsonl
         self._turn = 0                 # coarse logical clock, bumped once per agent turn
+        self.last_archived: List[Note] = []  # notes the most recent add/revise archived (cap); read by the write-tool
 
     # ---- logical clock (bumped from TeamAwareAssistantAgent._add_messages_to_context) ----
     def mark_turn(self) -> None:
@@ -53,7 +54,7 @@ class Board:
         nid = f"{agent}-{self._counters[agent]}"
         note = Note(note_id=nid, agent=agent, text=text, created_turn=self._turn)
         self._notes.setdefault(agent, []).append(note)
-        self._enforce_cap(agent)
+        self.last_archived = self._enforce_cap(agent)
         self._log("add", note)
         return note
 
@@ -71,7 +72,7 @@ class Board:
         new = Note(note_id=nid, agent=agent, text=text,
                    created_turn=self._turn, revised_from=note_id)
         self._notes[agent].append(new)
-        self._enforce_cap(agent)
+        self.last_archived = self._enforce_cap(agent)
         self._log("revise", new)
         return new
 
@@ -112,14 +113,18 @@ class Board:
         return "\n".join(json.dumps(e, ensure_ascii=False) for e in self.events)
 
     # ---- internals ----
-    def _enforce_cap(self, agent: str) -> None:
+    def _enforce_cap(self, agent: str) -> List[Note]:
+        """Archive oldest-active notes beyond the cap (history is preserved). Returns the
+        archived notes so the write-tool can tell the author what was dropped."""
         active = [n for n in self._notes[agent] if n.active]
         excess = len(active) - MAX_ACTIVE_NOTES_PER_AGENT
         if excess <= 0:
-            return
-        for n in active[:excess]:   # archive the oldest-active; history is preserved
+            return []
+        archived = active[:excess]
+        for n in archived:
             n.active = False
             self._log("archive", n)
+        return archived
 
     def _find_active(self, agent: str, note_id: str) -> Optional[Note]:
         for n in self._notes.get(agent, []):

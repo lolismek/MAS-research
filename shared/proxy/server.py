@@ -60,7 +60,7 @@ OPENAI = dict(
     key=os.environ.get('OPENAI_API_KEY', ''),
     model=os.environ.get('OPENAI_MODEL', 'gpt-5.4-mini'),
     reasoning=dict(summary=os.environ.get('REASONING_SUMMARY', 'detailed'),
-                   effort=os.environ.get('REASONING_EFFORT', 'medium')))
+                   effort=os.environ.get('REASONING_EFFORT', 'low')))
 
 
 def _redact_images(messages):
