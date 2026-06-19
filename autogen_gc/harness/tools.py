@@ -183,21 +183,20 @@ def make_board_tools(agent_name, board):
     def add_note(text: str) -> str:
         """Append a NEW note to your slice of the shared team scratchpad.
 
-        The scratchpad is the team's shared THINKING SPACE, read by your teammates — it
-        is NOT a message to a user (there is no user). Write in the first person about
-        your own reasoning; never phrase a note as a request to a 'user' (e.g. "please
-        provide X"). Think out loud AS YOU WORK: the intermediate steps, partial results,
-        the value or count you just computed (write the ACTUAL number), a fact you
-        established, a hypothesis you're testing, what you tried that failed, and exactly
-        what is blocking you — not just final conclusions.
+        The scratchpad is the team's shared THINKING SPACE, read by your teammates. Use
+        it generously: call this whenever you learn or work out something a teammate could
+        use — a fact you established, a value or count you computed (write the ACTUAL
+        number), a partial result, a hypothesis you're testing, a dead-end you hit, or
+        what is blocking you. Think out loud AS YOU WORK; don't wait for final
+        conclusions. Write about your OWN reasoning, not as a request to a 'user' (there
+        is no user).
 
-        APPEND a note when your thinking ADVANCES; do NOT re-post a note that says the
-        same thing as one already on the board. To correct one of YOUR OWN earlier notes
-        that became false, use revise_note instead; earlier notes otherwise stay visible
-        on purpose. Calling this tool is the ONLY way to write to the scratchpad — it is a
-        SEPARATE channel from your posted message: do not type a 'scratchpad note' into
-        your message, and still post your findings to the team as a normal message.
-        Returns your current notes with their ids.
+        The only thing to avoid is repeating a note already on the board word-for-word; to
+        fix one of YOUR OWN earlier notes that became false, use revise_note instead
+        (older notes otherwise stay visible on purpose). Calling this tool is the ONLY way
+        to write to the scratchpad — it is a SEPARATE channel from your posted message:
+        don't type a 'scratchpad note' into your message, and still post your findings to
+        the team as a normal message. Returns your current notes with their ids.
         """
         note = board.add_note(agent_name, text)
         return _echo(f"Added note {note.note_id}.{_cap_note()}")
