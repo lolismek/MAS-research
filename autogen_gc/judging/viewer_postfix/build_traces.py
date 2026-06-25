@@ -49,6 +49,15 @@ def main():
     size = os.path.getsize(out)
     print(f'wrote {out}  ({len(traces)} traces, {size/1024:.0f} KB)')
 
+    # Also emit data.js (same payload as a <script> global) so index.html opens
+    # straight from file:// with no HTTP server, matching viewer_board.
+    djs = os.path.join(HERE, 'data.js')
+    with open(djs, 'w') as fh:
+        fh.write('window.TRACES_DATA = ')
+        json.dump(traces, fh, indent=1)
+        fh.write(';\n')
+    print(f'wrote {djs}  ({os.path.getsize(djs)/1024:.0f} KB)')
+
     from collections import Counter
     print('outcome     :', dict(Counter(t['verdict'].get('outcome') for t in traces)))
     print('misalignment:', dict(Counter(t['verdict'].get('genuine_misalignment') for t in traces)))
