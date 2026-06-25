@@ -109,6 +109,9 @@
 </div>
 <div class="drawer" id="drawer"><div class="dhead"><div id="dtitle"></div><div class="x" onclick="closeDrawer()">✕</div></div><div class="dbody" id="dbody"></div></div>
 
+<!-- Embedded data (window.TRACES_DATA) so the viewer opens straight from file:// with no
+     HTTP server. Regenerate with build_traces.py. Falls back to fetch('traces.json') if absent. -->
+<script src="data.js"></script>
 <script>
 const ABBR={WebResearcher:'WR',Analyst:'AN',Critic:'CR',Finalizer:'FZ',user:'YOU','?':'??'};
 let TRACES=[], cur=null;
@@ -264,13 +267,15 @@ function closeDrawer(){document.getElementById('drawer').classList.remove('open'
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
 document.getElementById('search').addEventListener('input',e=>renderList(e.target.value));
 
-fetch('traces.json').then(r=>r.json()).then(d=>{
+// Prefer the embedded data.js (works from file://); fall back to fetch for back-compat.
+(window.TRACES_DATA ? Promise.resolve(window.TRACES_DATA) : fetch('traces.json').then(r=>r.json())).then(d=>{
   TRACES=d; renderStats(); renderList(); select(0);
 }).catch(err=>{
-  document.getElementById('wrap').innerHTML=`<div class="err"><b>Could not load traces.json.</b><br><br>
-   Browsers block <code class="cmd">fetch()</code> from <code class="cmd">file://</code>. Serve this folder over HTTP:<br><br>
-   <code class="cmd">cd reproduction/viewer_openai &amp;&amp; python3 -m http.server 8012</code><br><br>
-   then open <code class="cmd">http://localhost:8012/</code><br><br><span class="hint">${esc(err)}</span></div>`;
+  document.getElementById('wrap').innerHTML=`<div class="err"><b>Could not load trace data.</b><br><br>
+   Expected <code class="cmd">data.js</code> (embedded) beside this file. Regenerate it with
+   <code class="cmd">python3 build_traces.py</code>, or serve this folder over HTTP
+   (<code class="cmd">python3 -m http.server 8013</code>) to use <code class="cmd">traces.json</code>.
+   <br><br><span class="hint">${esc(err)}</span></div>`;
 });
 </script>
 </body>
