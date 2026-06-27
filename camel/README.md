@@ -48,3 +48,15 @@ Shared Tinker proxy route `/m/<tag>/v1`, model `gpt-4o` (aliased upstream to
 conda run -n autogen_gc python camel/harness/run_task.py --all          # both smoke tasks
 conda run -n autogen_gc python camel/harness/run_task.py smoke_math      # one
 ```
+
+## Viewer
+Read-only trace inspector, `viewer/serve.py` — Python stdlib only, no deps, no
+writes, touches nothing in the harness. Lists every run (pass/fail, final vs
+expected, calls/tokens) and renders each agent's transcript: system/user/assistant/
+tool messages, tool calls + outputs, and the recovered `<think>` reasoning
+(pulled from `shared/proxy/raw_calls.jsonl` by tag), plus the pipeline flow with
+the 2 edges labeled. Long blocks collapse via native `<details>`.
+```
+python camel/viewer/serve.py            # http://127.0.0.1:8770 (refresh for new runs)
+CAMEL_VIEWER_PORT=9001 python camel/viewer/serve.py
+```
