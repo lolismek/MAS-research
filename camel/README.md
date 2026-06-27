@@ -11,9 +11,18 @@ actor_1 ──▶ actor_2 ──▶ critic ──▶ finalizer
          (edge 1)    (edge 2 = actor_2 answer + critique)
 ```
 
-- **actor_1 / actor_2** — same solver prompt; actor_2 sees actor_1 (a revision pass).
-- **critic** — verifies actor_2 (has tools, so it can recompute/recheck, not rubber-stamp).
-- **finalizer** — merges answer + critique into the published answer; may abstain (`UNKNOWN`).
+Agents are differentiated by **objective** (generate / verify / adjudicate), not
+just by name — otherwise four identical solvers is an expensive self-consistency
+ensemble, not a MAS. Capability follows the objective:
+
+- **actor_1 / actor_2** — *generate*. Same solver prompt (+tools); actor_2 sees
+  actor_1 (an independent second attempt → answer diversity).
+- **critic** — *verify*. Has tools and must use them to CHECK actor_2's specific
+  claims (recompute, re-check facts); it must NOT re-solve from scratch. Replies
+  `Agree` or names the wrong claim(s).
+- **finalizer** — *adjudicate*. **No tools** (so it can only decide, not re-solve).
+  Sees both candidates + the critique; outputs the confirmed answer, or `UNKNOWN`
+  when the candidates disagree / the critique found an unresolved error.
 
 Each agent is `run_agent(...)`: model → optional tool calls → observe → … until it
 stops calling tools or hits `MAX_INNER_STEPS=30` (a runaway backstop, not a budget).
