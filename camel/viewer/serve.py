@@ -25,6 +25,9 @@ TRACES = os.path.join(ROOT, "traces")
 RAW = os.path.join(REPO_ROOT, "shared", "proxy", "raw_calls.jsonl")
 PORT = int(os.environ.get("CAMEL_VIEWER_PORT", sys.argv[1] if len(sys.argv) > 1 else "8770"))
 
+sys.path.insert(0, os.path.join(ROOT, "harness"))
+import agg as _agg          # shared aggregation (dedup latest run + restrict to eval set)
+
 ROLE_COLOR = {"system": "#6b7280", "user": "#2563eb",
               "assistant": "#059669", "tool": "#d97706"}
 
@@ -157,6 +160,60 @@ def _cost_str(res):
     return f"${c:.4f}" if isinstance(c, (int, float)) else "—"
 
 
+def _o_cell(label, x, n, color):
+    """A colored outcome cell: 'NN.N% (k)'."""
+    p = (x / n * 100) if n else 0.0
+    return (f"<td style='color:{color};font-weight:600'>{p:.1f}% "
+            f"<span class=muted style='font-weight:400'>({x})</span></td>")
+
+
+def _summ_row(title, d, bold=False):
+    n = d["n"]
+    nm = f"<b>{esc(title)}</b>" if bold else esc(title)
+    avg = f"{d['seconds']/n:.0f}s" if n else "—"
+    return (f"<tr><td>{nm}</td><td class=muted>{n}</td>"
+            + _o_cell("correct", d["correct"], n, OUTCOME_COLOR["correct"])
+            + _o_cell("wrong", d["wrong_confident"], n, OUTCOME_COLOR["wrong_confident"])
+            + _o_cell("abstained", d["abstained"], n, OUTCOME_COLOR["abstained"])
+            + f"<td class=muted>${d['cost']:.2f}</td><td class=muted>{avg}</td></tr>")
+
+
+def render_summary():
+    """Aggregate scoreboard at the top of the index: per arm × benchmark, deduped to
+    the latest run per task and restricted to the official evaluated id set. Mirrors
+    camel/RESULTS.md (same agg module), so the page and the doc never disagree."""
+    arms = _agg.arms()
+    if not arms:
+        return ""
+    cols = ("<tr><th>benchmark</th><th>n</th><th>correct</th><th>wrong-confident</th>"
+            "<th>abstained</th><th>cost</th><th>avg time</th></tr>")
+    blocks = ""
+    for arm in arms:
+        s = _agg.summarize(arm, restrict=True)
+        tot = dict(n=0, correct=0, abstained=0, wrong_confident=0, cost=0.0, seconds=0.0)
+        rows = ""
+        for b, title in _agg.BENCHES:
+            d = s[b]
+            if not d["n"]:
+                continue
+            for k in tot:
+                tot[k] += d[k]
+            rows += _summ_row(title, d)
+        if not tot["n"]:
+            continue
+        rows += _summ_row("Total", tot, bold=True)
+        blocks += (f"<div style='margin:6px 0 14px'><div class=role "
+                   f"style='color:#a78bfa;margin-bottom:4px'>arm: {esc(arm)}</div>"
+                   f"<table>{cols}{rows}</table></div>")
+    return (f"<div class=card><h2 style='margin-top:0'>results summary</h2>"
+            f"<div class=muted style='margin:-4px 0 8px'>latest run per task · "
+            f"official evaluated set · honesty axis = "
+            f"<span style='color:{OUTCOME_COLOR['correct']}'>correct</span> / "
+            f"<span style='color:{OUTCOME_COLOR['wrong_confident']}'>wrong-confident</span> / "
+            f"<span style='color:{OUTCOME_COLOR['abstained']}'>abstained (honest UNKNOWN)</span>"
+            f"</div>{blocks}</div>")
+
+
 def render_index():
     runs = discover_runs()
     groups = {}
@@ -210,7 +267,8 @@ def render_index():
                 f"<td class=muted>{esc(res.get('seconds'))}s</td></tr>")
         sections += (f"<h2 id='b-{b}'>{esc(BENCH_TITLE.get(b, b))} "
                      f"<span class=bsum>— {summ}</span></h2><table>{cols}{rows}</table>")
-    return page("CAMEL traces", head + sections)
+    return page("CAMEL traces", head + render_summary()
+                + "<h2>all runs</h2>" + sections)
 
 
 def render_msg(m, toolmap):
