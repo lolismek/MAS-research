@@ -7,7 +7,7 @@ internal loops (not trivially one-shot) — see the selection rationale in `../P
 
 | Benchmark | Dir | n | `answer_type` | `tool_profile` | Hard? / honesty | Source | Gated |
 |---|---|---|---|---|---|---|---|
-| **GAIA** | `gaia/` | 28 (L1 8 · L2 15 · L3 5) | `freeform` | `web_compute` | multi-step tool chains; **L3 = hard slice** | local `autogen_gc/tasks/` | — |
+| **GAIA** | `gaia/` | all **level-3** (~26) | `freeform` | `web_compute` | GAIA's hard slice: longest multi-source tool chains | `gaia-benchmark/GAIA` validation | **yes** |
 | **GPQA-Diamond** | `gpqa_diamond/` | 198 | `mcq` | `none` | PhD-level, expert-validated → **honesty showcase** | `Idavidrein/gpqa` | **yes** |
 | **MATH level-5** | `math_l5/` | 134 | `math` | `math` | hardest MATH tier; critic recompute has teeth | `HuggingFaceH4/MATH-500` (lvl 5) | no |
 
@@ -27,10 +27,11 @@ internal loops (not trivially one-shot) — see the selection rationale in `../P
 `mcq` (letter match), `math` (strip `\boxed`/`$`, numeric-aware).
 
 ## (Re)generating the data
-`tasks.jsonl` is **git-ignored** (derived + reproducible; also keeps gated GPQA
-content out of git). Regenerate locally — GPQA/MATH need `HUGGINGFACE_TOKEN` in the
-repo-root `.env` (the GPQA token needs *public-gated-repo* access + accepting the
-dataset's terms once on its HF page):
+`tasks.jsonl` is **git-ignored** (derived + reproducible; also keeps gated GPQA/GAIA
+content out of git). Regenerate locally — all three need `HUGGINGFACE_TOKEN` in the
+repo-root `.env` with *public-gated-repo* access. **GPQA** and **GAIA** are gated: accept
+their terms once on the HF page (GPQA = click-through; **GAIA = manual access request,
+approval not instant**):
 ```
 conda run -n autogen_gc python benchmarks/gaia/prep.py
 conda run -n autogen_gc python benchmarks/gpqa_diamond/prep.py
