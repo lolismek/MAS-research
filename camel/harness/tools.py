@@ -17,7 +17,7 @@ import requests
 PPLX_SEARCH_URL = os.environ.get("PPLX_SEARCH_URL", "https://api.perplexity.ai/search")
 MAX_RESULTS = int(os.environ.get("WEBSURFER_MAX_RESULTS", "10"))
 FETCH_MAX_CHARS = int(os.environ.get("FETCH_MAX_CHARS", "8000"))
-READ_FILE_MAX_CHARS = int(os.environ.get("READ_FILE_MAX_CHARS", "12000"))
+READ_FILE_MAX_CHARS = int(os.environ.get("READ_FILE_MAX_CHARS", "40000"))
 PYTHON_TIMEOUT = int(os.environ.get("RUN_PYTHON_TIMEOUT", "30"))
 
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -218,7 +218,12 @@ def read_file(path: str) -> str:
     except Exception as e:
         return f"ERROR: read_file failed for {path!r}: {e!r}"
     if len(text) > READ_FILE_MAX_CHARS:
-        text = text[:READ_FILE_MAX_CHARS] + f"\n\n[...truncated at {READ_FILE_MAX_CHARS} chars...]"
+        dropped = len(text) - READ_FILE_MAX_CHARS
+        text = (text[:READ_FILE_MAX_CHARS] +
+                f"\n\n[...{dropped} chars NOT shown — this is a PARTIAL view of the file. "
+                f"To process the COMPLETE file (all rows/records), do NOT rely on the text "
+                f"above; instead use run_python to open this path directly and compute over "
+                f"all of it: {path}]")
     return text or f"(no readable text in {path})"
 
 

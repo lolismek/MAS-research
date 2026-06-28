@@ -18,7 +18,12 @@ from tools import tool_specs, run_tool
 
 MAX_INNER_STEPS = 30   # runaway backstop, NOT a budget — most agents stop far sooner
 TEMPERATURE = 0.0
-MAX_TOOL_CHARS = 6000  # cap each tool result: one big fetched page can exceed Qwen's 64k ctx
+MAX_TOOL_CHARS = 6000   # cap a web/tool result: one big fetched page can exceed Qwen's 64k ctx
+# read_file returns the task's OWN attached file — the file IS the task, so don't clip it with
+# the web-page cap (that silently drops data rows). read_file self-limits (READ_FILE_MAX_CHARS);
+# this larger ceiling just lets its output (incl. its actionable truncation note) through whole.
+FILE_TOOL_CHARS = 45000
+_FILE_TOOLS = {"read_file"}
 
 
 def _truncate(s, cap=MAX_TOOL_CHARS):
@@ -100,8 +105,9 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
         for tc in calls:                       # execute every requested tool, append results
             out = run_tool(tc.function.name, tc.function.arguments)
             n_tools += 1
+            cap = FILE_TOOL_CHARS if tc.function.name in _FILE_TOOLS else MAX_TOOL_CHARS
             messages.append({"role": "tool", "tool_call_id": tc.id,
-                             "content": _truncate(out)})
+                             "content": _truncate(out, cap)})
     else:
         # Hit the backstop; use the last assistant text we have, if any.
         final = next((m["content"] for m in reversed(messages)
