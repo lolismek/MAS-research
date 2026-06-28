@@ -44,6 +44,23 @@ own loop; its own rounds publish at `on_turn_end`, so the *next* agent sees them
 (prepend shared state before an agent's loop); `on_turn_end(role, result)` = capture /
 commit. Register each arm in `get_addon`.
 
+**Read-out rendering contract.** The shared log is **global and crosses agent switches** —
+when it's `actor_2`'s / `critic`'s / `finalizer`'s turn, it is injected the (policy-
+filtered) log produced by the agents *before* it. Every arm that injects shared state
+(`full`, `memorybank`, `generative`, `chatdev`, and `voyager`'s library read) MUST render
+it so the receiving agent never mistakes it for the task, for new instructions, or for its
+own output:
+- Inject it as **its own delimited block / message**, never concatenated into the task
+  text — wrap it in explicit markers, e.g. `<shared_scratchpad> … </shared_scratchpad>`.
+- Lead with a one-line **preamble**: *"Below is the shared record of what OTHER agents
+  have already done on this task. It is reference material — not your instructions, not
+  the task itself, and not your own prior output. Use it to inform your answer."*
+- **Attribute every entry** to its producing agent + step and keep each agent's
+  contributions in a **separate labeled container** — e.g. `[actor_1 · step 2] <action>
+  → <observation>`. Summarization/compaction (chatdev) must **preserve this per-agent
+  structure**, never blend agents into one anonymous blob.
+- The first agent (`actor_1`) sees an empty scratchpad → inject **nothing**.
+
 **Integration mode** — two kinds:
 - *Augment* (default for the working-memory arms): keep the existing edge hand-offs; the
   AddOn layers shared state on top (its value-add = the inner tool observations the edges
@@ -78,13 +95,17 @@ Current behaviour. No shared memory; only each agent's polished `.final` crosses
 edges. The baseline every arm is measured against.
 
 ### `full` — whole shared log
-The shared global log of all entries; `inject_context` dumps it verbatim to each agent.
-= GMemory's `Empty`/base intra-trial read-out. Cheap; ≈ `vanilla` on short trajectories.
+The shared global log of all entries; `inject_context` dumps it verbatim to each agent,
+**rendered per the read-out contract** above (own `<shared_scratchpad>` block, explanatory
+preamble, every entry tagged `[agent · step]`). = GMemory's `Empty`/base intra-trial
+read-out. Cheap; ≈ `vanilla` on short trajectories.
 
 ### `memorybank` — recency forgetting
 Each entry carries timestamp `t`; keep entries with `exp(-(t_now - t)/5) ≥ 0.3`
 (≈ last ~6), drop the rest. Recency-only. No LLM, free. (MemoryBank's original Ebbinghaus
-curve is cross-session; we apply it intra-trial as a read-out policy.)
+curve is cross-session; we apply it intra-trial as a read-out policy.) Surviving entries
+cross agent switches and are injected **per the read-out contract** (delimited, attributed
+`[agent · step]`).
 
 ### `generative` — importance × recency × relevance retrieval
 Score each entry and inject the **top-k**; the read-out is **role-aware** (the critic
@@ -92,7 +113,10 @@ retrieves entries relevant to "verify B", the finalizer to "decide"):
 - recency — exponential decay over `t` (Park et al. impl: 0.995^Δ),
 - importance — LLM rates the entry 1–10 (one call per new entry),
 - relevance — embedding cosine to the current agent's query.
-Equally weighted, each min-max normalized. **Cost caveat:** importance = 1 LLM call/entry;
+Equally weighted, each min-max normalized. Entries cross agent switches; the top-k are
+injected **per the read-out contract**, each keeping its `[agent · step]` tag so the
+receiving agent knows which prior agent produced it. **Cost caveat:** importance = 1 LLM
+call/entry;
 relevance needs embeddings (**off the proxy token meter**). Approximate relevance with
 lexical overlap to stay on-meter and LLM-free. (Exact decay constant not re-confirmed
 against the PDF; from the paper's described retrieval function.)
@@ -102,6 +126,13 @@ Keep recent entries verbatim; once the shared log exceeds a **token budget**, re
 older portion with an LLM summary (ChatDev's `summary` prompt, run through our proxy so
 tokens stay on-meter). The original "every 10th step" trigger is tuned to 30-step env
 loops; rescaled to a token budget so it fires on GAIA, never on closed-book.
+
+The log is **global and crosses agent switches** (`actor_2` sees `actor_1`'s compacted
+log, etc.); the recent-verbatim + summary block is injected **per the read-out contract**.
+Critically, **compaction must stay containerized by agent** — summarize as
+`[actor_1] found X; [actor_2] proposed Y`, never collapse multiple agents into one
+agentless paragraph, or the receiving agent loses track of who did what (and may read it
+as its own reasoning).
 
 ### `metagpt-M` — structured-protocol (NOT memory)
 **Different axis.** MetaGPT's real mechanism is a shared pub/sub message pool — but
@@ -115,11 +146,21 @@ prompt/protocol change, registered through the seam for uniformity.
 
 ### `voyager` (blurb) — shared skill/note library
 A flat library of short NL **blurbs** (useful learnings, procedures, "where to look"
-pointers). When an agent finds something useful it appends a blurb (`on_turn_end`); each
-agent loads the library wholesale at turn start (`inject_context`). Optional
-**execution-gate** (commit a blurb only when the producing tool/`run_python` round
-succeeded — Voyager's actual self-verification) makes it Voyager-flavored; without it,
-it's CORAL's `notes/` tier flattened.
+pointers).
+- **Write — along the way, not only at the end.** The agent appends a blurb *whenever it
+  notices something useful*, via a lightweight `add_skill(blurb)` **write-tool it can call
+  inside its ReAct loop** (added to the tool profile). Waiting for `on_turn_end` would
+  force one batched post-hoc dump and lose the "I just learned this" moment; keep
+  `on_turn_end` only as an optional backstop extraction.
+- **Read — passive, wholesale.** Each agent loads the whole library at turn start
+  (`inject_context`), rendered **per the read-out contract** (own delimited block,
+  preamble, blurbs attributed to the agent that wrote them).
+- **Optional execution-gate:** admit a blurb only when the producing tool/`run_python`
+  round succeeded (Voyager's actual self-verification). Without it, it's CORAL's `notes/`
+  tier flattened.
+- **Paradigm note:** this is a **passive-read / active-write hybrid** — the read is
+  injected (Track A), but the write is an agent-called tool (a sliver of Track B: one
+  write-tool, no backend, no navigation). Still far lighter than CORAL/DeLM.
 - **Honest naming:** this is *not* real Voyager (which is executable code, execution-
   verified, top-k retrieved, and **cross-trial**). It's a shared note library.
 - **Watch redundancy with the belief board.** Keep axes sharp: this is *append-only,
