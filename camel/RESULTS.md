@@ -5,21 +5,28 @@
 > headline scoreboard for the vanilla arm.
 
 **Arm:** `vanilla` (no add-on) · 4-agent line actor_1 → actor_2 → critic → finalizer.
-**Model:** Qwen/Qwen3.6-35B-A3B via the Tinker proxy. **Run:** wall-clock **57.5 min** at `--workers 16` · batch spend **$10.45** · per-task $1
+**Model:** Qwen/Qwen3.6-35B-A3B via the Tinker proxy. **Run:** compute spend **$15.63** (full sweep $10.45 + targeted re-run of 45 substrate-affected tasks $5.18; final trace set $12.07) · per-task $1
 budget cap, auto-resume. Numbers are the latest run per task, restricted to the
 official evaluated id sets (349 tasks).
 
 ## Scoreboard
 
-The third axis is **honesty**: every answer is scored 3-way — *correct*, *wrong-confident*
-(hallucinated a confident wrong answer), or *abstained* (honestly published `UNKNOWN`).
+The third axis is **honesty**: every answer is scored 4-way — *correct*, *wrong-confident*
+(hallucinated a confident wrong answer), *abstained* (honestly published `UNKNOWN`), or
+*no-answer* (the pipeline never emitted a parseable answer — output truncated at the token
+cap or looped out; a harness failure, deliberately kept *out* of wrong-confident so it
+can't masquerade as a hallucination).
 
-| Benchmark | n | ✅ correct | ❌ wrong-confident | 🤷 abstained | cost | avg time |
-|---|---:|---|---|---|---:|---:|
-| GPQA-Diamond | 198 | **84.8%** (168) | 14.6% (29) | 0.5% (1) | $4.61 | 155s |
-| MATH-L5 | 134 | **70.1%** (94) | 29.9% (40) | 0.0% (0) | $2.46 | 118s |
-| GAIA | 17 | **29.4%** (5) | 29.4% (5) | 41.2% (7) | $4.24 | 302s |
-| **Total** | 349 | 76.5% (267) | 21.2% (74) | 2.3% (8) | $11.31 | — |
+| Benchmark | n | ✅ correct | ❌ wrong-confident | 🤷 abstained | ⛔ no-answer | cost | avg time |
+|---|---:|---|---|---|---|---:|---:|
+| GPQA-Diamond | 198 | **86.9%** (172) | 11.1% (22) | 1.5% (3) | 0.5% (1) | $5.70 | 204s |
+| MATH-L5 | 134 | **97.8%** (131) | 1.5% (2) | 0.0% (0) | 0.7% (1) | $2.69 | 132s |
+| GAIA | 17 | **41.2%** (7) | 29.4% (5) | 29.4% (5) | 0.0% (0) | $3.68 | 334s |
+| **Total** | 349 | 88.8% (310) | 8.3% (29) | 2.3% (8) | 0.6% (2) | $12.07 | — |
+
+Scoring uses a LaTeX-aware math comparator (`harness/scoring.py`): `\frac{a}{b}`≡`a/b`,
+unit/`$`/`^\circ` stripping, `\pm`-set and root-order insensitivity. Existing traces were
+re-scored in place with `harness/rescore_traces.py` (no model calls) after the fix.
 
 ## The honesty signal — abstention tracks genuine uncertainty, not raw difficulty
 
@@ -47,6 +54,13 @@ room to move the needle on **GAIA**, and almost nothing to act on for MATH.
 
 ## Caveats / open items
 
+- **Re-run delta (substrate fixes applied).** The 45 tasks that hit the 8192 output cap or
+  context overflow were re-run with the raised cap + compaction + finalizer retry: **+11
+  recovered to correct** (total 299→310), and `no-answer` collapsed **9→2**. Two regressions
+  surfaced a second-order effect of the higher cap: on a few pathological closed-book tasks an
+  early agent now emits a ~28k-token answer that overflows the *downstream* agent's context
+  (`gpqad_079`, `math_l5_037` → no_answer; `gaia_72c06643` honest-abstain → wrong). Fix on the
+  list: clip oversized upstream agent outputs when composing the next agent's prompt.
 - **GPQA-Diamond's pass rate is high for a 3B-active model** — validate it's genuine vs.
   a too-loose letter-extraction match by spot-checking a handful of transcripts before
   quoting it as *the* baseline.

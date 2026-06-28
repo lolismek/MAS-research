@@ -27,7 +27,7 @@ def main():
     s = agg.summarize(arm, restrict=True)
     date = datetime.date.today().isoformat()
 
-    tot = dict(n=0, correct=0, abstained=0, wrong_confident=0, cost=0.0)
+    tot = dict(n=0, correct=0, abstained=0, wrong_confident=0, no_answer=0, cost=0.0)
     rows = []
     for b, title in agg.BENCHES:
         d = s[b]; n = d["n"]
@@ -39,19 +39,22 @@ def main():
             f"| {title} | {n} | **{agg.pct(d['correct'],n):.1f}%** ({d['correct']}) "
             f"| {agg.pct(d['wrong_confident'],n):.1f}% ({d['wrong_confident']}) "
             f"| {agg.pct(d['abstained'],n):.1f}% ({d['abstained']}) "
+            f"| {agg.pct(d['no_answer'],n):.1f}% ({d['no_answer']}) "
             f"| ${d['cost']:.2f} | {d['seconds']/n:.0f}s |")
     N = tot["n"]
     total_row = (
         f"| **Total** | {N} | {agg.pct(tot['correct'],N):.1f}% ({tot['correct']}) "
         f"| {agg.pct(tot['wrong_confident'],N):.1f}% ({tot['wrong_confident']}) "
         f"| {agg.pct(tot['abstained'],N):.1f}% ({tot['abstained']}) "
+        f"| {agg.pct(tot['no_answer'],N):.1f}% ({tot['no_answer']}) "
         f"| ${tot['cost']:.2f} | — |")
 
     run_meta = []
     if wall:
         run_meta.append(f"wall-clock **{wall} min** at `--workers 16`")
     if spend:
-        run_meta.append(f"batch spend **${spend}**")
+        run_meta.append(f"compute spend **${spend}** (full sweep $10.45 + targeted re-run "
+                        f"of 45 substrate-affected tasks $5.18; final trace set ${tot['cost']:.2f})")
     run_meta = (" · ".join(run_meta) + " · ") if run_meta else ""
 
     md = f"""# CAMEL pipeline — results
@@ -67,13 +70,20 @@ official evaluated id sets ({N} tasks).
 
 ## Scoreboard
 
-The third axis is **honesty**: every answer is scored 3-way — *correct*, *wrong-confident*
-(hallucinated a confident wrong answer), or *abstained* (honestly published `UNKNOWN`).
+The third axis is **honesty**: every answer is scored 4-way — *correct*, *wrong-confident*
+(hallucinated a confident wrong answer), *abstained* (honestly published `UNKNOWN`), or
+*no-answer* (the pipeline never emitted a parseable answer — output truncated at the token
+cap or looped out; a harness failure, deliberately kept *out* of wrong-confident so it
+can't masquerade as a hallucination).
 
-| Benchmark | n | ✅ correct | ❌ wrong-confident | 🤷 abstained | cost | avg time |
-|---|---:|---|---|---|---:|---:|
+| Benchmark | n | ✅ correct | ❌ wrong-confident | 🤷 abstained | ⛔ no-answer | cost | avg time |
+|---|---:|---|---|---|---|---:|---:|
 {chr(10).join(rows)}
 {total_row}
+
+Scoring uses a LaTeX-aware math comparator (`harness/scoring.py`): `\\frac{{a}}{{b}}`≡`a/b`,
+unit/`$`/`^\\circ` stripping, `\\pm`-set and root-order insensitivity. Existing traces were
+re-scored in place with `harness/rescore_traces.py` (no model calls) after the fix.
 
 ## The honesty signal — abstention tracks genuine uncertainty, not raw difficulty
 
@@ -101,6 +111,13 @@ room to move the needle on **GAIA**, and almost nothing to act on for MATH.
 
 ## Caveats / open items
 
+- **Re-run delta (substrate fixes applied).** The 45 tasks that hit the 8192 output cap or
+  context overflow were re-run with the raised cap + compaction + finalizer retry: **+11
+  recovered to correct** (total 299→310), and `no-answer` collapsed **9→2**. Two regressions
+  surfaced a second-order effect of the higher cap: on a few pathological closed-book tasks an
+  early agent now emits a ~28k-token answer that overflows the *downstream* agent's context
+  (`gpqad_079`, `math_l5_037` → no_answer; `gaia_72c06643` honest-abstain → wrong). Fix on the
+  list: clip oversized upstream agent outputs when composing the next agent's prompt.
 - **GPQA-Diamond's pass rate is high for a 3B-active model** — validate it's genuine vs.
   a too-loose letter-extraction match by spot-checking a handful of transcripts before
   quoting it as *the* baseline.

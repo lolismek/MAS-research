@@ -69,7 +69,7 @@ def summarize(arm, restrict=True):
     Returns {bench: dict(n, correct, abstained, wrong_confident, cost, seconds, tools)}."""
     ids = eval_ids()
     runs = latest_runs(arm)
-    agg = {b: dict(n=0, correct=0, abstained=0, wrong_confident=0,
+    agg = {b: dict(n=0, correct=0, abstained=0, wrong_confident=0, no_answer=0,
                    cost=0.0, seconds=0.0, tools=0) for b, _ in BENCHES}
     for tid, r in runs.items():
         b = _bench_of(tid, ids)
@@ -80,7 +80,7 @@ def summarize(arm, restrict=True):
         a = agg[b]
         a["n"] += 1
         o = r.get("outcome", "")
-        if o in ("correct", "abstained", "wrong_confident"):
+        if o in ("correct", "abstained", "wrong_confident", "no_answer"):
             a[o] += 1
         a["cost"] += r.get("cost_usd", 0) or 0
         a["seconds"] += r.get("seconds", 0) or 0

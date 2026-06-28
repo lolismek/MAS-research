@@ -56,6 +56,19 @@ class PipelineResult:
     def n_tool_calls(self):
         return sum(a.n_tool_calls for a in self.agents)
 
+    @property
+    def committed(self):
+        """Did the pipeline actually publish an answer? Only False when the finalizer
+        emitted NO 'FINAL ANSWER:' line AND was cut off (truncated/looped) — i.e. a real
+        non-answer. A short reply that finished cleanly but slipped the format still
+        *asserted* something, so it stays a (possibly wrong) committed answer, not
+        no_answer — otherwise we'd hide genuine confident-wrong hallucinations."""
+        return "FINAL ANSWER:" in (self.final or "") or self.finish == "stop"
+
+    @property
+    def finish(self):
+        return self.agents[-1].finish if self.agents else "stop"
+
 
 def _aborted(agents):
     """Per-task budget blown mid-pipeline: publish an honest UNKNOWN, keep partial trace."""
@@ -95,6 +108,17 @@ def run_pipeline(task_prompt, tool_names, client, model, addon, budget=None) -> 
         f"Candidate answer B (solver 2):\n\n{actor_2.final}\n\n"
         f"Verifier's critique of B:\n\n{critic.final}\n\nDecide the final answer.")
     finalizer = run_agent("finalizer", FINALIZER_SYS, fin_ctx, [], client, model, addon, budget=budget)
+
+    # If the finalizer rambled past the token cap or slipped the format, it left no
+    # 'FINAL ANSWER:' line — and a present-but-unparsed answer would be miscounted as a
+    # confident miss. Give it ONE constrained retry that can ONLY emit the line.
+    if "FINAL ANSWER:" not in (finalizer.final or "") and not (budget is not None and budget.exceeded):
+        retry_ctx = fin_ctx + _user(
+            "You did not output a 'FINAL ANSWER:' line. Decide now from the evidence "
+            "above and output EXACTLY one line, nothing else:\nFINAL ANSWER: <answer, "
+            "or UNKNOWN>")
+        finalizer = run_agent("finalizer", FINALIZER_SYS, retry_ctx, [], client, model,
+                              addon, budget=budget)
 
     return PipelineResult(final=finalizer.final,
                           agents=[actor_1, actor_2, critic, finalizer])
