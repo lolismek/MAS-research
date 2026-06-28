@@ -30,6 +30,17 @@ MODEL_CTX = int(os.environ.get("CAMEL_MODEL_CTX", "64000"))
 MAX_OUTPUT_TOKENS = int(os.environ.get("CAMEL_MAX_TOKENS", "28000"))
 _CTX_MARGIN = 2048
 
+# Proactive context bound (GAIA tool loops): the ReAct loop re-sends the whole growing
+# tool history every step, so input creeps toward the 64k wall. We compact LAZILY — only
+# once the prompt crosses a high-watermark — by stubbing the OLDEST tool results first,
+# down to a low-watermark that still leaves room for the next turn's OUTPUT (the model's
+# think trace shares the output budget; starving it just moves the truncation to the
+# input side). The gap between the two watermarks is hysteresis: it avoids re-compacting
+# on every single call. Headrooms are "tokens to reserve for output" — bigger = more room.
+_COMPACT_TRIGGER_HEADROOM = int(os.environ.get("CAMEL_COMPACT_TRIGGER", "8000"))   # act below this
+_COMPACT_TARGET_HEADROOM = int(os.environ.get("CAMEL_COMPACT_TARGET", "16000"))    # free down to this
+_STUB_PREFIX = "[elided] "
+
 
 def _est_prompt_tokens(messages):
     """Cheap char/4 estimate of the prompt size (no tiktoken in env) — only used to
@@ -61,12 +72,37 @@ def _truncate(s, cap=MAX_TOOL_CHARS):
     return s if len(s) <= cap else s[:cap] + f"\n…[truncated {len(s) - cap} chars]"
 
 
-def _compact_tool_history(messages, cap=1200):
-    """Last-ditch when even capped outputs accumulate past the context window:
-    hard-shrink every tool message already in history, oldest content first."""
+def _tool_call_index(messages):
+    """tool_call_id -> 'name(arg-slice)', so an evicted result leaves a re-fetchable
+    pointer: the agent can see what the call was and re-issue it if it still needs it."""
+    idx = {}
     for m in messages:
-        if m.get("role") == "tool":
-            m["content"] = _truncate(m.get("content"), cap)
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            idx[tc.get("id")] = f"{fn.get('name', 'tool')}({(fn.get('arguments') or '')[:60]})"
+    return idx
+
+
+def _bound_context(messages, trigger_headroom=_COMPACT_TRIGGER_HEADROOM,
+                   target_headroom=_COMPACT_TARGET_HEADROOM):
+    """Lazily bound the prompt. No-op until est. prompt crosses the high-watermark
+    (MODEL_CTX - trigger_headroom); then replace the OLDEST not-yet-stubbed tool results
+    with a one-line re-fetchable stub, oldest-first, until under the low-watermark
+    (MODEL_CTX - target_headroom). The most-recent tool result is always kept full."""
+    if _est_prompt_tokens(messages) <= MODEL_CTX - trigger_headroom:
+        return
+    idx = _tool_call_index(messages)
+    tool_pos = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    keep_last = tool_pos[-1] if tool_pos else None        # never stub the freshest observation
+    for i in tool_pos:
+        if _est_prompt_tokens(messages) <= MODEL_CTX - target_headroom:
+            break
+        m = messages[i]
+        if i == keep_last or (m.get("content") or "").startswith(_STUB_PREFIX):
+            continue
+        orig = m.get("content") or ""
+        label = idx.get(m.get("tool_call_id"), "tool result")
+        m["content"] = f"{_STUB_PREFIX}{label} -> {len(orig)} chars elided to free context"
 
 
 def _is_context_overflow(e):
@@ -131,6 +167,7 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
     final = ""
     finish = "step_cap"            # overwritten on a clean exit; stays if we run the loop out
     for _ in range(max_inner_steps):
+        _bound_context(messages)        # proactive: stub oldest tool results if near the wall
         try:
             resp = client.chat.completions.create(
                 model=model, messages=messages, tools=specs,
@@ -138,9 +175,9 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
         except Exception as e:
             if not _is_context_overflow(e):
                 raise
-            # Tool outputs accumulated past the window: compact history, retry once,
-            # else stop the loop and publish the best text we already have.
-            _compact_tool_history(messages)
+            # Proactive bound under-estimated and we hit the wall anyway: compact harder
+            # (always act, free half the window), retry once, else stop and publish best text.
+            _bound_context(messages, trigger_headroom=MODEL_CTX, target_headroom=MODEL_CTX // 2)
             try:
                 resp = client.chat.completions.create(
                     model=model, messages=messages, tools=specs,
