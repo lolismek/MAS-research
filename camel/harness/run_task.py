@@ -111,7 +111,10 @@ def run_one(task, arm="vanilla", budget_usd=None):
     t0 = time.time()
     budget = Budget(BUDGET_USD if budget_usd is None else budget_usd,
                     PREFILL_PER_MTOK, SAMPLE_PER_MTOK)
-    res = run_pipeline(question, tool_names, client_for(tag), MODEL, get_addon(arm), budget=budget)
+    client = client_for(tag)
+    addon = get_addon(arm)
+    addon.bind(client, MODEL, budget)   # arms that self-meter (chatdev/generative) reuse this client+budget
+    res = run_pipeline(question, tool_names, client, MODEL, addon, budget=budget)
     dur = time.time() - t0
 
     final = parse_final(res.final)

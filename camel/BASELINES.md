@@ -1,6 +1,12 @@
 # Memory / coordination baselines for the CAMEL pipeline
 
-Status: design doc. Only `vanilla` is built today; everything else is planned.
+Status: **Track A all built** in `harness/addons.py` (`vanilla`, `full`, `memorybank`,
+`generative`, `chatdev`, `metagpt-M`, `voyager`) and smoke-validated; run with
+`run_task.py --arm <name>`. Track B (CORAL, DeLM) still planned. Seam extensions added for
+the build: `bind` (per-task client/budget for the LLM-using arms), `system_prompt` (metagpt-M
+prompt-swap, in `pipeline.py`), and `extra_tool_specs`/`run_extra_tool` (voyager's `add_skill`
+write-tool, dispatched in `agent.py`) — all inert no-ops on the base, so `vanilla` is
+byte-identical.
 
 ## Scope & ground rules
 

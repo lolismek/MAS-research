@@ -161,7 +161,13 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
     """
     messages = [{"role": "system", "content": system_prompt}] + list(task_messages)
     messages = addon.inject_context(role, messages)
-    specs = tool_specs(tool_names)
+    # The AddOn may add agent-callable write-tools (voyager's add_skill) backed by its
+    # per-task state. Merge them into the specs; keep the closed-book `or None` contract
+    # (an empty profile stays tool-less for vanilla, which adds nothing).
+    base_specs = tool_specs(tool_names) or []
+    extra_specs = addon.extra_tool_specs(role)
+    addon_tools = {s["function"]["name"] for s in extra_specs}
+    specs = (base_specs + extra_specs) or None
 
     n_steps = n_tools = 0
     final = ""
@@ -209,9 +215,11 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
             finish = "length" if fr == "length" else "stop"
             break
         for tc in calls:                       # execute every requested tool, append results
-            out = run_tool(tc.function.name, tc.function.arguments)
+            name = tc.function.name
+            out = (addon.run_extra_tool(name, tc.function.arguments)   # addon-owned write-tool
+                   if name in addon_tools else run_tool(name, tc.function.arguments))
             n_tools += 1
-            cap = FILE_TOOL_CHARS if tc.function.name in _FILE_TOOLS else MAX_TOOL_CHARS
+            cap = FILE_TOOL_CHARS if name in _FILE_TOOLS else MAX_TOOL_CHARS
             messages.append({"role": "tool", "tool_call_id": tc.id,
                              "content": _truncate(out, cap)})
     else:
