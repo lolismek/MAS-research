@@ -28,10 +28,47 @@ PORT = int(os.environ.get("CAMEL_VIEWER_PORT", sys.argv[1] if len(sys.argv) > 1 
 ROLE_COLOR = {"system": "#6b7280", "user": "#2563eb",
               "assistant": "#059669", "tool": "#d97706"}
 
+# 3-way Outcome (honesty axis): correct / abstained (honest UNKNOWN) / wrong_confident.
+OUTCOME_COLOR = {"correct": "#34d399", "abstained": "#fbbf24", "wrong_confident": "#f87171"}
+OUTCOME_LABEL = {"correct": "CORRECT", "abstained": "ABSTAINED", "wrong_confident": "WRONG"}
+
+# Benchmarks, in display order; anything else falls into "other".
+BENCH_ORDER = ["gaia", "gpqa_diamond", "math_l5", "smoke", "other"]
+BENCH_TITLE = {"gaia": "GAIA", "gpqa_diamond": "GPQA-Diamond", "math_l5": "MATH level-5",
+               "smoke": "smoke / plumbing", "other": "other"}
+
+
+def bench_of(res):
+    """The benchmark a run belongs to — from the `bench` field, else inferred from id."""
+    b = res.get("bench")
+    if b:
+        return b if b in BENCH_TITLE else "other"
+    tid = res.get("id", "")
+    for pre, name in (("gaia_", "gaia"), ("gpqad", "gpqa_diamond"),
+                      ("math_l5", "math_l5"), ("smoke", "smoke")):
+        if tid.startswith(pre):
+            return name
+    return "other"
+
+
+def outcome_display(res):
+    """(label, color) for a run. Uses the 3-way outcome; falls back to exact_match
+    for legacy traces written before the scorer existed."""
+    o = res.get("outcome")
+    if o:
+        return OUTCOME_LABEL.get(o, o.upper()), OUTCOME_COLOR.get(o, "#9ca3af")
+    ok = res.get("exact_match")
+    return ("PASS" if ok else "FAIL"), ("#34d399" if ok else "#f87171")
+
 CSS = """
 *{box-sizing:border-box} body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
 margin:0;background:#0f1115;color:#e5e7eb} a{color:#60a5fa;text-decoration:none}
-a:hover{text-decoration:underline} .wrap{max-width:1000px;margin:0 auto;padding:24px}
+a:hover{text-decoration:underline} .wrap{max-width:1180px;margin:0 auto;padding:24px}
+.nav{position:sticky;top:0;background:#0f1115;padding:10px 0;border-bottom:1px solid #1f2430;
+margin-bottom:8px;z-index:5} .nav a{margin-right:14px;font-size:13px}
+.ob{display:inline-block;min-width:78px;text-align:center;padding:1px 8px;border-radius:10px;
+font-size:11px;font-weight:700;color:#0f1115} .bsum{color:#9ca3af;font-size:12px;font-weight:400}
+.mono{font:12px/1.4 ui-monospace,Menlo,monospace}
 h1{font-size:20px;margin:0 0 4px} h2{font-size:15px;color:#9ca3af;margin:24px 0 8px;
 text-transform:uppercase;letter-spacing:.5px} .muted{color:#9ca3af;font-size:13px}
 table{width:100%;border-collapse:collapse;margin:8px 0} th,td{text-align:left;
@@ -110,33 +147,70 @@ def load_reasonings(tag):
 
 
 # ----------------------------------------------------------------- render -----
+def _short(s, n=44):
+    s = "" if s is None else str(s)
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def _cost_str(res):
+    c = res.get("cost_usd")
+    return f"${c:.4f}" if isinstance(c, (int, float)) else "—"
+
+
 def render_index():
     runs = discover_runs()
-    n_pass = sum(1 for r in runs if r["res"].get("exact_match"))
-    rows = ""
-    last_arm = None
-    for r in sorted(runs, key=lambda x: (x["arm"], x["tid"], x["run"])):
-        if r["arm"] != last_arm:
-            rows += f"<tr><td colspan=8><h2>{esc(r['arm'])}</h2></td></tr>"
-            last_arm = r["arm"]
-        res = r["res"]
-        ok = res.get("exact_match")
-        badge = "<span class=pass>PASS</span>" if ok else "<span class=fail>FAIL</span>"
-        rows += (
-            f"<tr><td>{badge}</td>"
-            f"<td><a href='/run?r={quote(r['rel'])}'>{esc(r['tid'])}</a></td>"
-            f"<td class=muted>{esc(r['run'])}</td>"
-            f"<td>{esc(res.get('final_answer'))}</td>"
-            f"<td class=muted>{esc(res.get('expected_answer'))}</td>"
-            f"<td>{esc(res.get('n_calls'))}/{esc(res.get('n_tool_calls'))}</td>"
-            f"<td>{esc(res.get('total_tokens'))}</td>"
-            f"<td class=muted>{esc(res.get('seconds'))}s</td></tr>")
-    body = (f"<h1>CAMEL traces</h1><div class=muted>{len(runs)} runs · "
-            f"{n_pass} pass · {len(runs)-n_pass} fail · reading <code>{esc(TRACES)}</code></div>"
-            "<table><tr><th></th><th>task</th><th>run</th><th>final</th>"
-            "<th>expected</th><th>calls/tools</th><th>tokens</th><th>time</th></tr>"
-            f"{rows}</table>")
-    return page("CAMEL traces", body)
+    groups = {}
+    for r in runs:
+        groups.setdefault(bench_of(r["res"]), []).append(r)
+    order = [b for b in BENCH_ORDER if b in groups] + \
+            [b for b in groups if b not in BENCH_ORDER]
+
+    def tally(rs):
+        t = {"correct": 0, "abstained": 0, "wrong_confident": 0, "legacy": 0}
+        for r in rs:
+            o = r["res"].get("outcome")
+            t[o if o in t else "legacy"] += 1
+        return t
+
+    ot = tally(runs)
+    nav = "".join(f"<a href='#b-{b}'>{esc(BENCH_TITLE.get(b, b))} "
+                  f"({len(groups[b])})</a>" for b in order)
+    head = (f"<h1>CAMEL traces</h1><div class=muted>{len(runs)} runs · "
+            f"<span style='color:{OUTCOME_COLOR['correct']}'>{ot['correct']} correct</span> · "
+            f"<span style='color:{OUTCOME_COLOR['abstained']}'>{ot['abstained']} abstained</span> · "
+            f"<span style='color:{OUTCOME_COLOR['wrong_confident']}'>{ot['wrong_confident']} wrong</span>"
+            + (f" · {ot['legacy']} legacy" if ot['legacy'] else "")
+            + f" · reading <code>{esc(TRACES)}</code></div><div class=nav>{nav}</div>")
+
+    cols = ("<tr><th>outcome</th><th>task</th><th>run</th><th>arm</th><th>final</th>"
+            "<th>expected</th><th>profile</th><th>calls/tools</th><th>tokens</th>"
+            "<th>cost</th><th>time</th></tr>")
+    sections = ""
+    for b in order:
+        grp = sorted(groups[b], key=lambda x: (x["tid"], x["arm"], x["run"]))
+        t = tally(grp)
+        summ = (f"{len(grp)} runs · {t['correct']} correct · {t['abstained']} abstained "
+                f"· {t['wrong_confident']} wrong"
+                + (f" · {t['legacy']} legacy" if t['legacy'] else ""))
+        rows = ""
+        for r in grp:
+            res = r["res"]
+            label, color = outcome_display(res)
+            rows += (
+                f"<tr><td><span class=ob style='background:{color}'>{esc(label)}</span></td>"
+                f"<td><a href='/run?r={quote(r['rel'])}'>{esc(r['tid'])}</a></td>"
+                f"<td class=muted>{esc(r['run'].replace('run_', ''))}</td>"
+                f"<td class=muted>{esc(r['arm'])}</td>"
+                f"<td class=mono>{esc(_short(res.get('final_answer')))}</td>"
+                f"<td class='muted mono'>{esc(_short(res.get('expected_answer'), 24))}</td>"
+                f"<td class=muted>{esc(res.get('tool_profile'))}</td>"
+                f"<td class=muted>{esc(res.get('n_calls'))}/{esc(res.get('n_tool_calls'))}</td>"
+                f"<td class=muted>{esc(res.get('total_tokens'))}</td>"
+                f"<td class=muted>{esc(_cost_str(res))}</td>"
+                f"<td class=muted>{esc(res.get('seconds'))}s</td></tr>")
+        sections += (f"<h2 id='b-{b}'>{esc(BENCH_TITLE.get(b, b))} "
+                     f"<span class=bsum>— {summ}</span></h2><table>{cols}{rows}</table>")
+    return page("CAMEL traces", head + sections)
 
 
 def render_msg(m, toolmap):
@@ -190,8 +264,8 @@ def render_run(rel):
             if rsn:
                 m["_reasoning"] = rsn
 
-    ok = res.get("exact_match")
-    badge = ("<span class=pass>PASS</span>" if ok else "<span class=fail>FAIL</span>")
+    label, ocolor = outcome_display(res)
+    badge = f"<span class=ob style='background:{ocolor}'>{esc(label)}</span>"
 
     # pipeline flow strip
     nodes = ""
@@ -225,12 +299,15 @@ def render_run(rel):
     body = (
         f"<div class=muted><a href='/'>&#8592; all traces</a></div>"
         f"<h1>{esc(res.get('id'))} · {esc(res.get('arm'))} · {esc(rel.split('/')[-1])} {badge}</h1>"
-        f"<div class=muted><span class=pill>final: {esc(res.get('final_answer'))}</span>"
+        f"<div class=muted><span class=pill>bench: {esc(bench_of(res))}</span>"
+        f"<span class=pill>type: {esc(res.get('answer_type'))}</span>"
+        f"<span class=pill>profile: {esc(res.get('tool_profile'))}</span>"
+        f"<span class=pill>final: {esc(res.get('final_answer'))}</span>"
         f"<span class=pill>expected: {esc(res.get('expected_answer'))}</span>"
         f"<span class=pill>{esc(res.get('n_calls'))} calls / {esc(res.get('n_tool_calls'))} tools</span>"
         f"<span class=pill>{esc(res.get('total_tokens'))} tok</span>"
-        f"<span class=pill>{esc(res.get('seconds'))}s</span>"
-        f"<span class=pill>profile: {esc(res.get('tool_profile'))}</span></div>"
+        f"<span class=pill>cost: {esc(_cost_str(res))}</span>"
+        f"<span class=pill>{esc(res.get('seconds'))}s</span></div>"
         f"<div class='card prompt'><div class=role>task</div>"
         f"<div class=content>{esc(prompt)}</div></div>"
         f"<h2>pipeline</h2><div class=flow>{nodes}</div>"
