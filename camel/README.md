@@ -8,8 +8,12 @@ ReAct loop**.
 
 ```
 actor_1 ──▶ actor_2 ──▶ critic ──▶ finalizer
-         (edge 1)    (edge 2 = actor_2 answer + critique)
+        edge 1     edge 2      edge 3
+   └──────────skip─────────────▶ │   (finalizer also reads actor_1 + actor_2)
+                  └────skip──────▶
 ```
+3 backbone edges (the board injects at each), plus 2 skip-edges into the
+finalizer — so the graph is not a pure line.
 
 Agents are differentiated by **objective** (generate / verify / adjudicate), not
 just by name — otherwise four identical solvers is an expensive self-consistency

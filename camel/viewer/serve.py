@@ -199,12 +199,14 @@ def render_run(rel):
     names = ["actor_1", "actor_2", "critic", "finalizer"]
     for i, a in enumerate(pa):
         nm = names[i] if i < len(names) else a.get("role")
-        if i:
-            elabel = "edge 1" if i == 1 else ("edge 2" if i == 3 else "")
-            nodes += f"<div class=arrow>&#8594;<div class=edge>{elabel}</div></div>"
+        if i:  # one backbone edge per hand-off (3 for a 4-node chain)
+            nodes += f"<div class=arrow>&#8594;<div class=edge>edge {i}</div></div>"
+        # the finalizer is non-linear: it also reads both actors directly (skip edges)
+        extra = ("<div class=edge>+ skip-edges: reads actor_1, actor_2</div>"
+                 if nm == "finalizer" else "")
         nodes += (f"<div class=node><div class=role style='color:{ROLE_COLOR['assistant']}'>"
                   f"{esc(nm)}</div><div class=muted>{esc(a.get('steps'))} steps · "
-                  f"{esc(a.get('tool_calls'))} tools</div></div>")
+                  f"{esc(a.get('tool_calls'))} tools</div>{extra}</div>")
 
     sections = ""
     for i, ag in enumerate(agents):
