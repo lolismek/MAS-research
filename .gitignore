@@ -13,20 +13,18 @@
 __pycache__/
 *.py[cod]
 
-# ---- OS ----
-.DS_Store
+# proxy runtime logs (accumulating; regenerate per run, read by metrics/cost.py)
+shared/proxy/calls.jsonl
+shared/proxy/raw_calls.jsonl
 
-# ---- External code clones (re-clone via the per-MAS harness READMEs) ----
-**/chatdev_repo/
-**/mast_repo/
+# benchmark task data: derived + reproducible via benchmarks/<name>/prep.py.
+# Kept out of git so gated content (GPQA-Diamond, GAIA) isn't redistributed, and to avoid bloat.
+benchmarks/*/tasks.jsonl
+# GAIA gated derivatives: staged attachments + the excluded vision/media task records.
+benchmarks/gaia/files/
+benchmarks/gaia/excluded_vision.jsonl
 
-# ---- Large regenerable proxy wire dumps ----
-# Not committed: the analysis products that depend on them (verdicts, inputs_md,
-# viewer traces.json) ARE committed, so these are only needed to RE-derive analysis.
-**/raw_calls.jsonl
-**/calls.jsonl
-
-# ---- Regenerable analysis intermediate ----
-# inputs/ is fully contained in the committed viewer_postfix/traces.json;
-# rebuild with autogen_gc/judging/analysis_postfix/build_inputs.py if needed.
-**/analysis_*/inputs/
+# GPQA-Diamond and GAIA are gated: their traces embed the verbatim question, so keep
+# them out of git too (same reason as tasks.jsonl). MATH traces are fine (public).
+camel/traces/*/gpqad_*
+camel/traces/*/gaia_*

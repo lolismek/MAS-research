@@ -18,6 +18,30 @@ from tools import tool_specs, run_tool
 
 MAX_INNER_STEPS = 30   # runaway backstop, NOT a budget — most agents stop far sooner
 TEMPERATURE = 0.0
+MAX_TOOL_CHARS = 6000   # cap a web/tool result: one big fetched page can exceed Qwen's 64k ctx
+# read_file returns the task's OWN attached file — the file IS the task, so don't clip it with
+# the web-page cap (that silently drops data rows). read_file self-limits (READ_FILE_MAX_CHARS);
+# this larger ceiling just lets its output (incl. its actionable truncation note) through whole.
+FILE_TOOL_CHARS = 45000
+_FILE_TOOLS = {"read_file"}
+
+
+def _truncate(s, cap=MAX_TOOL_CHARS):
+    s = s or ""
+    return s if len(s) <= cap else s[:cap] + f"\n…[truncated {len(s) - cap} chars]"
+
+
+def _compact_tool_history(messages, cap=1200):
+    """Last-ditch when even capped outputs accumulate past the context window:
+    hard-shrink every tool message already in history, oldest content first."""
+    for m in messages:
+        if m.get("role") == "tool":
+            m["content"] = _truncate(m.get("content"), cap)
+
+
+def _is_context_overflow(e):
+    s = str(e).lower()
+    return "context" in s or "exceeds" in s or "max_tokens" in s
 
 
 @dataclass
@@ -44,9 +68,24 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
     n_steps = n_tools = 0
     final = ""
     for _ in range(max_inner_steps):
-        resp = client.chat.completions.create(
-            model=model, messages=messages, tools=specs,
-            temperature=TEMPERATURE, stream=False)
+        try:
+            resp = client.chat.completions.create(
+                model=model, messages=messages, tools=specs,
+                temperature=TEMPERATURE, stream=False)
+        except Exception as e:
+            if not _is_context_overflow(e):
+                raise
+            # Tool outputs accumulated past the window: compact history, retry once,
+            # else stop the loop and publish the best text we already have.
+            _compact_tool_history(messages)
+            try:
+                resp = client.chat.completions.create(
+                    model=model, messages=messages, tools=specs,
+                    temperature=TEMPERATURE, stream=False)
+            except Exception:
+                final = next((m["content"] for m in reversed(messages)
+                              if m["role"] == "assistant" and m.get("content")), "")
+                break
         n_steps += 1
         msg = resp.choices[0].message
         calls = msg.tool_calls or []
@@ -66,7 +105,9 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
         for tc in calls:                       # execute every requested tool, append results
             out = run_tool(tc.function.name, tc.function.arguments)
             n_tools += 1
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": out})
+            cap = FILE_TOOL_CHARS if tc.function.name in _FILE_TOOLS else MAX_TOOL_CHARS
+            messages.append({"role": "tool", "tool_call_id": tc.id,
+                             "content": _truncate(out, cap)})
     else:
         # Hit the backstop; use the last assistant text we have, if any.
         final = next((m["content"] for m in reversed(messages)

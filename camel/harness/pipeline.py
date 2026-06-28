@@ -65,18 +65,19 @@ def run_pipeline(task_prompt, tool_names, client, model, addon) -> PipelineResul
 
     actor_1 = run_agent("actor", ACTOR_SYS, task, tool_names, client, model, addon)
 
-    # edge 1: actor_2 sees actor_1's answer
+    # edge 1 (actor_1 -> actor_2): actor_2 sees actor_1's answer
     a2_ctx = task + _user(f"Another solver proposed this answer:\n\n{actor_1.final}\n\n"
                           "Consider it, then give your own answer.")
     actor_2 = run_agent("actor", ACTOR_SYS, a2_ctx, tool_names, client, model, addon)
 
-    # critic verifies actor_2 (keeps tools so it can actually check, not re-solve)
+    # edge 2 (actor_2 -> critic): critic verifies actor_2 (keeps tools to check, not re-solve)
     cr_ctx = task + _user(f"Proposed answer to verify:\n\n{actor_2.final}")
     critic = run_agent("critic", CRITIC_SYS, cr_ctx, tool_names, client, model, addon)
 
-    # edge 2: finalizer adjudicates BOTH candidates + the critique, with NO tools
-    # (so it decides from evidence and can't re-solve). Seeing both actors lets it
-    # abstain when they disagree and the critique didn't settle it.
+    # edge 3 (critic -> finalizer) + skip-edges (actor_1, actor_2 -> finalizer):
+    # finalizer adjudicates BOTH candidates + the critique, with NO tools (so it
+    # decides from evidence and can't re-solve). Seeing both actors lets it abstain
+    # when they disagree and the critique didn't settle it.
     fin_ctx = task + _user(
         f"Candidate answer A (solver 1):\n\n{actor_1.final}\n\n"
         f"Candidate answer B (solver 2):\n\n{actor_2.final}\n\n"

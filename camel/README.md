@@ -8,8 +8,12 @@ ReAct loop**.
 
 ```
 actor_1 ──▶ actor_2 ──▶ critic ──▶ finalizer
-         (edge 1)    (edge 2 = actor_2 answer + critique)
+        edge 1     edge 2      edge 3
+   └──────────skip─────────────▶ │   (finalizer also reads actor_1 + actor_2)
+                  └────skip──────▶
 ```
+3 backbone edges (the board injects at each), plus 2 skip-edges into the
+finalizer — so the graph is not a pure line.
 
 Agents are differentiated by **objective** (generate / verify / adjudicate), not
 just by name — otherwise four identical solvers is an expensive self-consistency
@@ -30,8 +34,9 @@ Closed-book ⇒ empty tool profile ⇒ one iteration. Qwen3.6 thinks natively (t
 proxy strips `<think>`), so prompts carry no CoT scaffolding.
 
 ## Layout
-- `harness/tools.py` — `web_search`, `fetch_url`, `run_python` + OpenAI schemas +
-  `TOOL_PROFILES` (tools are a **per-benchmark profile**, never gated on closed/open book).
+- `harness/tools.py` — `web_search`, `fetch_url` (HTML + PDF extraction), `run_python`,
+  `read_file` (xlsx/csv/zip/json/xml/pdf attachments) + OpenAI schemas + `TOOL_PROFILES`
+  (tools are a **per-benchmark profile**, never gated on closed/open book).
 - `harness/agent.py` — `run_agent`: the one inner-loop primitive (only LLM caller).
 - `harness/pipeline.py` — `run_pipeline`: the 4 agents + the 2 edges.
 - `harness/addons.py` — `AddOn` seam (`inject_context` / `on_turn_end`); `vanilla` = no-op.
@@ -60,8 +65,9 @@ conda run -n autogen_gc python camel/harness/run_task.py smoke_math      # one
 
 ## Viewer
 Read-only trace inspector, `viewer/serve.py` — Python stdlib only, no deps, no
-writes, touches nothing in the harness. Lists every run (pass/fail, final vs
-expected, calls/tokens) and renders each agent's transcript: system/user/assistant/
+writes, touches nothing in the harness. Groups runs **by benchmark** (jump-nav +
+per-section tallies) showing the 3-way **outcome** (correct/abstained/wrong_confident),
+profile, tokens and cost; the detail page renders each agent's transcript: system/user/assistant/
 tool messages, tool calls + outputs, and the recovered `<think>` reasoning
 (pulled from `shared/proxy/raw_calls.jsonl` by tag), plus the pipeline flow with
 the 2 edges labeled. Long blocks collapse via native `<details>`.

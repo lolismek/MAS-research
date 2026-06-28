@@ -4,8 +4,10 @@ Every coordination/memory method (our shared belief board, chatdev/metagpt-style
 memory, DOWN, ...) is the SAME interface plugged into an otherwise-fixed pipeline.
 A run holds everything constant except the AddOn, so any difference is the layer's.
 
-A linear pipeline only has two places state can flow between agents, so the layer
-only needs two hooks:
+State flows between agents only across the pipeline's edges (here 3 backbone:
+actor_1->actor_2->critic->finalizer, plus 2 skip-edges into the finalizer). No
+matter how many edges, the layer needs only two hooks — they fire per agent, so
+they cover every inbound edge:
 
   - inject_context(role, messages) -> messages
         Called inside run_agent BEFORE the inner loop. Prepend shared state
