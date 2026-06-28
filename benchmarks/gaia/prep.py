@@ -16,7 +16,6 @@ them up. tool_profile="web_compute"; answer_type="freeform".
 
 Run: conda run -n autogen_gc python benchmarks/gaia/prep.py
 """
-import json
 import os
 import sys
 
@@ -28,10 +27,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def build():
     from huggingface_hub import hf_hub_download
-    path = hf_hub_download("gaia-benchmark/GAIA", "2023/validation/metadata.jsonl",
+    import pyarrow.parquet as pq
+    # The repo stores per-level parquet now (no jsonl); validation has the gold answers.
+    path = hf_hub_download("gaia-benchmark/GAIA", "2023/validation/metadata.level3.parquet",
                            repo_type="dataset", token=hf_token())
-    rows = [json.loads(l) for l in open(path) if l.strip()]
-    level3 = [r for r in rows if int(r.get("Level", 0)) == 3]
+    level3 = pq.read_table(path).to_pylist()
 
     tasks = []
     for r in level3:
