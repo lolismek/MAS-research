@@ -53,7 +53,8 @@ def main():
     if wall:
         run_meta.append(f"wall-clock **{wall} min** at `--workers 16`")
     if spend:
-        run_meta.append(f"batch spend **${spend}**")
+        run_meta.append(f"compute spend **${spend}** (full sweep $10.45 + targeted re-run "
+                        f"of 45 substrate-affected tasks $5.18; final trace set ${tot['cost']:.2f})")
     run_meta = (" · ".join(run_meta) + " · ") if run_meta else ""
 
     md = f"""# CAMEL pipeline — results
@@ -110,11 +111,13 @@ room to move the needle on **GAIA**, and almost nothing to act on for MATH.
 
 ## Caveats / open items
 
-- **`no-answer` is recoverable, and undercounts the true ceiling.** Every no-answer was an
-  agent whose reply hit the old 8192-token output cap and was cut off *before* the
-  `FINAL ANSWER:` line. The cap is now raised (adaptive, `CAMEL_MAX_TOKENS`, default 28k)
-  and the finalizer gets a forced-format retry, so most no-answers should convert to a real
-  outcome on the next run — i.e. correct/wrong/abstained will only move *up* from here.
+- **Re-run delta (substrate fixes applied).** The 45 tasks that hit the 8192 output cap or
+  context overflow were re-run with the raised cap + compaction + finalizer retry: **+11
+  recovered to correct** (total 299→310), and `no-answer` collapsed **9→2**. Two regressions
+  surfaced a second-order effect of the higher cap: on a few pathological closed-book tasks an
+  early agent now emits a ~28k-token answer that overflows the *downstream* agent's context
+  (`gpqad_079`, `math_l5_037` → no_answer; `gaia_72c06643` honest-abstain → wrong). Fix on the
+  list: clip oversized upstream agent outputs when composing the next agent's prompt.
 - **GPQA-Diamond's pass rate is high for a 3B-active model** — validate it's genuine vs.
   a too-loose letter-extraction match by spot-checking a handful of transcripts before
   quoting it as *the* baseline.
