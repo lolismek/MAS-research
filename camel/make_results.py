@@ -27,7 +27,7 @@ def main():
     s = agg.summarize(arm, restrict=True)
     date = datetime.date.today().isoformat()
 
-    tot = dict(n=0, correct=0, abstained=0, wrong_confident=0, cost=0.0)
+    tot = dict(n=0, correct=0, abstained=0, wrong_confident=0, no_answer=0, cost=0.0)
     rows = []
     for b, title in agg.BENCHES:
         d = s[b]; n = d["n"]
@@ -39,12 +39,14 @@ def main():
             f"| {title} | {n} | **{agg.pct(d['correct'],n):.1f}%** ({d['correct']}) "
             f"| {agg.pct(d['wrong_confident'],n):.1f}% ({d['wrong_confident']}) "
             f"| {agg.pct(d['abstained'],n):.1f}% ({d['abstained']}) "
+            f"| {agg.pct(d['no_answer'],n):.1f}% ({d['no_answer']}) "
             f"| ${d['cost']:.2f} | {d['seconds']/n:.0f}s |")
     N = tot["n"]
     total_row = (
         f"| **Total** | {N} | {agg.pct(tot['correct'],N):.1f}% ({tot['correct']}) "
         f"| {agg.pct(tot['wrong_confident'],N):.1f}% ({tot['wrong_confident']}) "
         f"| {agg.pct(tot['abstained'],N):.1f}% ({tot['abstained']}) "
+        f"| {agg.pct(tot['no_answer'],N):.1f}% ({tot['no_answer']}) "
         f"| ${tot['cost']:.2f} | — |")
 
     run_meta = []
@@ -67,13 +69,20 @@ official evaluated id sets ({N} tasks).
 
 ## Scoreboard
 
-The third axis is **honesty**: every answer is scored 3-way — *correct*, *wrong-confident*
-(hallucinated a confident wrong answer), or *abstained* (honestly published `UNKNOWN`).
+The third axis is **honesty**: every answer is scored 4-way — *correct*, *wrong-confident*
+(hallucinated a confident wrong answer), *abstained* (honestly published `UNKNOWN`), or
+*no-answer* (the pipeline never emitted a parseable answer — output truncated at the token
+cap or looped out; a harness failure, deliberately kept *out* of wrong-confident so it
+can't masquerade as a hallucination).
 
-| Benchmark | n | ✅ correct | ❌ wrong-confident | 🤷 abstained | cost | avg time |
-|---|---:|---|---|---|---:|---:|
+| Benchmark | n | ✅ correct | ❌ wrong-confident | 🤷 abstained | ⛔ no-answer | cost | avg time |
+|---|---:|---|---|---|---|---:|---:|
 {chr(10).join(rows)}
 {total_row}
+
+Scoring uses a LaTeX-aware math comparator (`harness/scoring.py`): `\\frac{{a}}{{b}}`≡`a/b`,
+unit/`$`/`^\\circ` stripping, `\\pm`-set and root-order insensitivity. Existing traces were
+re-scored in place with `harness/rescore_traces.py` (no model calls) after the fix.
 
 ## The honesty signal — abstention tracks genuine uncertainty, not raw difficulty
 
@@ -101,6 +110,11 @@ room to move the needle on **GAIA**, and almost nothing to act on for MATH.
 
 ## Caveats / open items
 
+- **`no-answer` is recoverable, and undercounts the true ceiling.** Every no-answer was an
+  agent whose reply hit the old 8192-token output cap and was cut off *before* the
+  `FINAL ANSWER:` line. The cap is now raised (adaptive, `CAMEL_MAX_TOKENS`, default 28k)
+  and the finalizer gets a forced-format retry, so most no-answers should convert to a real
+  outcome on the next run — i.e. correct/wrong/abstained will only move *up* from here.
 - **GPQA-Diamond's pass rate is high for a 3B-active model** — validate it's genuine vs.
   a too-loose letter-extraction match by spot-checking a handful of transcripts before
   quoting it as *the* baseline.

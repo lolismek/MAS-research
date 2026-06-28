@@ -11,15 +11,22 @@ official evaluated id sets (349 tasks).
 
 ## Scoreboard
 
-The third axis is **honesty**: every answer is scored 3-way — *correct*, *wrong-confident*
-(hallucinated a confident wrong answer), or *abstained* (honestly published `UNKNOWN`).
+The third axis is **honesty**: every answer is scored 4-way — *correct*, *wrong-confident*
+(hallucinated a confident wrong answer), *abstained* (honestly published `UNKNOWN`), or
+*no-answer* (the pipeline never emitted a parseable answer — output truncated at the token
+cap or looped out; a harness failure, deliberately kept *out* of wrong-confident so it
+can't masquerade as a hallucination).
 
-| Benchmark | n | ✅ correct | ❌ wrong-confident | 🤷 abstained | cost | avg time |
-|---|---:|---|---|---|---:|---:|
-| GPQA-Diamond | 198 | **84.8%** (168) | 14.6% (29) | 0.5% (1) | $4.61 | 155s |
-| MATH-L5 | 134 | **70.1%** (94) | 29.9% (40) | 0.0% (0) | $2.46 | 118s |
-| GAIA | 17 | **29.4%** (5) | 29.4% (5) | 41.2% (7) | $4.24 | 302s |
-| **Total** | 349 | 76.5% (267) | 21.2% (74) | 2.3% (8) | $11.31 | — |
+| Benchmark | n | ✅ correct | ❌ wrong-confident | 🤷 abstained | ⛔ no-answer | cost | avg time |
+|---|---:|---|---|---|---|---:|---:|
+| GPQA-Diamond | 198 | **84.8%** (168) | 11.6% (23) | 0.5% (1) | 3.0% (6) | $4.61 | 155s |
+| MATH-L5 | 134 | **94.0%** (126) | 3.7% (5) | 0.0% (0) | 2.2% (3) | $2.46 | 118s |
+| GAIA | 17 | **29.4%** (5) | 29.4% (5) | 41.2% (7) | 0.0% (0) | $4.24 | 302s |
+| **Total** | 349 | 85.7% (299) | 9.5% (33) | 2.3% (8) | 2.6% (9) | $11.31 | — |
+
+Scoring uses a LaTeX-aware math comparator (`harness/scoring.py`): `\frac{a}{b}`≡`a/b`,
+unit/`$`/`^\circ` stripping, `\pm`-set and root-order insensitivity. Existing traces were
+re-scored in place with `harness/rescore_traces.py` (no model calls) after the fix.
 
 ## The honesty signal — abstention tracks genuine uncertainty, not raw difficulty
 
@@ -47,6 +54,11 @@ room to move the needle on **GAIA**, and almost nothing to act on for MATH.
 
 ## Caveats / open items
 
+- **`no-answer` is recoverable, and undercounts the true ceiling.** Every no-answer was an
+  agent whose reply hit the old 8192-token output cap and was cut off *before* the
+  `FINAL ANSWER:` line. The cap is now raised (adaptive, `CAMEL_MAX_TOKENS`, default 28k)
+  and the finalizer gets a forced-format retry, so most no-answers should convert to a real
+  outcome on the next run — i.e. correct/wrong/abstained will only move *up* from here.
 - **GPQA-Diamond's pass rate is high for a 3B-active model** — validate it's genuine vs.
   a too-loose letter-extraction match by spot-checking a handful of transcripts before
   quoting it as *the* baseline.

@@ -31,9 +31,13 @@ import agg as _agg          # shared aggregation (dedup latest run + restrict to
 ROLE_COLOR = {"system": "#6b7280", "user": "#2563eb",
               "assistant": "#059669", "tool": "#d97706"}
 
-# 3-way Outcome (honesty axis): correct / abstained (honest UNKNOWN) / wrong_confident.
-OUTCOME_COLOR = {"correct": "#34d399", "abstained": "#fbbf24", "wrong_confident": "#f87171"}
-OUTCOME_LABEL = {"correct": "CORRECT", "abstained": "ABSTAINED", "wrong_confident": "WRONG"}
+# Outcome (honesty axis): correct / abstained (honest UNKNOWN) / wrong_confident, plus
+# no_answer = the pipeline never published a parseable answer (output truncated/looped) —
+# a harness failure, NOT a confident miss, so it's kept out of wrong_confident.
+OUTCOME_COLOR = {"correct": "#34d399", "abstained": "#fbbf24", "wrong_confident": "#f87171",
+                 "no_answer": "#94a3b8"}
+OUTCOME_LABEL = {"correct": "CORRECT", "abstained": "ABSTAINED", "wrong_confident": "WRONG",
+                 "no_answer": "NO-ANSWER"}
 
 # Benchmarks, in display order; anything else falls into "other".
 BENCH_ORDER = ["gaia", "gpqa_diamond", "math_l5", "smoke", "other"]
@@ -175,6 +179,7 @@ def _summ_row(title, d, bold=False):
             + _o_cell("correct", d["correct"], n, OUTCOME_COLOR["correct"])
             + _o_cell("wrong", d["wrong_confident"], n, OUTCOME_COLOR["wrong_confident"])
             + _o_cell("abstained", d["abstained"], n, OUTCOME_COLOR["abstained"])
+            + _o_cell("no_answer", d.get("no_answer", 0), n, OUTCOME_COLOR["no_answer"])
             + f"<td class=muted>${d['cost']:.2f}</td><td class=muted>{avg}</td></tr>")
 
 
@@ -186,11 +191,12 @@ def render_summary():
     if not arms:
         return ""
     cols = ("<tr><th>benchmark</th><th>n</th><th>correct</th><th>wrong-confident</th>"
-            "<th>abstained</th><th>cost</th><th>avg time</th></tr>")
+            "<th>abstained</th><th>no-answer</th><th>cost</th><th>avg time</th></tr>")
     blocks = ""
     for arm in arms:
         s = _agg.summarize(arm, restrict=True)
-        tot = dict(n=0, correct=0, abstained=0, wrong_confident=0, cost=0.0, seconds=0.0)
+        tot = dict(n=0, correct=0, abstained=0, wrong_confident=0, no_answer=0,
+                   cost=0.0, seconds=0.0)
         rows = ""
         for b, title in _agg.BENCHES:
             d = s[b]
@@ -210,7 +216,8 @@ def render_summary():
             f"official evaluated set · honesty axis = "
             f"<span style='color:{OUTCOME_COLOR['correct']}'>correct</span> / "
             f"<span style='color:{OUTCOME_COLOR['wrong_confident']}'>wrong-confident</span> / "
-            f"<span style='color:{OUTCOME_COLOR['abstained']}'>abstained (honest UNKNOWN)</span>"
+            f"<span style='color:{OUTCOME_COLOR['abstained']}'>abstained (honest UNKNOWN)</span> / "
+            f"<span style='color:{OUTCOME_COLOR['no_answer']}'>no-answer (truncated)</span>"
             f"</div>{blocks}</div>")
 
 
@@ -223,7 +230,7 @@ def render_index():
             [b for b in groups if b not in BENCH_ORDER]
 
     def tally(rs):
-        t = {"correct": 0, "abstained": 0, "wrong_confident": 0, "legacy": 0}
+        t = {"correct": 0, "abstained": 0, "wrong_confident": 0, "no_answer": 0, "legacy": 0}
         for r in rs:
             o = r["res"].get("outcome")
             t[o if o in t else "legacy"] += 1
@@ -235,7 +242,8 @@ def render_index():
     head = (f"<h1>CAMEL traces</h1><div class=muted>{len(runs)} runs · "
             f"<span style='color:{OUTCOME_COLOR['correct']}'>{ot['correct']} correct</span> · "
             f"<span style='color:{OUTCOME_COLOR['abstained']}'>{ot['abstained']} abstained</span> · "
-            f"<span style='color:{OUTCOME_COLOR['wrong_confident']}'>{ot['wrong_confident']} wrong</span>"
+            f"<span style='color:{OUTCOME_COLOR['wrong_confident']}'>{ot['wrong_confident']} wrong</span> · "
+            f"<span style='color:{OUTCOME_COLOR['no_answer']}'>{ot['no_answer']} no-answer</span>"
             + (f" · {ot['legacy']} legacy" if ot['legacy'] else "")
             + f" · reading <code>{esc(TRACES)}</code></div><div class=nav>{nav}</div>")
 
@@ -247,7 +255,7 @@ def render_index():
         grp = sorted(groups[b], key=lambda x: (x["tid"], x["arm"], x["run"]))
         t = tally(grp)
         summ = (f"{len(grp)} runs · {t['correct']} correct · {t['abstained']} abstained "
-                f"· {t['wrong_confident']} wrong"
+                f"· {t['wrong_confident']} wrong · {t['no_answer']} no-answer"
                 + (f" · {t['legacy']} legacy" if t['legacy'] else ""))
         rows = ""
         for r in grp:

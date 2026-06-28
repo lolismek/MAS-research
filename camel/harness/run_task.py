@@ -117,12 +117,14 @@ def run_one(task, arm="vanilla", budget_usd=None):
     final = parse_final(res.final)
     expected = str(task["expected_answer"])
     answer_type = task.get("answer_type", "freeform")
-    outcome = classify_outcome(final, expected, answer_type)   # correct/abstained/wrong_confident
+    # committed=False (no 'FINAL ANSWER:' line) -> no_answer, not wrong_confident.
+    outcome = classify_outcome(final, expected, answer_type, committed=res.committed)
     result = dict(
         id=tid, arm=arm, run=n, bench=task.get("bench"), tool_profile=profile,
         answer_type=answer_type, seconds=round(dur, 1),
         final_answer=final, expected_answer=expected,
         outcome=outcome, budget_exceeded=res.budget_exceeded,
+        committed=res.committed, finish=res.finish,   # why the pipeline ended (length/step_cap/...)
         exact_match=outcome == "correct",        # kept for the viewer's pass/fail
         n_calls=res.n_calls, n_tool_calls=res.n_tool_calls,
         per_agent=[dict(role=a.role, steps=a.n_steps, tool_calls=a.n_tool_calls,
