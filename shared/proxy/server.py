@@ -20,7 +20,8 @@ Behavior (verified against the live API by probe_api.py, 2026-06-10):
 
 Run: conda run -n base python reproduction/proxy/server.py  [PROXY_PORT=8744]
 """
-import json, os, threading, time
+import asyncio, json, os, re, threading, time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from fastapi import FastAPI, Request
@@ -45,6 +46,21 @@ LOG = os.path.join(HERE, 'calls.jsonl')
 RAW = os.environ.get('PROXY_DUMP', os.path.join(HERE, 'raw_calls.jsonl'))
 _log_lock = threading.Lock()
 _raw_lock = threading.Lock()
+
+# Concurrency: the handlers are async but the upstream call is BLOCKING (requests.post +
+# time.sleep retry loop). Called inline it freezes the event loop, serializing all
+# requests (measured ~1x concurrency). Offloading it to this thread pool lets the loop
+# interleave many in-flight requests; the real ceiling then becomes the upstream's own
+# rate limit (429s are already retried with backoff). Pure passthrough behavior is
+# unchanged. Size with PROXY_UPSTREAM_WORKERS.
+_UPSTREAM_WORKERS = int(os.environ.get('PROXY_UPSTREAM_WORKERS', '32'))
+_EXECUTOR = ThreadPoolExecutor(max_workers=_UPSTREAM_WORKERS,
+                               thread_name_prefix='upstream')
+
+
+async def _offload(fn, *args):
+    """Run a blocking upstream call off the event loop so requests run concurrently."""
+    return await asyncio.get_running_loop().run_in_executor(_EXECUTOR, fn, *args)
 
 # Two upstream backends, selected per-request by route prefix:
 #   /t/<tag>/...  -> PPLX   (Perplexity reselling openai/gpt-5.4-mini; NO reasoning
@@ -322,7 +338,7 @@ async def _handle(req: Request, tag: str, backend: dict):
     body = await req.json()
     rbody, n_images = to_responses_body(body, backend, tag)
     t0 = time.time()
-    status, j = call_upstream(rbody, backend)
+    status, j = await _offload(call_upstream, rbody, backend)
     dur = time.time() - t0
     if status != 200:
         log_call(dict(ts=t0, tag=tag, backend=backend['name'], dur=round(dur, 2),
@@ -372,6 +388,228 @@ async def _handle(req: Request, tag: str, backend: dict):
                 index=0, delta=dict(tool_calls=[dict(index=i, id=tc['id'],
                                                      type='function',
                                                      function=tc['function'])]),
+                finish_reason=None)]))
+        chunks.append(dict(**base, choices=[dict(
+            index=0, delta={}, finish_reason=resp['choices'][0]['finish_reason'])]))
+        if (body.get('stream_options') or {}).get('include_usage'):
+            chunks.append(dict(**base, choices=[], usage=resp['usage']))
+        for c in chunks:
+            yield f'data: {json.dumps(c)}\n\n'
+        yield 'data: [DONE]\n\n'
+
+    return StreamingResponse(sse(), media_type='text/event-stream')
+
+
+# ------------------------------------------- Tinker (native chat) passthrough ----
+def _split_think(content):
+    """Qwen3.6 emits its reasoning inline, wrapped in <think>…</think> (the opening
+    tag is template-prefilled, so usually only the closing </think> is present).
+    Returns (clean_answer, reasoning_or_None). No </think> + nonempty content => the
+    model answered without a visible think block."""
+    if content is None:
+        return None, None
+    if '</think>' in content:
+        pre, _, post = content.rpartition('</think>')
+        reasoning = pre.replace('<think>', '', 1).strip()
+        return post.strip(), (reasoning or None)
+    return content, None
+
+
+def call_upstream_chat(rbody, backend):
+    """POST to a native /chat/completions backend (Tinker) with retries. Unlike
+    call_upstream (which targets /responses), this is a near-passthrough."""
+    last = None
+    for attempt in range(8):
+        try:
+            r = requests.post(f"{backend['base']}/chat/completions", json=rbody,
+                              timeout=600,
+                              headers={'Authorization': f"Bearer {backend['key']}"})
+        except requests.RequestException as e:
+            last = (599, str(e)); time.sleep(2 ** (attempt + 1)); continue
+        if r.status_code == 200:
+            return 200, r.json()
+        last = (r.status_code, r.text[:2000])
+        if r.status_code in (429, 500, 502, 503, 504):
+            time.sleep(2 ** (attempt + 1)); continue
+        break
+    return last
+
+
+_XML_TOOLCALL_RE = re.compile(r'<tool_call>\s*(.*?)\s*</tool_call>', re.DOTALL)
+_XML_FUNC_RE = re.compile(r'<function=([^>\s]+)\s*>(.*?)</function>', re.DOTALL)
+_XML_PARAM_RE = re.compile(r'<parameter=([^>\s]+)\s*>(.*?)</parameter>', re.DOTALL)
+
+
+def _parse_xml_tool_calls(content):
+    """Convert Qwen3.6's TEXT tool-call syntax into OpenAI structured tool_calls (Tinker
+    doesn't parse the newer models' format). Handles both the
+    <function=NAME><parameter=P>val</parameter></function> XML form and a Hermes JSON
+    form ({"name":..,"arguments":{..}}) inside <tool_call> tags. Returns
+    (residual_text_without_calls, [tool_call_dicts]). Our tool params are all strings, so
+    values pass through verbatim."""
+    if not content or '<tool_call>' not in content:
+        return content, []
+    calls = []
+    for i, block in enumerate(_XML_TOOLCALL_RE.findall(content)):
+        block = block.strip()
+        try:
+            j = json.loads(block)                     # Hermes JSON form
+            name = j.get('name')
+            a = j.get('arguments', {})
+            args_str = a if isinstance(a, str) else json.dumps(a)
+        except Exception:
+            fm = _XML_FUNC_RE.search(block)           # <function=..><parameter=..> form
+            if not fm:
+                continue
+            name = fm.group(1).strip()
+            args = {p.strip(): v.strip() for p, v in _XML_PARAM_RE.findall(fm.group(2))}
+            args_str = json.dumps(args)
+        if not name:
+            continue
+        calls.append(dict(id=f'call_{int(time.time() * 1000) % 10**10}_{i}',
+                          type='function',
+                          function=dict(name=name, arguments=args_str)))
+    residual = _XML_TOOLCALL_RE.sub('', content).strip()
+    return residual, calls
+
+
+def _tinkerize_messages(messages):
+    """Adapt an OpenAI message list for Tinker's chat/completions quirks:
+    (1) tool_calls[].function.arguments must be a DICT, not the OpenAI-standard JSON
+        STRING — Tinker 400s "Can only get item pairs from a mapping" on a string;
+    (2) all system messages must be coalesced into ONE leading system message — Tinker
+        400s "System message must be at the beginning" otherwise (the belief board adds
+        a 2nd system message on top of the agent's own system prompt);
+    (3) there must be >=1 user-role message, else "No user query found in messages"
+        (AutoGen's SelectorGroupChat sends the selection prompt as system-only).
+    Returns a new list; the original (logged) messages are left untouched."""
+    norm = []
+    for m in messages:
+        m = dict(m)
+        if m.get('tool_calls'):
+            new_tcs = []
+            for tc in m['tool_calls']:
+                tc = dict(tc)
+                fn = dict(tc.get('function') or {})
+                a = fn.get('arguments')
+                if isinstance(a, str):
+                    try:
+                        fn['arguments'] = json.loads(a) if a.strip() else {}
+                    except Exception:
+                        fn['arguments'] = {}
+                tc['function'] = fn
+                new_tcs.append(tc)
+            m['tool_calls'] = new_tcs
+        norm.append(m)
+    # (2) merge every system message into one leading system message
+    sys_text = '\n\n'.join(t for t in (_text_of(m.get('content'))
+                                       for m in norm if m.get('role') == 'system') if t)
+    out = [m for m in norm if m.get('role') != 'system']
+    if sys_text:
+        out.insert(0, {'role': 'system', 'content': sys_text})
+    # (3) ensure >=1 user message (promote the last message if none)
+    if out and not any(m.get('role') == 'user' for m in out):
+        out[-1] = dict(out[-1])
+        out[-1]['role'] = 'user'
+    return out
+
+
+@app.post('/m/{tag}/v1/chat/completions')
+@app.post('/m/{tag}/chat/completions')
+@app.post('/m/v1/chat/completions')
+@app.post('/m/chat/completions')
+async def chat_tinker(req: Request, tag: str = ''):
+    return await _handle_chat(req, tag, TINKER)
+
+
+async def _handle_chat(req: Request, tag: str, backend: dict):
+    """Passthrough for a native chat.completions backend (Tinker/Qwen3.6): forward the
+    body (alias the model, bound output), strip the inline <think> trace from the reply,
+    and log in the SAME schema as _handle so calls.jsonl / raw_calls.jsonl stay uniform."""
+    body = await req.json()
+    fwd = dict(body)
+    fwd['model'] = backend['model']                 # alias gpt-4o -> real Qwen id upstream
+    fwd.pop('stream', None)                          # always fetch non-streamed upstream
+    fwd.pop('stream_options', None)
+    if not fwd.get('max_tokens') and not fwd.get('max_completion_tokens'):
+        fwd['max_tokens'] = TINKER_MAX_TOKENS        # bound the always-on think trace
+    fwd['messages'] = _tinkerize_messages(fwd.get('messages') or [])
+    n_images = sum(1 for m in body.get('messages', [])
+                   if isinstance(m.get('content'), list)
+                   for p in m['content']
+                   if isinstance(p, dict) and p.get('type') == 'image_url')
+    t0 = time.time()
+    status, j = await _offload(call_upstream_chat, fwd, backend)
+    dur = time.time() - t0
+    if status != 200:
+        log_call(dict(ts=t0, tag=tag, backend=backend['name'], dur=round(dur, 2),
+                      error=status, detail=str(j)[:300]))
+        return JSONResponse(status_code=status if isinstance(status, int) else 500,
+                            content=dict(error=dict(
+                                message=f'upstream {status}: {j}',
+                                type='upstream_error', code=status)))
+    choice = (j.get('choices') or [{}])[0]
+    msg = dict(choice.get('message') or {})
+    clean, reasoning = _split_think(msg.get('content'))
+    msg.pop('reasoning_content', None)               # Tinker leaves it empty; drop it
+    finish = choice.get('finish_reason') or 'stop'
+    # Recover Qwen3.6's text <tool_call> syntax into structured tool_calls (AutoGen needs
+    # them structured). Skip if upstream already structured them (e.g. a 2507 model).
+    if not msg.get('tool_calls'):
+        residual, xml_calls = _parse_xml_tool_calls(clean)
+        if xml_calls:
+            msg['tool_calls'] = xml_calls
+            msg['content'] = residual or None
+            finish = 'tool_calls'
+        else:
+            msg['content'] = clean or None           # null content is fine alongside tool_calls
+    else:
+        msg['content'] = clean or None
+    u = j.get('usage') or {}
+    usage = dict(prompt_tokens=u.get('prompt_tokens', 0),
+                 completion_tokens=u.get('completion_tokens', 0),
+                 total_tokens=u.get('total_tokens', 0))
+    req_model = body.get('model', backend['model'])
+    echo_model = 'gpt-4o-2024-08-06' if req_model == 'gpt-4o' else req_model
+    resp = dict(id='chatcmpl-' + str(j.get('id', 'x')), object='chat.completion',
+                created=int(time.time()), model=echo_model,
+                choices=[dict(index=0, message=msg, finish_reason=finish,
+                              logprobs=None)],
+                usage=usage)
+    with _raw_lock, open(RAW, 'a') as f:
+        f.write(json.dumps(dict(
+            ts=t0, tag=tag, backend=backend['name'],
+            messages=_redact_images(body.get('messages', [])),
+            tools=[t.get('function', t).get('name') for t in body.get('tools') or []],
+            response_format=body.get('response_format'),
+            reasoning=reasoning,
+            reply=msg)) + '\n')
+    log_call(dict(ts=t0, tag=tag, backend=backend['name'], dur=round(dur, 2),
+                  model=body.get('model'),
+                  prompt_tokens=usage['prompt_tokens'],
+                  completion_tokens=usage['completion_tokens'],
+                  cost=None, n_msgs=len(body.get('messages', [])),
+                  n_images=n_images, tools=bool(fwd.get('tools')),
+                  has_reasoning=bool(reasoning), finish=finish,
+                  stream=bool(body.get('stream'))))
+
+    if not body.get('stream'):
+        return JSONResponse(content=resp)
+
+    def sse():
+        base = dict(id=resp['id'], object='chat.completion.chunk',
+                    created=resp['created'], model=resp['model'])
+        m = resp['choices'][0]['message']
+        chunks = [dict(**base, choices=[dict(index=0, delta=dict(role='assistant'),
+                                             finish_reason=None)])]
+        if m.get('content'):
+            chunks.append(dict(**base, choices=[dict(
+                index=0, delta=dict(content=m['content']), finish_reason=None)]))
+        for i, tc in enumerate(m.get('tool_calls') or []):
+            chunks.append(dict(**base, choices=[dict(
+                index=0, delta=dict(tool_calls=[dict(index=i, id=tc.get('id'),
+                                                     type='function',
+                                                     function=tc.get('function'))]),
                 finish_reason=None)]))
         chunks.append(dict(**base, choices=[dict(
             index=0, delta={}, finish_reason=resp['choices'][0]['finish_reason'])]))

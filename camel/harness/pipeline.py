@@ -46,6 +46,7 @@ FINALIZER_SYS = (
 class PipelineResult:
     final: str                 # finalizer's published text (parse FINAL ANSWER from this)
     agents: list               # [actor_1, actor_2, critic, finalizer] AgentResults
+    budget_exceeded: bool = False   # task hit the per-task USD cap -> short-circuited to UNKNOWN
 
     @property
     def n_calls(self):
@@ -56,23 +57,34 @@ class PipelineResult:
         return sum(a.n_tool_calls for a in self.agents)
 
 
+def _aborted(agents):
+    """Per-task budget blown mid-pipeline: publish an honest UNKNOWN, keep partial trace."""
+    return PipelineResult(final="FINAL ANSWER: UNKNOWN", agents=agents, budget_exceeded=True)
+
+
 def _user(text):
     return [{"role": "user", "content": text}]
 
 
-def run_pipeline(task_prompt, tool_names, client, model, addon) -> PipelineResult:
+def run_pipeline(task_prompt, tool_names, client, model, addon, budget=None) -> PipelineResult:
     task = _user(task_prompt)
 
-    actor_1 = run_agent("actor", ACTOR_SYS, task, tool_names, client, model, addon)
+    actor_1 = run_agent("actor", ACTOR_SYS, task, tool_names, client, model, addon, budget=budget)
+    if budget is not None and budget.exceeded:
+        return _aborted([actor_1])
 
     # edge 1 (actor_1 -> actor_2): actor_2 sees actor_1's answer
     a2_ctx = task + _user(f"Another solver proposed this answer:\n\n{actor_1.final}\n\n"
                           "Consider it, then give your own answer.")
-    actor_2 = run_agent("actor", ACTOR_SYS, a2_ctx, tool_names, client, model, addon)
+    actor_2 = run_agent("actor", ACTOR_SYS, a2_ctx, tool_names, client, model, addon, budget=budget)
+    if budget is not None and budget.exceeded:
+        return _aborted([actor_1, actor_2])
 
     # edge 2 (actor_2 -> critic): critic verifies actor_2 (keeps tools to check, not re-solve)
     cr_ctx = task + _user(f"Proposed answer to verify:\n\n{actor_2.final}")
-    critic = run_agent("critic", CRITIC_SYS, cr_ctx, tool_names, client, model, addon)
+    critic = run_agent("critic", CRITIC_SYS, cr_ctx, tool_names, client, model, addon, budget=budget)
+    if budget is not None and budget.exceeded:
+        return _aborted([actor_1, actor_2, critic])
 
     # edge 3 (critic -> finalizer) + skip-edges (actor_1, actor_2 -> finalizer):
     # finalizer adjudicates BOTH candidates + the critique, with NO tools (so it
@@ -82,7 +94,7 @@ def run_pipeline(task_prompt, tool_names, client, model, addon) -> PipelineResul
         f"Candidate answer A (solver 1):\n\n{actor_1.final}\n\n"
         f"Candidate answer B (solver 2):\n\n{actor_2.final}\n\n"
         f"Verifier's critique of B:\n\n{critic.final}\n\nDecide the final answer.")
-    finalizer = run_agent("finalizer", FINALIZER_SYS, fin_ctx, [], client, model, addon)
+    finalizer = run_agent("finalizer", FINALIZER_SYS, fin_ctx, [], client, model, addon, budget=budget)
 
     return PipelineResult(final=finalizer.final,
                           agents=[actor_1, actor_2, critic, finalizer])

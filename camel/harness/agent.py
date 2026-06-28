@@ -44,6 +44,30 @@ def _is_context_overflow(e):
     return "context" in s or "exceeds" in s or "max_tokens" in s
 
 
+class Budget:
+    """Per-task USD spend cap, shared across the pipeline's 4 agents.
+
+    Charged live from each response's usage (resp.usage is populated by the proxy).
+    Once `spent` crosses `cap`, `exceeded` latches True; the agent loop breaks and
+    the pipeline short-circuits to an honest UNKNOWN rather than thrashing on. A
+    falsy cap disables the cap (unlimited)."""
+
+    def __init__(self, cap_usd, prefill_per_mtok, sample_per_mtok):
+        self.cap = cap_usd or 0.0
+        self.prefill = prefill_per_mtok
+        self.sample = sample_per_mtok
+        self.spent = 0.0
+        self.exceeded = False
+
+    def charge(self, usage):
+        if usage is not None:
+            self.spent += ((getattr(usage, "prompt_tokens", 0) or 0) / 1e6 * self.prefill
+                           + (getattr(usage, "completion_tokens", 0) or 0) / 1e6 * self.sample)
+        if self.cap and self.spent >= self.cap:
+            self.exceeded = True
+        return self.exceeded
+
+
 @dataclass
 class AgentResult:
     role: str
@@ -54,7 +78,7 @@ class AgentResult:
 
 
 def run_agent(role, system_prompt, task_messages, tool_names, client, model,
-              addon, max_inner_steps=MAX_INNER_STEPS) -> AgentResult:
+              addon, max_inner_steps=MAX_INNER_STEPS, budget=None) -> AgentResult:
     """Run one agent's internal loop and return its AgentResult.
 
     `task_messages` is the user-side context (task + upstream agents' outputs).
@@ -88,6 +112,7 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
                 break
         n_steps += 1
         msg = resp.choices[0].message
+        over_budget = budget.charge(getattr(resp, "usage", None)) if budget is not None else False
         calls = msg.tool_calls or []
 
         # Record the assistant turn (verbatim, so a later call sees its own tool_calls).
@@ -99,7 +124,7 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
                                for tc in calls]
         messages.append(a)
 
-        if not calls:
+        if not calls or over_budget:           # done, or out of budget -> stop before more tool calls
             final = msg.content or ""
             break
         for tc in calls:                       # execute every requested tool, append results

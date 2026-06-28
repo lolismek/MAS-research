@@ -20,6 +20,7 @@ import json, os, re, sys, time
 from openai import OpenAI
 
 from pipeline import run_pipeline
+from agent import Budget
 from tools import TOOL_PROFILES
 from addons import get_addon
 from scoring import classify_outcome
@@ -39,6 +40,10 @@ MODEL = os.environ.get("CAMEL_MODEL", "gpt-4o")    # aliased to Qwen by the prox
 # No Tinker usage API → we self-meter tokens from calls.jsonl and price them here.
 PREFILL_PER_MTOK = float(os.environ.get("CAMEL_PREFILL_RATE", 0.36))
 SAMPLE_PER_MTOK = float(os.environ.get("CAMEL_SAMPLE_RATE", 0.89))
+
+# Per-task spend cap: a runaway task stops and publishes an honest UNKNOWN (abstained)
+# instead of thrashing. Sized above the most expensive LEGITIMATE run we've measured.
+BUDGET_USD = float(os.environ.get("CAMEL_BUDGET_USD", "1.0"))
 
 
 def norm(s):
@@ -78,7 +83,7 @@ def meter(tag, t0):
                 cost_usd=cost)
 
 
-def run_one(task, arm="vanilla"):
+def run_one(task, arm="vanilla", budget_usd=None):
     tid = task["id"]
     profile = task.get("tool_profile", "none")
     tool_names = TOOL_PROFILES[profile]
@@ -104,7 +109,9 @@ def run_one(task, arm="vanilla"):
 
     print(f"[{arm}/{tid}] profile={profile} tools={tool_names} starting", flush=True)
     t0 = time.time()
-    res = run_pipeline(question, tool_names, client_for(tag), MODEL, get_addon(arm))
+    budget = Budget(BUDGET_USD if budget_usd is None else budget_usd,
+                    PREFILL_PER_MTOK, SAMPLE_PER_MTOK)
+    res = run_pipeline(question, tool_names, client_for(tag), MODEL, get_addon(arm), budget=budget)
     dur = time.time() - t0
 
     final = parse_final(res.final)
@@ -115,7 +122,7 @@ def run_one(task, arm="vanilla"):
         id=tid, arm=arm, run=n, bench=task.get("bench"), tool_profile=profile,
         answer_type=answer_type, seconds=round(dur, 1),
         final_answer=final, expected_answer=expected,
-        outcome=outcome,
+        outcome=outcome, budget_exceeded=res.budget_exceeded,
         exact_match=outcome == "correct",        # kept for the viewer's pass/fail
         n_calls=res.n_calls, n_tool_calls=res.n_tool_calls,
         per_agent=[dict(role=a.role, steps=a.n_steps, tool_calls=a.n_tool_calls,
@@ -127,8 +134,9 @@ def run_one(task, arm="vanilla"):
         json.dump([dict(role=a.role, transcript=a.transcript) for a in res.agents], f, indent=1)
 
     print(f"[{arm}/{tid}] {dur:.0f}s final={final!r} expected={expected!r} "
-          f"outcome={outcome} calls={res.n_calls} tools={res.n_tool_calls} "
-          f"tok={result['total_tokens']} per_agent="
+          f"outcome={outcome}{' [BUDGET]' if res.budget_exceeded else ''} "
+          f"calls={res.n_calls} tools={res.n_tool_calls} "
+          f"tok={result['total_tokens']} cost=${result['cost_usd']:.3f} per_agent="
           f"{[(a.role, a.n_steps, a.n_tool_calls) for a in res.agents]}", flush=True)
     return result
 
