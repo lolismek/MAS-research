@@ -34,8 +34,9 @@ Closed-book ⇒ empty tool profile ⇒ one iteration. Qwen3.6 thinks natively (t
 proxy strips `<think>`), so prompts carry no CoT scaffolding.
 
 ## Layout
-- `harness/tools.py` — `web_search`, `fetch_url`, `run_python` + OpenAI schemas +
-  `TOOL_PROFILES` (tools are a **per-benchmark profile**, never gated on closed/open book).
+- `harness/tools.py` — `web_search`, `fetch_url` (HTML + PDF extraction), `run_python`,
+  `read_file` (xlsx/csv/zip/json/xml/pdf attachments) + OpenAI schemas + `TOOL_PROFILES`
+  (tools are a **per-benchmark profile**, never gated on closed/open book).
 - `harness/agent.py` — `run_agent`: the one inner-loop primitive (only LLM caller).
 - `harness/pipeline.py` — `run_pipeline`: the 4 agents + the 2 edges.
 - `harness/addons.py` — `AddOn` seam (`inject_context` / `on_turn_end`); `vanilla` = no-op.

@@ -7,7 +7,7 @@ internal loops (not trivially one-shot) — see the selection rationale in `../P
 
 | Benchmark | Dir | n | `answer_type` | `tool_profile` | Hard? / honesty | Source | Gated |
 |---|---|---|---|---|---|---|---|
-| **GAIA** | `gaia/` | all **level-3** (26; 19 file-free + 7 need a file) | `freeform` | `web_compute` | GAIA's hard slice: longest multi-source tool chains | `gaia-benchmark/GAIA` validation | **yes** |
+| **GAIA** | `gaia/` | **17** evaluated (of 26 L3; **9 vision/media excluded** → `EXCLUDED.md`) | `freeform` | `web_compute` | GAIA's hard slice: longest multi-source tool chains | `gaia-benchmark/GAIA` validation | **yes** |
 | **GPQA-Diamond** | `gpqa_diamond/` | 198 | `mcq` | `none` | PhD-level, expert-validated → **honesty showcase** | `Idavidrein/gpqa` | **yes** |
 | **MATH level-5** | `math_l5/` | 134 | `math` | `math` | hardest MATH tier; critic recompute has teeth | `HuggingFaceH4/MATH-500` (lvl 5) | no |
 
@@ -31,7 +31,10 @@ internal loops (not trivially one-shot) — see the selection rationale in `../P
 content out of git). Regenerate locally — all three need `HUGGINGFACE_TOKEN` in the
 repo-root `.env` with *public-gated-repo* access. **GPQA** and **GAIA** are gated: accept
 their terms once on the HF page (GPQA = click-through; **GAIA = manual access request,
-approval not instant**). GAIA prep also needs `pyarrow` (the dataset ships parquet):
+approval not instant**). GAIA prep also needs `pyarrow` + `openpyxl` + `pypdf` (parquet
+metadata; doc attachments are staged into `gaia/files/` and read via the `read_file` tool;
+web PDFs are extracted by `fetch_url`). GAIA splits L3 into an evaluated `tasks.jsonl` and a
+vision/media `excluded_vision.jsonl` (see `gaia/EXCLUDED.md`):
 ```
 conda run -n autogen_gc python benchmarks/gaia/prep.py
 conda run -n autogen_gc python benchmarks/gpqa_diamond/prep.py

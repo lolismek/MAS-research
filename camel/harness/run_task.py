@@ -90,14 +90,21 @@ def run_one(task, arm="vanilla"):
     os.makedirs(rundir)
     tag = f"camel_{arm}_{tid}_run{n}"
 
+    question = task["question"]
+    floc = (task.get("meta") or {}).get("file_local")     # staged attachment (GAIA doc tasks)
+    if floc:
+        apath = os.path.join(REPO_ROOT, floc)
+        question += (f"\n\nAn attached file is available at this exact path:\n{apath}\n"
+                     "Call read_file with that path to read its contents.")
+
     with open(os.path.join(rundir, "prompt.txt"), "w") as f:
-        f.write(task["question"])
+        f.write(question)
     with open(os.path.join(rundir, "expected_answer.txt"), "w") as f:
         f.write(str(task["expected_answer"]))
 
     print(f"[{arm}/{tid}] profile={profile} tools={tool_names} starting", flush=True)
     t0 = time.time()
-    res = run_pipeline(task["question"], tool_names, client_for(tag), MODEL, get_addon(arm))
+    res = run_pipeline(question, tool_names, client_for(tag), MODEL, get_addon(arm))
     dur = time.time() - t0
 
     final = parse_final(res.final)
