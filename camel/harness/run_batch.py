@@ -1,0 +1,99 @@
+"""Run the full sweep: every evaluated task across the 3 benchmarks through the CAMEL
+pipeline, one arm, with a per-task USD cap and automatic RESUME.
+
+RESUME is automatic and free: a task is "done" once it has a run_*/result.json, so
+re-running the same command skips finished tasks and runs only what's missing —
+nothing is re-spent. Crash-orphan run dirs (a run_* with no result.json) are pruned
+before rerun so the trace tree stays clean.
+
+PARALLELISM: --workers fans tasks out across threads. NOTE the shared proxy currently
+serializes upstream calls (measured: effective concurrency ~1x), so --workers > 1 only
+helps once the proxy is made concurrent. The flag is here and ready for that.
+
+Usage (repo root):
+  conda run -n autogen_gc python camel/harness/run_batch.py                      # all 3, vanilla, resume
+  conda run -n autogen_gc python camel/harness/run_batch.py --benches gpqa_diamond --limit 5
+  conda run -n autogen_gc python camel/harness/run_batch.py --workers 8 --budget 1.0
+"""
+import os, shutil, sys, time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from run_task import run_one, resolve_tasks, load_tasks, pop_opt, TRACES, BUDGET_USD
+
+BENCHES = ["gpqa_diamond", "math_l5", "gaia"]   # the evaluated sets
+
+
+def _runs_dir(arm, tid):
+    return os.path.join(TRACES, arm, tid)
+
+
+def is_done(arm, tid):
+    d = _runs_dir(arm, tid)
+    return os.path.isdir(d) and any(
+        os.path.exists(os.path.join(d, r, "result.json")) for r in os.listdir(d))
+
+
+def prune_incomplete(arm, tid):
+    """Drop crash-orphan run dirs (run_* with no result.json) so reruns stay clean."""
+    d = _runs_dir(arm, tid)
+    if not os.path.isdir(d):
+        return
+    for r in os.listdir(d):
+        rd = os.path.join(d, r)
+        if os.path.isdir(rd) and not os.path.exists(os.path.join(rd, "result.json")):
+            shutil.rmtree(rd, ignore_errors=True)
+
+
+def main():
+    args = sys.argv[1:]
+    arm, args = pop_opt(args, "--arm"); arm = arm or "vanilla"
+    benches, args = pop_opt(args, "--benches")
+    workers, args = pop_opt(args, "--workers")
+    limit, args = pop_opt(args, "--limit")
+    budget, args = pop_opt(args, "--budget")
+    bench_list = benches.split(",") if benches else BENCHES
+    workers = int(workers) if workers else 1
+    budget = float(budget) if budget else BUDGET_USD
+
+    todo, done_n = [], 0
+    for b in bench_list:
+        tasks = load_tasks(resolve_tasks(b))
+        if limit:
+            tasks = tasks[:int(limit)]
+        for t in tasks:
+            if is_done(arm, t["id"]):
+                done_n += 1
+            else:
+                prune_incomplete(arm, t["id"])
+                todo.append(t)
+
+    total = done_n + len(todo)
+    print(f"arm={arm} benches={bench_list} budget=${budget:.2f}/task workers={workers}")
+    print(f"{total} tasks | {done_n} already done (skipped) | {len(todo)} to run\n", flush=True)
+    if not todo:
+        print("nothing to run — all done.")
+        return
+
+    t0, tally, cost, n = time.time(), Counter(), 0.0, 0
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(run_one, t, arm, budget): t for t in todo}
+            for fut in as_completed(futs):
+                r = fut.result()
+                n += 1
+                tally[r["outcome"]] += 1
+                cost += r.get("cost_usd", 0) or 0
+                print(f"  >> {n}/{len(todo)} | correct={tally['correct']} "
+                      f"abstained={tally['abstained']} wrong={tally['wrong_confident']} "
+                      f"| ${cost:.2f} so far", flush=True)
+    except KeyboardInterrupt:
+        print("\ninterrupted — finished tasks are saved; rerun the same command to resume.",
+              flush=True)
+
+    print(f"\n=== ran {n}/{len(todo)} in {(time.time()-t0)/60:.1f} min | "
+          f"${cost:.2f} | {dict(tally)} ===")
+
+
+if __name__ == "__main__":
+    main()
