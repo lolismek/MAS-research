@@ -14,6 +14,9 @@ Usage (repo root):
   conda run -n autogen_gc python camel/harness/run_batch.py                      # all 3, vanilla, resume
   conda run -n autogen_gc python camel/harness/run_batch.py --benches gpqa_diamond --limit 5
   conda run -n autogen_gc python camel/harness/run_batch.py --workers 8 --budget 1.0
+  conda run -n autogen_gc python camel/harness/run_batch.py --rerun-issues --workers 16  # only
+       # tasks that BOTH hit a substrate limit (output cap / context overflow) AND did not
+       # succeed; forces a fresh run that supersedes the old one (agg takes the latest run).
 """
 import os, shutil, sys, time
 from collections import Counter
@@ -47,6 +50,10 @@ def prune_incomplete(arm, tid):
 
 def main():
     args = sys.argv[1:]
+    rerun_issues = "--rerun-issues" in args
+    force = "--force" in args or rerun_issues       # re-run even tasks that already have a result
+    dry_run = "--dry-run" in args
+    args = [a for a in args if a not in ("--rerun-issues", "--force", "--dry-run")]
     arm, args = pop_opt(args, "--arm"); arm = arm or "vanilla"
     benches, args = pop_opt(args, "--benches")
     workers, args = pop_opt(args, "--workers")
@@ -56,16 +63,26 @@ def main():
     workers = int(workers) if workers else 1
     budget = float(budget) if budget else BUDGET_USD
 
+    select_ids = None
+    if rerun_issues:
+        from rerun_select import select
+        rr, _, _ = select(arm)
+        select_ids = {t for t, _, _ in rr}
+        print(f"--rerun-issues: {len(select_ids)} affected + non-successful tasks targeted "
+              f"(forcing fresh runs that supersede the old ones)")
+
     todo, done_n = [], 0
     for b in bench_list:
         tasks = load_tasks(resolve_tasks(b))
         if limit:
             tasks = tasks[:int(limit)]
         for t in tasks:
-            if is_done(arm, t["id"]):
+            if select_ids is not None and t["id"] not in select_ids:
+                continue
+            if (not force) and is_done(arm, t["id"]):
                 done_n += 1
             else:
-                prune_incomplete(arm, t["id"])
+                prune_incomplete(arm, t["id"])     # keeps run_*/ that have result.json
                 todo.append(t)
 
     total = done_n + len(todo)
@@ -73,6 +90,10 @@ def main():
     print(f"{total} tasks | {done_n} already done (skipped) | {len(todo)} to run\n", flush=True)
     if not todo:
         print("nothing to run — all done.")
+        return
+    if dry_run:
+        print("--dry-run: would run these tasks:\n  " +
+              ", ".join(t["id"] for t in todo))
         return
 
     t0, tally, cost, n = time.time(), Counter(), 0.0, 0
