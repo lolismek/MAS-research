@@ -20,7 +20,8 @@ Behavior (verified against the live API by probe_api.py, 2026-06-10):
 
 Run: conda run -n base python reproduction/proxy/server.py  [PROXY_PORT=8744]
 """
-import json, os, re, threading, time
+import asyncio, json, os, re, threading, time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from fastapi import FastAPI, Request
@@ -45,6 +46,21 @@ LOG = os.path.join(HERE, 'calls.jsonl')
 RAW = os.environ.get('PROXY_DUMP', os.path.join(HERE, 'raw_calls.jsonl'))
 _log_lock = threading.Lock()
 _raw_lock = threading.Lock()
+
+# Concurrency: the handlers are async but the upstream call is BLOCKING (requests.post +
+# time.sleep retry loop). Called inline it freezes the event loop, serializing all
+# requests (measured ~1x concurrency). Offloading it to this thread pool lets the loop
+# interleave many in-flight requests; the real ceiling then becomes the upstream's own
+# rate limit (429s are already retried with backoff). Pure passthrough behavior is
+# unchanged. Size with PROXY_UPSTREAM_WORKERS.
+_UPSTREAM_WORKERS = int(os.environ.get('PROXY_UPSTREAM_WORKERS', '32'))
+_EXECUTOR = ThreadPoolExecutor(max_workers=_UPSTREAM_WORKERS,
+                               thread_name_prefix='upstream')
+
+
+async def _offload(fn, *args):
+    """Run a blocking upstream call off the event loop so requests run concurrently."""
+    return await asyncio.get_running_loop().run_in_executor(_EXECUTOR, fn, *args)
 
 # Two upstream backends, selected per-request by route prefix:
 #   /t/<tag>/...  -> PPLX   (Perplexity reselling openai/gpt-5.4-mini; NO reasoning
@@ -337,7 +353,7 @@ async def _handle(req: Request, tag: str, backend: dict):
     body = await req.json()
     rbody, n_images = to_responses_body(body, backend, tag)
     t0 = time.time()
-    status, j = call_upstream(rbody, backend)
+    status, j = await _offload(call_upstream, rbody, backend)
     dur = time.time() - t0
     if status != 200:
         log_call(dict(ts=t0, tag=tag, backend=backend['name'], dur=round(dur, 2),
@@ -538,7 +554,7 @@ async def _handle_chat(req: Request, tag: str, backend: dict):
                    for p in m['content']
                    if isinstance(p, dict) and p.get('type') == 'image_url')
     t0 = time.time()
-    status, j = call_upstream_chat(fwd, backend)
+    status, j = await _offload(call_upstream_chat, fwd, backend)
     dur = time.time() - t0
     if status != 200:
         log_call(dict(ts=t0, tag=tag, backend=backend['name'], dur=round(dur, 2),
