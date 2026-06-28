@@ -20,6 +20,7 @@ from openai import OpenAI
 from pipeline import run_pipeline
 from tools import TOOL_PROFILES
 from addons import get_addon
+from scoring import classify_outcome
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)                       # camel/
@@ -30,6 +31,11 @@ CALLS_LOG = os.path.join(REPO_ROOT, "shared", "proxy", "calls.jsonl")
 
 PROXY = os.environ.get("PROXY_URL", "http://127.0.0.1:8744/v1")
 MODEL = os.environ.get("CAMEL_MODEL", "gpt-4o")    # aliased to Qwen by the proxy
+
+# Tinker console rates for Qwen/Qwen3.6-35B-A3B, USD per MILLION tokens (2026-06-27).
+# No Tinker usage API → we self-meter tokens from calls.jsonl and price them here.
+PREFILL_PER_MTOK = float(os.environ.get("CAMEL_PREFILL_RATE", 0.36))
+SAMPLE_PER_MTOK = float(os.environ.get("CAMEL_SAMPLE_RATE", 0.89))
 
 
 def norm(s):
@@ -63,8 +69,10 @@ def meter(tag, t0):
                 continue
             pt += r.get("prompt_tokens", 0) or 0
             ct += r.get("completion_tokens", 0) or 0
+    cost = round(pt / 1e6 * PREFILL_PER_MTOK + ct / 1e6 * SAMPLE_PER_MTOK, 6)
     return dict(proxy_calls=n, proxy_errors=errs,
-                prompt_tokens=pt, completion_tokens=ct, total_tokens=pt + ct)
+                prompt_tokens=pt, completion_tokens=ct, total_tokens=pt + ct,
+                cost_usd=cost)
 
 
 def run_one(task, arm="vanilla"):
@@ -91,10 +99,14 @@ def run_one(task, arm="vanilla"):
 
     final = parse_final(res.final)
     expected = str(task["expected_answer"])
+    answer_type = task.get("answer_type", "freeform")
+    outcome = classify_outcome(final, expected, answer_type)   # correct/abstained/wrong_confident
     result = dict(
-        id=tid, arm=arm, run=n, tool_profile=profile, seconds=round(dur, 1),
+        id=tid, arm=arm, run=n, bench=task.get("bench"), tool_profile=profile,
+        answer_type=answer_type, seconds=round(dur, 1),
         final_answer=final, expected_answer=expected,
-        exact_match=norm(final) == norm(expected),
+        outcome=outcome,
+        exact_match=outcome == "correct",        # kept for the viewer's pass/fail
         n_calls=res.n_calls, n_tool_calls=res.n_tool_calls,
         per_agent=[dict(role=a.role, steps=a.n_steps, tool_calls=a.n_tool_calls,
                         final=a.final[:300]) for a in res.agents],
@@ -105,7 +117,7 @@ def run_one(task, arm="vanilla"):
         json.dump([dict(role=a.role, transcript=a.transcript) for a in res.agents], f, indent=1)
 
     print(f"[{arm}/{tid}] {dur:.0f}s final={final!r} expected={expected!r} "
-          f"match={result['exact_match']} calls={res.n_calls} tools={res.n_tool_calls} "
+          f"outcome={outcome} calls={res.n_calls} tools={res.n_tool_calls} "
           f"tok={result['total_tokens']} per_agent="
           f"{[(a.role, a.n_steps, a.n_tool_calls) for a in res.agents]}", flush=True)
     return result
