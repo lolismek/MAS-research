@@ -76,10 +76,20 @@ def web_search(query: str) -> str:
     return "\n".join(lines).rstrip()
 
 
-def fetch_url(url: str) -> str:
-    """Fetch a web page and return its readable text content (truncated).
+# Structural boilerplate to drop before extracting text — nav/sidebar/footer/forms
+# etc. are page chrome, not content. Removing them keeps the main text, so the
+# head-truncation downstream cuts far less signal (it kept top-of-page chrome before).
+_BOILERPLATE_TAGS = ["script", "style", "noscript", "svg", "nav", "header", "footer",
+                     "aside", "form", "button", "figure", "iframe", "menu"]
+_BOILERPLATE_ROLES = "[role=navigation],[role=banner],[role=contentinfo],[role=search]"
 
-    Use this after web_search to read the full text of a promising result.
+
+def fetch_url(url: str) -> str:
+    """Fetch a web page and return its MAIN readable text (boilerplate removed).
+
+    Extraction only (no chunking/summarizing): strip chrome tags, prefer the page's
+    <main>/<article> content region if it marks one, then take the text. Use this
+    after web_search to read the full text of a promising result.
     """
     try:
         from bs4 import BeautifulSoup
@@ -95,9 +105,17 @@ def fetch_url(url: str) -> str:
         text = r.text
     else:
         soup = BeautifulSoup(r.text, "html.parser")
-        for tag in soup(["script", "style", "noscript", "svg"]):
+        for tag in soup(_BOILERPLATE_TAGS):
             tag.decompose()
-        text = "\n".join(l.strip() for l in soup.get_text("\n").splitlines() if l.strip())
+        try:
+            for el in soup.select(_BOILERPLATE_ROLES):   # ARIA-marked chrome
+                el.decompose()
+        except Exception:
+            pass
+        # prefer the marked main-content region; fall back to body, then whole doc
+        root = (soup.find("main") or soup.find("article")
+                or soup.find(attrs={"role": "main"}) or soup.body or soup)
+        text = "\n".join(l.strip() for l in root.get_text("\n").splitlines() if l.strip())
     if len(text) > FETCH_MAX_CHARS:
         text = text[:FETCH_MAX_CHARS] + f"\n\n[...truncated at {FETCH_MAX_CHARS} chars...]"
     return text or f"(no extractable text at {url})"
