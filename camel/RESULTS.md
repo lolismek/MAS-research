@@ -58,9 +58,12 @@ room to move the needle on **GAIA**, and almost nothing to act on for MATH.
   context overflow were re-run with the raised cap + compaction + finalizer retry: **+11
   recovered to correct** (total 299→310), and `no-answer` collapsed **9→2**. Two regressions
   surfaced a second-order effect of the higher cap: on a few pathological closed-book tasks an
-  early agent now emits a ~28k-token answer that overflows the *downstream* agent's context
-  (`gpqad_079`, `math_l5_037` → no_answer; `gaia_72c06643` honest-abstain → wrong). Fix on the
-  list: clip oversized upstream agent outputs when composing the next agent's prompt.
+  early agent emits a ~28k-token leaked-think "answer" (it ran out of budget before closing
+  `</think>`) that overflows the *downstream* agent's context (`gpqad_079`, `math_l5_037` →
+  no_answer; `gaia_72c06643` honest-abstain → wrong). **Fixed** in `pipeline.py`: a truncated
+  agent's output no longer crosses an edge — a short marker does (`_handoff`), so the next agent
+  treats it as "no answer" instead of inheriting 28k of raw reasoning. The fix is forward-looking;
+  the trace set above predates it and was **not** re-run (realistic impact ≈ 2 tasks).
 - **GPQA-Diamond's pass rate is high for a 3B-active model** — validate it's genuine vs.
   a too-loose letter-extraction match by spot-checking a handful of transcripts before
   quoting it as *the* baseline.
