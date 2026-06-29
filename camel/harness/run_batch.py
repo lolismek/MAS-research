@@ -6,14 +6,17 @@ re-running the same command skips finished tasks and runs only what's missing �
 nothing is re-spent. Crash-orphan run dirs (a run_* with no result.json) are pruned
 before rerun so the trace tree stays clean.
 
-PARALLELISM: --workers fans tasks out across threads. NOTE the shared proxy currently
-serializes upstream calls (measured: effective concurrency ~1x), so --workers > 1 only
-helps once the proxy is made concurrent. The flag is here and ready for that.
+PARALLELISM: --workers fans tasks out across threads, and the proxy DOES serve them
+concurrently — MEASURED ~19x on the 357-task vanilla sweep (17.8h of summed per-task
+wall-time finished in ~57 min). Default is 16. An earlier note here claimed the proxy
+serialized to ~1x; that was wrong and is corrected. Because `conda run` buffers child
+stdout until exit, a long parallel batch shows no streaming progress — watch the trace
+dir (traces/<arm>/<id>/run_*/result.json) or shared/proxy/calls.jsonl instead.
 
 Usage (repo root):
-  conda run -n autogen_gc python camel/harness/run_batch.py                      # all 3, vanilla, resume
+  conda run -n autogen_gc python camel/harness/run_batch.py                      # all 3, vanilla, 16-way, resume
   conda run -n autogen_gc python camel/harness/run_batch.py --benches gpqa_diamond --limit 5
-  conda run -n autogen_gc python camel/harness/run_batch.py --workers 8 --budget 1.0
+  conda run -n autogen_gc python camel/harness/run_batch.py --workers 8 --budget 1.0   # throttle if needed
   conda run -n autogen_gc python camel/harness/run_batch.py --rerun-issues --workers 16  # only
        # tasks that BOTH hit a substrate limit (output cap / context overflow) AND did not
        # succeed; forces a fresh run that supersedes the old one (agg takes the latest run).
@@ -60,7 +63,7 @@ def main():
     limit, args = pop_opt(args, "--limit")
     budget, args = pop_opt(args, "--budget")
     bench_list = benches.split(",") if benches else BENCHES
-    workers = int(workers) if workers else 1
+    workers = int(workers) if workers else 16   # proxy serves ~19x concurrently (see module docstring)
     budget = float(budget) if budget else BUDGET_USD
 
     select_ids = None

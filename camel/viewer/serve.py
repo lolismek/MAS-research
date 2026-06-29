@@ -14,6 +14,7 @@ Then open the URL. Refresh to pick up new runs (the dir is scanned live).
 import html
 import json
 import os
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
@@ -43,6 +44,35 @@ OUTCOME_LABEL = {"correct": "CORRECT", "abstained": "ABSTAINED", "wrong_confiden
 BENCH_ORDER = ["gaia", "gpqa_diamond", "math_l5", "smoke", "other"]
 BENCH_TITLE = {"gaia": "GAIA", "gpqa_diamond": "GPQA-Diamond", "math_l5": "MATH level-5",
                "smoke": "smoke / plumbing", "other": "other"}
+
+# The AddOn arm = the only thing that varies across runs (the pipeline is fixed). Each
+# injects/transforms DIFFERENT extra context; this one-liner is shown atop a run page so
+# the trace is self-documenting. Keys must match addons.py `name`. Unknown arm -> generic.
+ARM_INFO = {
+    "vanilla": "control — no shared state; only the polished .final crosses each edge.",
+    "full": "working memory — the ENTIRE shared ReAct log is injected to every downstream "
+            "agent (as a &lt;shared_scratchpad&gt; user block).",
+    "memorybank": "working memory + recency forgetting — injects only the ~last 6 entries "
+                  "(exp decay ≥ 0.3).",
+    "generative": "generative retrieval — injects top-k entries by recency × LLM-importance "
+                  "× lexical relevance (importance scored once/entry, on-meter).",
+    "chatdev": "compaction — recent entries verbatim + an LLM summary of the older portion "
+               "(a [summary · step] entry) once the log exceeds the char budget.",
+    "metagpt-M": "structured protocol — actors/critic emit TYPED artifacts "
+                 "(ANSWER/EVIDENCE/ASSUMPTIONS · VERDICT/WRONG_CLAIMS/CORRECTED_VALUE) "
+                 "over the fixed edges; no shared memory.",
+    "voyager": "skill library — agents save blurbs via an add_skill tool; the whole library "
+               "is read back to every agent (as a &lt;skill_library&gt; user block).",
+}
+
+# An addon-injected context block is a USER message of the form
+# `{preamble}\n<tag>\n{body}\n</tag>` (addons.py _render / Voyager.inject_context). We detect
+# it by its delimiter so the viewer can render it as a labeled panel instead of a raw blob.
+INJECT_TAGS = [("<shared_scratchpad>", "</shared_scratchpad>", "shared scratchpad"),
+               ("<skill_library>", "</skill_library>", "skill library")]
+# Field labels emitted by metagpt-M (and the universal FINAL ANSWER line); bolded in content.
+_FIELD_RE = re.compile(r"(?m)^(ANSWER|EVIDENCE|ASSUMPTIONS|VERDICT|WRONG_CLAIMS|"
+                       r"CORRECTED_VALUE|FINAL ANSWER):")
 
 
 def bench_of(res):
@@ -100,6 +130,14 @@ summary:hover{color:#cbd5e1} .think{border-left:3px dashed #7c3aed;background:#1
 .agentbox{border:1px solid #232a36;border-radius:8px;margin:14px 0;overflow:hidden}
 .agenthead{background:#161b25;padding:10px 14px;display:flex;justify-content:space-between;
 align-items:center} .agentbody{padding:0 14px 4px}
+.inject{border:1px solid #4c3f7a;border-left:3px solid #a78bfa;background:#16121f;
+border-radius:6px;padding:8px 12px;margin:8px 0}
+.ihead{color:#c4b5fd;font-weight:700;font-size:11px;text-transform:uppercase;
+letter-spacing:.5px;margin-bottom:6px} .entry{border-left:2px solid #3b3357;
+padding:3px 0 3px 10px;margin:5px 0} .etag{color:#a78bfa;font-weight:700}
+.armbar{border:1px solid #4c3f7a;background:#16121f;border-radius:8px;padding:10px 14px;
+margin:10px 0;font-size:13px} .armbar b{color:#c4b5fd}
+.field{color:#93c5fd;font-weight:700}
 """
 
 
@@ -279,22 +317,75 @@ def render_index():
                 + "<h2>all runs</h2>" + sections)
 
 
+def _fmt_content(s):
+    """Escape, then bold any structured field labels (metagpt-M artifacts + the
+    universal FINAL ANSWER line) so typed outputs read as fields, not a wall of text."""
+    return _FIELD_RE.sub(r"<span class=field>\1:</span>", esc(s))
+
+
+def injected_block(content):
+    """If a user message is an addon-injected context block, return (kind, preamble, body);
+    else None. Recognizes <shared_scratchpad> (full/memorybank/generative/chatdev) and
+    <skill_library> (voyager), both of form `{preamble}\\n<tag>\\n{body}\\n</tag>`."""
+    if not content:
+        return None
+    for open_tag, close_tag, kind in INJECT_TAGS:
+        if open_tag in content and close_tag in content:
+            pre, rest = content.split(open_tag, 1)
+            body = rest.split(close_tag, 1)[0]
+            return kind, pre.strip(), body.strip()
+    return None
+
+
+def render_injected(kind, pre, body):
+    """An injected shared-context block as a labeled violet panel: each `[label · step N]`
+    entry on its own row (tag highlighted), with the boilerplate preamble tucked away."""
+    entries, cur = [], []
+    for ln in body.split("\n"):
+        if re.match(r"\[.+?· step \d+\]", ln) and cur:
+            entries.append("\n".join(cur)); cur = [ln]
+        else:
+            cur.append(ln)
+    if cur:
+        entries.append("\n".join(cur))
+    rows = ""
+    for e in entries:
+        mt = re.match(r"(\[.+?· step \d+\])(.*)", e, re.S)
+        if mt:
+            rows += (f"<div class=entry><span class=etag>{esc(mt.group(1))}</span>"
+                     f"<div class=content>{_fmt_content(mt.group(2).strip())}</div></div>")
+        else:
+            rows += f"<div class=entry><div class=content>{_fmt_content(e)}</div></div>"
+    n = len(entries)
+    head = f"&#x1F9E0; injected {esc(kind)} &#183; {n} entr{'y' if n == 1 else 'ies'}"
+    pre_html = (f"<details><summary>read-out preamble</summary>"
+                f"<div class=content>{esc(pre)}</div></details>") if pre else ""
+    return f"<div class=inject><div class=ihead>{head}</div>{pre_html}{rows}</div>"
+
+
 def render_msg(m, toolmap):
     role = m.get("role", "?")
     color = ROLE_COLOR.get(role, "#444")
+    content = m.get("content")
+    # addon-injected shared context (a user-role block) -> labeled panel, not a plain bubble
+    if role == "user":
+        info = injected_block(content)
+        if info:
+            return (f"<div class=msg style='border-left-color:#a78bfa'>"
+                    f"<div class=role style='color:#a78bfa'>user · injected shared context"
+                    f"</div>{render_injected(*info)}</div>")
     inner = ""
     # assistant reasoning (recovered from raw_calls)
     if m.get("_reasoning"):
         inner += (f"<details class='msg think'><summary>thinking "
                   f"({len(m['_reasoning'])} chars)</summary>"
                   f"<div class=content>{esc(m['_reasoning'])}</div></details>")
-    content = m.get("content")
     if content:
         if role == "system":
             inner += (f"<details><summary>system prompt</summary>"
                       f"<div class=content>{esc(content)}</div></details>")
         else:
-            inner += f"<div class=content>{esc(content)}</div>"
+            inner += f"<div class=content>{_fmt_content(content)}</div>"
     for tc in (m.get("tool_calls") or []):
         fn = tc.get("function", {})
         inner += (f"<div class=tcall>&#x1F527; {esc(fn.get('name'))}("
@@ -362,6 +453,19 @@ def render_run(rel):
                      f"{esc(steps.get('tool_calls'))} tool calls</span></div>"
                      f"<div class=agentbody>{msgs}</div></div>")
 
+    # arm banner: name the active mechanism + tally the extra context it produced this run
+    arm = res.get("arm", "")
+    n_inject = sum(1 for ag in agents for mm in ag["transcript"]
+                   if mm.get("role") == "user" and injected_block(mm.get("content")))
+    n_skills = sum(1 for ag in agents for mm in ag["transcript"]
+                   for tc in (mm.get("tool_calls") or [])
+                   if (tc.get("function") or {}).get("name") == "add_skill")
+    counts = ([f"{n_inject} injected context block(s)"] if n_inject else []) \
+        + ([f"{n_skills} add_skill write(s)"] if n_skills else [])
+    armbar = (f"<div class=armbar><b>arm: {esc(arm)}</b> — {ARM_INFO.get(arm, 'custom arm.')}"
+              + (f"<div class=muted style='margin-top:4px'>this run: " + " · ".join(counts)
+                 + "</div>" if counts else "") + "</div>")
+
     body = (
         f"<div class=muted><a href='/'>&#8592; all traces</a></div>"
         f"<h1>{esc(res.get('id'))} · {esc(res.get('arm'))} · {esc(rel.split('/')[-1])} {badge}</h1>"
@@ -374,6 +478,7 @@ def render_run(rel):
         f"<span class=pill>{esc(res.get('total_tokens'))} tok</span>"
         f"<span class=pill>cost: {esc(_cost_str(res))}</span>"
         f"<span class=pill>{esc(res.get('seconds'))}s</span></div>"
+        f"{armbar}"
         f"<div class='card prompt'><div class=role>task</div>"
         f"<div class=content>{esc(prompt)}</div></div>"
         f"<h2>pipeline</h2><div class=flow>{nodes}</div>"
