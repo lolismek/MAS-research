@@ -137,6 +137,11 @@ def run_one(task, arm="vanilla", budget_usd=None):
         json.dump(result, f, indent=1)
     with open(os.path.join(rundir, "transcript.json"), "w") as f:
         json.dump([dict(role=a.role, transcript=a.transcript) for a in res.agents], f, indent=1)
+    # belief_board arms carry a Board whose append-only event log is the note history/trace.
+    board = getattr(addon, "board", None)
+    if board is not None and board.events:
+        with open(os.path.join(rundir, "board_trace.jsonl"), "w") as f:
+            f.write(board.dump_events_jsonl())
 
     print(f"[{arm}/{tid}] {dur:.0f}s final={final!r} expected={expected!r} "
           f"outcome={outcome}{' [BUDGET]' if res.budget_exceeded else ''} "

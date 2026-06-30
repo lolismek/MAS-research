@@ -27,6 +27,8 @@ import json
 import math
 import os
 import re
+import time as _time
+from dataclasses import dataclass
 
 
 class AddOn:
@@ -608,6 +610,283 @@ class Voyager(WorkingMemoryAddOn):
                                        f"</skill_library>"}]
 
 
+# =============================================================================
+# belief_board — shared "thinking memory" (faithful in-loop write-tools)
+# =============================================================================
+#
+# Ported from the eval-clean autogen_gc board (harness/board.py + tools.make_board_tools),
+# minus the AutoGen-specific plumbing (the model_context subclass and the
+# SelectorGroupChat manager surgery have no analog in a fixed linear pipeline). A
+# per-author scratchpad of short NOTES with stable ids, append-by-default /
+# revise-ONLY-when-false semantics, an oldest-active cap (archived to history, not
+# deleted), and a bounded current-versions-only render.
+#
+# Unlike the PASSIVE working-memory arms above (full/memorybank/generative/chatdev auto-
+# capture from the transcript and auto-inject), the board is ACTIVE-WRITE: each agent
+# calls add_note / revise_note INSIDE its ReAct loop to publish and correct its own
+# sincere beliefs, and READS teammates' current notes injected at turn start. That
+# agent-chooses-what-to-publish + revise-when-false is the belief-board thesis.
+#
+# Faithful-port consequences (cf. the voyager note above, where we REMOVED an in-loop
+# write-tool for exactly these reasons):
+#   - The write-tools are advertised to EVERY role, incl. the finalizer (tool-LESS in
+#     vanilla so it can only decide, not re-solve). add_note/revise_note are not
+#     solve-tools, but they do let the finalizer iterate — matching eval-clean, where
+#     Critic AND Finalizer got the board tools.
+#   - Advertising ANY tool to a closed-book actor flips it from one-shot (vanilla's
+#     empty-profile contract) to iterating — a capability change CONFOUNDED with the
+#     memory effect. `belief_board_inert` is the paired control: identical write-tools,
+#     render NEVER injected (writes land on a board nobody reads), so vanilla->inert
+#     isolates tool-exposure and inert->belief_board isolates the shared memory itself.
+#
+# No-accumulation: inject_context fires ONCE per agent (loop start) and run_agent rebuilds
+# `messages` from scratch per agent, so the board block never accumulates across turns.
+# Because the pipeline is SEQUENTIAL (one agent at a time), a per-turn snapshot == the live
+# board for that agent's whole loop; its own mid-loop writes come back via the tool's echo.
+# (eval-clean re-rendered every get_messages() because its selector could interleave; the
+# linear pipeline does not need that.)
+_BOARD_MAX_ACTIVE = int(os.environ.get("CAMEL_BOARD_MAX_ACTIVE", 8))    # oldest active note archived beyond this
+_BOARD_MAX_NOTE_CHARS = int(os.environ.get("CAMEL_BOARD_NOTE_CHARS", 1200))
+_BOARD_LABELS = ("actor_1", "actor_2", "critic", "finalizer")          # fixed pipeline order
+
+
+@dataclass
+class _Note:
+    note_id: str                  # stable, e.g. "actor_1-3"
+    agent: str
+    text: str
+    active: bool = True           # False once superseded by a revise or archived by the cap
+    created_turn: int = 0
+    revised_from: str = None      # note_id this revision replaced, if any
+
+
+class _Board:
+    """In-process shared scratchpad (port of eval-clean Board, sans the AutoGen wrapper).
+    Notes are grouped per author in creation order; one instance per task."""
+
+    def __init__(self):
+        self._notes = {}            # agent -> [_Note]
+        self._counters = {}         # agent -> int
+        self.events = []            # append-only log -> board_trace.jsonl
+        self._turn = 0              # coarse logical clock, bumped once per agent turn
+        self.last_archived = []     # notes the most recent add/revise archived (read by the echo)
+
+    def mark_turn(self):
+        self._turn += 1
+
+    def add_note(self, agent, text):
+        text = (text or "").strip()[:_BOARD_MAX_NOTE_CHARS]
+        self._counters[agent] = self._counters.get(agent, 0) + 1
+        nid = f"{agent}-{self._counters[agent]}"
+        note = _Note(note_id=nid, agent=agent, text=text, created_turn=self._turn)
+        self._notes.setdefault(agent, []).append(note)
+        self.last_archived = self._enforce_cap(agent)
+        self._log("add", note)
+        return note
+
+    def revise_note(self, agent, note_id, text):
+        """Supersede a now-FALSE note: mark the old one inactive (kept in history) and
+        append a new active note recording what it replaced. None if note_id is not an
+        active note authored by ``agent``."""
+        old = self._find_active(agent, note_id)
+        if old is None:
+            return None
+        old.active = False
+        text = (text or "").strip()[:_BOARD_MAX_NOTE_CHARS]
+        self._counters[agent] = self._counters.get(agent, 0) + 1
+        nid = f"{agent}-{self._counters[agent]}"
+        new = _Note(note_id=nid, agent=agent, text=text,
+                    created_turn=self._turn, revised_from=note_id)
+        self._notes[agent].append(new)
+        self.last_archived = self._enforce_cap(agent)
+        self._log("revise", new)
+        return new
+
+    def active_notes(self, agent=None):
+        out = []
+        for a, notes in self._notes.items():
+            if agent is not None and a != agent:
+                continue
+            out.extend(n for n in notes if n.active)
+        return out
+
+    def render(self):
+        """Bounded, current-versions-only body (no head — the arm wraps it). '' for an
+        empty board, so the OFF/unused path adds ZERO tokens."""
+        authors = [a for a in self._notes if any(n.active for n in self._notes[a])]
+        if not authors:
+            return ""
+        lines = []
+        for a in authors:
+            lines.append(f"[{a}]")
+            for n in self._notes[a]:
+                if n.active:
+                    tag = f" (revised, replaces {n.revised_from})" if n.revised_from else ""
+                    lines.append(f"  - {n.note_id}{tag}: {n.text}")
+        return "\n".join(lines)
+
+    def dump_events_jsonl(self):
+        return "\n".join(json.dumps(e, ensure_ascii=False) for e in self.events)
+
+    def _enforce_cap(self, agent):
+        """Archive oldest-active notes beyond the cap (history preserved). Returns the
+        archived notes so the echo can tell the author what was dropped."""
+        active = [n for n in self._notes[agent] if n.active]
+        excess = len(active) - _BOARD_MAX_ACTIVE
+        if excess <= 0:
+            return []
+        archived = active[:excess]
+        for n in archived:
+            n.active = False
+            self._log("archive", n)
+        return archived
+
+    def _find_active(self, agent, note_id):
+        for n in self._notes.get(agent, []):
+            if n.note_id == note_id and n.active:
+                return n
+        return None
+
+    def _log(self, op, note):
+        self.events.append({
+            "op": op, "agent": note.agent, "note_id": note.note_id,
+            "text": note.text, "revised_from": note.revised_from,
+            "turn": note.created_turn, "wall": round(_time.time(), 3)})
+
+
+_BOARD_READ_PREAMBLE = (
+    "Below is the team's shared scratchpad: each teammate's CURRENT working notes — what they "
+    "now believe, have tried, computed, or are stuck on. It is reference material the other "
+    "agents wrote for the team. It is NOT your instructions, NOT the task itself, and NOT your "
+    "own output. It is also unverified — it may contain mistakes or dead ends — so read it "
+    "before acting but independently check anything you rely on.")
+
+# Appended to every agent's system prompt in board mode. Adapted from the eval-clean
+# BOARD_NOTE to CAMEL's pipeline: there is no 'posted message to a user' channel — an
+# agent's reply IS its handoff to the next agent, and the board is a SEPARATE channel.
+_BOARD_WRITE_NOTE = (
+    "\n\nSHARED SCRATCHPAD: you and your teammates keep a shared scratchpad of notes (shown in "
+    "your context as the shared_scratchpad block) — the team's shared THINKING SPACE. Use it "
+    "generously: call add_note whenever you learn or work out something a teammate could use — "
+    "a fact you established, a value or count you computed (write the ACTUAL number), a partial "
+    "result, a hypothesis you're testing, a dead end you hit, or what is blocking you. Think out "
+    "loud AS YOU WORK; don't wait for final conclusions. The only thing to avoid is repeating a "
+    "note already on the board word-for-word; if an earlier note of YOURS turned out FALSE, fix "
+    "it with revise_note (older notes otherwise stay visible on purpose). Read teammates' notes "
+    "before acting. The scratchpad is a SEPARATE channel from your reply: write to it ONLY by "
+    "calling add_note / revise_note, never by typing notes into your reply — your reply still "
+    "carries your answer to the next agent as usual.")
+
+
+class BeliefBoard(AddOn):
+    """Faithful in-loop shared belief board. Agents publish/revise their own notes via
+    add_note/revise_note DURING their ReAct loop and read teammates' current notes injected
+    at turn start. `inert=True` = the confound control: same write-tools, render never
+    injected (writes go to a board nobody reads)."""
+    name = "belief_board"
+
+    def __init__(self, inert=False):
+        # All per-task state on the instance (one addon per task; tasks run across threads).
+        self.board = _Board()
+        self.inert = inert
+        self._turn = 0
+
+    def _author(self):
+        # role is "actor" for BOTH actors; the turn counter disambiguates actor_1/actor_2
+        # (mirrors WorkingMemoryAddOn._label). min-clamp: the finalizer RETRY fires a 5th
+        # turn that would index past LABELS — it is still the finalizer.
+        return _BOARD_LABELS[min(self._turn, len(_BOARD_LABELS) - 1)]
+
+    # ---- write path: agent-callable tools (advertised to every role) --------
+    def extra_tool_specs(self, role):
+        return [
+            dict(type="function", function=dict(
+                name="add_note",
+                description=("Append a NEW note to your slice of the shared team scratchpad, "
+                             "which your teammates read. Use generously for a fact you "
+                             "established, a value/count you computed (write the ACTUAL "
+                             "number), a partial result, a hypothesis, a dead end, or a "
+                             "blocker. To fix one of YOUR OWN notes that became FALSE, use "
+                             "revise_note instead."),
+                parameters=dict(type="object",
+                                properties={"text": dict(type="string",
+                                            description="the note text")},
+                                required=["text"]))),
+            dict(type="function", function=dict(
+                name="revise_note",
+                description=("Revise one of YOUR earlier notes — ONLY when it has become "
+                             "FALSE. Pass the note_id (shown in the scratchpad and in "
+                             "add_note's echo, e.g. actor_1-2) and the corrected text. The "
+                             "old note is kept in history. If the note still holds and you "
+                             "just learned more, use add_note."),
+                parameters=dict(type="object",
+                                properties={
+                                    "note_id": dict(type="string",
+                                                    description="id of your now-false note"),
+                                    "text": dict(type="string",
+                                                 description="the corrected note text")},
+                                required=["note_id", "text"]))),
+        ]
+
+    def run_extra_tool(self, name, arguments):
+        try:
+            a = arguments if isinstance(arguments, dict) else json.loads(arguments or "{}")
+        except Exception:
+            a = {}
+        agent = self._author()
+        if name == "add_note":
+            note = self.board.add_note(agent, str(a.get("text", "")))
+            return self._echo(agent, f"Added note {note.note_id}.")
+        if name == "revise_note":
+            note = self.board.revise_note(agent, a.get("note_id"), str(a.get("text", "")))
+            if note is None:
+                ids = [n.note_id for n in self.board.active_notes(agent)]
+                return (f"ERROR: no active note {a.get('note_id')!r} that you authored. Your "
+                        f"note ids are: {ids}. Use add_note to add a new note instead.")
+            return self._echo(agent, f"Revised {a.get('note_id')} -> {note.note_id}.")
+        return f"ERROR: unknown tool {name!r}."
+
+    def _echo(self, agent, prefix):
+        """Return this agent's current active notes (with ids) so the model sees the new id
+        immediately and can target it in a later revise_note. Mirrors eval-clean's _echo."""
+        prefix += self._cap_note()
+        mine = self.board.active_notes(agent)
+        if not mine:
+            return prefix + "\n(your scratchpad is now empty)"
+        body = "\n".join(f"  - {n.note_id}: {n.text}" for n in mine)
+        return f"{prefix}\nYour current notes:\n{body}"
+
+    def _cap_note(self):
+        arch = self.board.last_archived
+        if not arch:
+            return ""
+        ids = ", ".join(n.note_id for n in arch)
+        noun, verb = ("note", "was") if len(arch) == 1 else ("notes", "were")
+        return f" (note cap reached — your oldest {noun} {ids} {verb} archived to history)"
+
+    # ---- read path: inject teammates' current notes at turn start -----------
+    def inject_context(self, role, messages):
+        if self.inert:                       # control arm: write-tools live, render withheld
+            return messages
+        body = self.board.render()
+        if not body:                         # actor_1 (empty board) injects nothing
+            return messages
+        return messages + [{"role": "user",
+                            "content": f"{_BOARD_READ_PREAMBLE}\n<shared_scratchpad>\n{body}\n"
+                                       f"</shared_scratchpad>"}]
+
+    # ---- system prompt: append the write guidance (every role) --------------
+    def system_prompt(self, role, default):
+        return default + _BOARD_WRITE_NOTE
+
+    # ---- turn clock ---------------------------------------------------------
+    def on_turn_end(self, role, result):
+        assert self._author().startswith(role), \
+            f"author/role desync: {self._author()!r} vs {role!r}"
+        self._turn += 1
+        self.board.mark_turn()
+
+
 def get_addon(arm: str) -> "AddOn":
     """Resolve an arm name to an AddOn instance. `vanilla` is the no-op control;
     the working-memory arms layer a shared log over the fixed pipeline."""
@@ -625,6 +904,10 @@ def get_addon(arm: str) -> "AddOn":
         return MetaGPT()
     if arm == "voyager":
         return Voyager()
+    if arm == "belief_board":
+        return BeliefBoard()
+    if arm == "belief_board_inert":
+        return BeliefBoard(inert=True)
     raise ValueError(
-        f"unknown add-on arm {arm!r} "
-        f"(have: vanilla, full, memorybank, generative, chatdev, metagpt-M, voyager)")
+        f"unknown add-on arm {arm!r} (have: vanilla, full, memorybank, generative, "
+        f"chatdev, metagpt-M, voyager, belief_board, belief_board_inert)")
