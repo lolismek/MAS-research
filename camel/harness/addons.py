@@ -414,7 +414,17 @@ class ChatDev(WorkingMemoryAddOn):
                 temperature=0.0, stream=False, max_tokens=2000)
             if budget is not None:
                 budget.charge(getattr(resp, "usage", None))
-            return (resp.choices[0].message.content or "").strip() or self._cheap_summary(older)
+            out = (resp.choices[0].message.content or "").strip()
+            # The hybrid thinking model sometimes routes the whole summary into its
+            # reasoning channel; the proxy strips that, leaving only an orphan preamble
+            # (e.g. "Here's a thinking process:") in `content`. That is non-empty, so an
+            # emptiness check alone lets the garbage through and the earlier work is
+            # replaced by a dangling lead-in. The prompt mandates per-agent [tag] lines,
+            # so a reply with no '[' tag (or too short to be a real per-agent summary) is
+            # a leaked/truncated reasoning fragment, not a summary -> use the free fallback.
+            if "[" not in out or len(out) < 40:
+                return self._cheap_summary(older)
+            return out
         except Exception:
             return self._cheap_summary(older)
 
@@ -562,16 +572,28 @@ class Voyager(WorkingMemoryAddOn):
                           {"role": "user",
                            "content": f"Here is what you just did on this task:\n{work[:6000]}"
                                       f"\n\nWrite the notes now, each on its own 'SKILL: ' line."}],
-                temperature=0.0, stream=False, max_tokens=1024)
+                # generous cap: the thinking model spends output tokens on its <think>
+                # trace (proxy strips it) BEFORE emitting the notes — at 1024 a long think
+                # trace truncated the first SKILL line mid-sentence and lost the rest
+                # (cf. _rate_importance's note). The budget meter charges actual usage, so
+                # the larger cap only costs more when the model genuinely needs it.
+                temperature=0.0, stream=False, max_tokens=2048)
             if budget is not None:
                 budget.charge(getattr(resp, "usage", None))
             text = resp.choices[0].message.content or ""
+            truncated = getattr(resp.choices[0], "finish_reason", None) == "length"
         except Exception:
             return
         label = self._label()
-        # parse ONLY 'SKILL:'-prefixed lines (leaked reasoning has no such prefix), keep
-        # at most N per turn, and respect the per-task library cap.
-        for m in _VOYAGER_SKILL_RE.findall(text)[:_VOYAGER_MAX_NOTES_PER_TURN]:
+        # parse ONLY 'SKILL:'-prefixed lines (leaked reasoning has no such prefix).
+        notes = _VOYAGER_SKILL_RE.findall(text)
+        # if the response was cut off at the token cap, its LAST line may be a half
+        # sentence (e.g. "...distinguishes them from the") — drop it rather than save a
+        # truncated note. Earlier notes are intact: a following SKILL line proves they ended.
+        if truncated and notes:
+            notes = notes[:-1]
+        # keep at most N per turn, and respect the per-task library cap.
+        for m in notes[:_VOYAGER_MAX_NOTES_PER_TURN]:
             blurb = m.strip()
             if blurb and len(self._library) < _VOYAGER_LIBRARY_CAP:
                 self._library.append({"label": label, "blurb": blurb[:_VOYAGER_BLURB_CAP]})
