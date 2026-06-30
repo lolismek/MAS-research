@@ -102,11 +102,22 @@ _PREAMBLE = (
 # "the whole log" — just with each observation bounded.
 _OBS_RENDER_CAP = 1500
 _ACTION_RENDER_CAP = 800
+# An action's conclusion (e.g. the 'FINAL ANSWER:' line) sits at the END, which a
+# head-only clip drops — so for action text we ALSO keep the last N chars. Observations
+# get no tail: their useful content is at the top; the tail is usually boilerplate.
+_ACTION_RENDER_TAIL = 400
 
 
-def _clip(s, cap):
+def _clip(s, cap, tail=0):
+    """Bound rendered text. Default = head-only (keep the first `cap` chars). With
+    `tail>0`, keep the first `cap` AND the last `tail` chars, eliding the middle — so an
+    agent's answer, which lives at the end of its reasoning, survives the clip."""
     s = (s or "").strip()
-    return s if len(s) <= cap else s[:cap] + f" …[+{len(s) - cap} chars]"
+    if len(s) <= cap + tail:
+        return s
+    if tail:
+        return s[:cap] + f" …[+{len(s) - cap - tail} chars]… " + s[-tail:]
+    return s[:cap] + f" …[+{len(s) - cap} chars]"
 
 
 class WorkingMemoryAddOn(AddOn):
@@ -190,7 +201,8 @@ class WorkingMemoryAddOn(AddOn):
         lines = []
         for e in sel:
             # a compacted summary entry (chatdev) sets a larger cap so it isn't clipped
-            action = _clip(e["action"], e.get("action_cap", _ACTION_RENDER_CAP))
+            action = _clip(e["action"], e.get("action_cap", _ACTION_RENDER_CAP),
+                           tail=_ACTION_RENDER_TAIL)
             obs = _clip(e.get("observation"), _OBS_RENDER_CAP)
             arrow = f"\n  → {obs}" if obs else ""
             lines.append(f"[{e['label']} · step {e['t']}] {action}{arrow}")
