@@ -17,7 +17,8 @@ TRACES = os.path.join(ROOT, "traces")
 BENCH_DIR = os.path.join(REPO_ROOT, "benchmarks")
 
 # benchmark dir -> display title, in report order
-BENCHES = [("gpqa_diamond", "GPQA-Diamond"), ("math_l5", "MATH-L5"), ("gaia", "GAIA")]
+BENCHES = [("gpqa_diamond", "GPQA-Diamond"), ("math_l5", "MATH-L5"), ("gaia", "GAIA"),
+           ("popqa", "PopQA"), ("fever", "FEVER"), ("pddl", "PDDL")]
 TITLE = dict(BENCHES)
 
 
@@ -37,7 +38,8 @@ def _bench_of(tid, ids):
     for b, _ in BENCHES:
         if b in ids and tid in ids[b]:
             return b
-    for pre, b in (("gpqad", "gpqa_diamond"), ("math_l5", "math_l5"), ("gaia_", "gaia")):
+    for pre, b in (("gpqad", "gpqa_diamond"), ("math_l5", "math_l5"), ("gaia_", "gaia"),
+                   ("popqa_", "popqa"), ("fever_", "fever"), ("pddl_", "pddl")):
         if tid.startswith(pre):
             return b
     return None
