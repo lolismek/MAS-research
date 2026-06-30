@@ -138,6 +138,9 @@ padding:3px 0 3px 10px;margin:5px 0} .etag{color:#a78bfa;font-weight:700}
 .armbar{border:1px solid #4c3f7a;background:#16121f;border-radius:8px;padding:10px 14px;
 margin:10px 0;font-size:13px} .armbar b{color:#c4b5fd}
 .field{color:#93c5fd;font-weight:700}
+.mx td,.mx th{text-align:center;vertical-align:top} .mx td:first-child,.mx th:first-child{
+text-align:left} .mx th{font-size:11px} .mx-fin{color:#6b7280;font-size:10px;margin-top:2px}
+.mx-empty{color:#3b4252} .nav a.cmp{color:#c4b5fd;font-weight:700}
 """
 
 
@@ -275,7 +278,8 @@ def render_index():
         return t
 
     ot = tally(runs)
-    nav = "".join(f"<a href='#b-{b}'>{esc(BENCH_TITLE.get(b, b))} "
+    nav = "<a href='/matrix' class=cmp>&#9638; compare arms</a>" \
+        + "".join(f"<a href='#b-{b}'>{esc(BENCH_TITLE.get(b, b))} "
                   f"({len(groups[b])})</a>" for b in order)
     head = (f"<h1>CAMEL traces</h1><div class=muted>{len(runs)} runs · "
             f"<span style='color:{OUTCOME_COLOR['correct']}'>{ot['correct']} correct</span> · "
@@ -315,6 +319,75 @@ def render_index():
                      f"<span class=bsum>— {summ}</span></h2><table>{cols}{rows}</table>")
     return page("CAMEL traces", head + render_summary()
                 + "<h2>all runs</h2>" + sections)
+
+
+# arm display order for the compare matrix (vanilla first as the baseline); any arm not
+# listed is appended alphabetically so a new arm shows up without a code change.
+ARM_ORDER = ["vanilla", "full", "memorybank", "generative", "chatdev", "metagpt-M", "voyager"]
+
+
+def _mx_cell(r):
+    """One matrix cell: a colored outcome chip linking to that (arm,task) run, with the
+    final answer beneath it so divergences are legible at a glance. '—' when not run."""
+    if r is None:
+        return "<td class=mx-empty>—</td>"
+    res = r["res"]
+    label, color = outcome_display(res)
+    fin = esc(_short(res.get("final_answer"), 16))
+    return ("<td class=mx-cell>"
+            f"<a href='/run?r={quote(r['rel'])}' title='{esc(str(res.get('final_answer')))}'>"
+            f"<span class=ob style='background:{color}'>{esc(label)}</span></a>"
+            f"<div class='mono mx-fin'>{fin}</div></td>")
+
+
+def render_matrix():
+    """task x arm comparison grid: every task that has runs from >=2 arms, one column per
+    arm, each cell linking to its trace. Built for manual inspection of where arms diverge."""
+    runs = discover_runs()
+    piv, bench = {}, {}                 # piv[tid][arm] = latest run; bench[tid] = benchmark
+    for r in runs:
+        bench[r["tid"]] = bench_of(r["res"])
+        cur = piv.setdefault(r["tid"], {}).get(r["arm"])
+        if cur is None or r["run"] > cur["run"]:
+            piv[r["tid"]][r["arm"]] = r
+    tasks = [t for t in piv if len(piv[t]) >= 2]
+    back = "<div class=muted><a href='/'>&#8592; all traces</a></div>"
+    if not tasks:
+        return page("compare arms", back + "<h1>compare arms</h1>"
+                    "<div class=muted>no task has runs from &#8805;2 arms yet — run the "
+                    "same tasks under multiple arms and they'll appear here.</div>")
+    arms = [a for a in ARM_ORDER if any(a in piv[t] for t in tasks)] \
+        + sorted({a for t in tasks for a in piv[t]} - set(ARM_ORDER))
+    groups = {}
+    for t in tasks:
+        groups.setdefault(bench[t], []).append(t)
+    order = [b for b in BENCH_ORDER if b in groups] + \
+            [b for b in groups if b not in BENCH_ORDER]
+    hdr = "<tr><th>task</th>" + "".join(f"<th>{esc(a)}</th>" for a in arms) + "</tr>"
+    coltot = {a: [0, 0] for a in arms}        # arm -> [correct, n]
+    sections = ""
+    for b in order:
+        rows = ""
+        for tid in sorted(groups[b]):
+            cells = ""
+            for a in arms:
+                r = piv[tid].get(a)
+                cells += _mx_cell(r)
+                if r is not None:
+                    coltot[a][1] += 1
+                    coltot[a][0] += (r["res"].get("outcome") == "correct")
+            exp = esc(_short(next(iter(piv[tid].values()))["res"].get("expected_answer"), 18))
+            rows += (f"<tr><td class=mono>{esc(tid)}"
+                     f"<div class='muted mx-fin'>exp: {exp}</div></td>{cells}</tr>")
+        sections += (f"<h2 id='mx-{b}'>{esc(BENCH_TITLE.get(b, b))}</h2>"
+                     f"<table class=mx>{hdr}{rows}</table>")
+    foot = ("<tr><td><b>correct / n</b></td>"
+            + "".join(f"<td><b>{coltot[a][0]}/{coltot[a][1]}</b></td>" for a in arms) + "</tr>")
+    sections += f"<h2>totals (compared tasks)</h2><table class=mx>{hdr}{foot}</table>"
+    head = (f"<h1>compare arms</h1><div class=muted>{len(tasks)} tasks with runs from "
+            f"&#8805;2 arms · each cell links to that run · color = outcome · "
+            f"hover a chip for the full answer</div>")
+    return page("compare arms", back + head + sections)
 
 
 def _fmt_content(s):
@@ -507,6 +580,8 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/run":
                 rel = (parse_qs(u.query).get("r") or [""])[0]
                 self._send(render_run(rel))
+            elif u.path == "/matrix":
+                self._send(render_matrix())
             else:
                 self._send(page("404", "<h1>404</h1><a href='/'>home</a>"), 404)
         except Exception as e:

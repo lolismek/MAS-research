@@ -237,46 +237,79 @@ _SPEC = {
 
 TOOL_FUNCS = {name: fn for name, (fn, _arg, _desc) in _SPEC.items()}
 
+# Stateful, per-task ENV tools (pddl_*): schema lives here (so profiles + tool_specs
+# stay in one place), but EXECUTION is routed to the per-task PddlEnv object that
+# run_task builds and threads through the pipeline. `arg=None` -> a no-parameter tool.
+_ENV_TOOL_SPECS = {
+    "pddl_observe": (None,     "Observe the current PDDL world state, the goal, and progress."),
+    "pddl_actions": (None,     "List the actions that are valid in the current state."),
+    "pddl_step":    ("action", "Apply ONE action to the PDDL environment, e.g. 'pickup(a)'."),
+}
+
 # Per-benchmark tool profiles. Add a benchmark -> pick a subset; the pipeline code
-# never assumes any particular profile.
+# never assumes any particular profile. The `pddl` profile's tools are env-routed.
 TOOL_PROFILES = {
     "none":        [],
     "math":        ["run_python"],
     "web":         ["web_search", "fetch_url"],
     "web_compute": ["web_search", "fetch_url", "run_python", "read_file"],
+    "pddl":        ["pddl_observe", "pddl_actions", "pddl_step"],
 }
 
 
+def _schema(name, arg, description):
+    """One OpenAI function schema. arg=None -> a no-parameter tool."""
+    props = {} if arg is None else {arg: dict(type="string", description=description)}
+    return dict(type="function", function=dict(
+        name=name, description=description.strip().split("\n")[0],
+        parameters=dict(type="object", properties=props,
+                        required=([] if arg is None else [arg]))))
+
+
 def tool_specs(names):
-    """OpenAI `tools=` schemas for the given tool names ([] -> None)."""
+    """OpenAI `tools=` schemas for the given tool names ([] -> None). Handles both
+    global tools (_SPEC) and stateful env tools (_ENV_TOOL_SPECS)."""
     specs = []
     for n in names:
-        fn, arg, desc = _SPEC[n]
-        specs.append(dict(type="function", function=dict(
-            name=n, description=(fn.__doc__ or desc).strip().split("\n")[0],
-            parameters=dict(type="object",
-                            properties={arg: dict(type="string", description=desc)},
-                            required=[arg]))))
+        if n in _SPEC:
+            fn, arg, desc = _SPEC[n]
+            specs.append(_schema(n, arg, fn.__doc__ or desc))
+        elif n in _ENV_TOOL_SPECS:
+            arg, desc = _ENV_TOOL_SPECS[n]
+            specs.append(_schema(n, arg, desc))
+        else:
+            raise KeyError(f"unknown tool {n!r}")
     return specs or None
 
 
-def run_tool(name: str, arguments) -> str:
-    """Dispatch one structured tool call. `arguments` is the OpenAI JSON-string
-    (or already a dict). Pulls the single declared arg and calls the function."""
-    if name not in _SPEC:
-        return f"ERROR: unknown tool {name!r}."
-    fn, arg, _desc = _SPEC[name]
+def _arg_value(arguments, arg):
+    """Pull the single declared arg out of an OpenAI JSON-string (or dict)."""
     try:
         a = arguments if isinstance(arguments, dict) else json.loads(arguments or "{}")
     except Exception:
         a = {}
-    val = a.get(arg)
+    val = a.get(arg) if arg else None
     if val is None and len(a) == 1:          # tolerate a differently-named single key
         val = next(iter(a.values()))
-    if not isinstance(val, str):
-        val = "" if val is None else str(val)
+    return val if isinstance(val, str) else ("" if val is None else str(val))
+
+
+def run_tool(name: str, arguments, env=None) -> str:
+    """Dispatch one structured tool call. Env tools (pddl_*) are routed to the
+    per-task `env`; global tools are called directly. `arguments` is the OpenAI
+    JSON-string (or already a dict)."""
+    if name in _ENV_TOOL_SPECS:
+        if env is None:
+            return f"ERROR: tool {name} needs an environment but none is bound."
+        try:
+            return env.run_tool(name, _arg_value(arguments, _ENV_TOOL_SPECS[name][0]))
+        except Exception as e:
+            return f"ERROR: env tool {name} raised {e!r}"
+    if name not in _SPEC:
+        return f"ERROR: unknown tool {name!r}."
+    fn, arg, _desc = _SPEC[name]
     try:
-        return fn(val)
+        return fn(_arg_value(arguments, arg))
     except Exception as e:
         return f"ERROR: tool {name} raised {e!r}"
 

@@ -21,23 +21,37 @@ from agent import run_agent, AgentResult
 # "solve" job. Capability follows the objective: actors + critic get tools (the
 # critic needs them to VERIFY), the finalizer gets none (so it can only decide, not
 # re-solve). See README "Roles".
+#
+# TEAM FRAMING: every role opens by establishing that it is one of FOUR agents in a
+# pipeline and naming who is up/downstream. Without this the agents were solitary "problem
+# solvers" with no notion that anyone reads their output — which (a) is a mis-specified MAS
+# and (b) made the shared-board write guidance incoherent ("jot notes for your teammates"
+# bolted onto an agent that was never told it had teammates, esp. the actors). The framing
+# is in the BASE prompts so EVERY arm shares it (vanilla included); the board arm then adds
+# only the scratchpad mechanics on top, keeping the manipulated variable = shared memory.
 ACTOR_SYS = (
-    "You are a problem solver. Solve the task, using the available tools when they "
-    "help. End your reply with a line:\nFINAL ANSWER: <your answer>")
+    "You are a SOLVER — one of four agents solving a single task together as a pipeline: "
+    "two independent solvers, then a verifier who checks the chosen answer, then a finalizer "
+    "who decides and publishes it. Solve the task, using the available tools when they help. "
+    "Another solver also attempts it independently; downstream the verifier and finalizer act "
+    "only on what you hand them, so make your reasoning and result clear. End your reply with "
+    "a line:\nFINAL ANSWER: <your answer>")
 
 CRITIC_SYS = (
-    "You VERIFY another agent's proposed answer. Do NOT solve the task from scratch "
-    "or produce your own answer — your job is only to check theirs. Use the tools to "
-    "verify the specific claims and steps IN the proposed answer: recompute its "
-    "arithmetic, re-check its factual claims. If every claim checks out, reply with "
-    "exactly: Agree\nOtherwise name the specific claim(s) that are wrong and the "
-    "correct value, in at most 3 sentences.")
+    "You are the VERIFIER — the third of four agents in a pipeline (two solvers -> you -> a "
+    "finalizer). You CHECK a solver's proposed answer; do NOT solve the task from scratch or "
+    "produce your own answer. Use the tools to verify the specific claims and steps IN the "
+    "proposed answer: recompute its arithmetic, re-check its factual claims. The finalizer "
+    "relies on your critique to decide, so be specific. If every claim checks out, reply with "
+    "exactly: Agree\nOtherwise name the specific claim(s) that are wrong and the correct "
+    "value, in at most 3 sentences.")
 
 FINALIZER_SYS = (
-    "You DECIDE the final answer from evidence you are given: candidate answers and a "
-    "verifier's critique of them. Do NOT solve the task yourself and do NOT use tools "
-    "— decide only from the evidence. If the critique confirms a candidate, output it. "
-    "If the candidates disagree or the critique found an unresolved error and the "
+    "You are the FINALIZER — the last of four agents in a pipeline (two solvers -> a verifier "
+    "-> you). You DECIDE and publish the final answer from the evidence you are given: the two "
+    "candidate answers and the verifier's critique of them. Do NOT solve the task yourself and "
+    "do NOT use tools — decide only from the evidence. If the critique confirms a candidate, "
+    "output it. If the candidates disagree or the critique found an unresolved error and the "
     "evidence does not clearly settle the answer, output UNKNOWN. End with a line:\n"
     "FINAL ANSWER: <your answer, or UNKNOWN>")
 
@@ -91,7 +105,7 @@ def _handoff(agent):
     return agent.final
 
 
-def run_pipeline(task_prompt, tool_names, client, model, addon, budget=None) -> PipelineResult:
+def run_pipeline(task_prompt, tool_names, client, model, addon, budget=None, env=None) -> PipelineResult:
     task = _user(task_prompt)
     # The AddOn may swap a role's system prompt (metagpt-M); for every other arm
     # `system_prompt` returns the default unchanged.
@@ -99,20 +113,20 @@ def run_pipeline(task_prompt, tool_names, client, model, addon, budget=None) -> 
     critic_sys = addon.system_prompt("critic", CRITIC_SYS)
     finalizer_sys = addon.system_prompt("finalizer", FINALIZER_SYS)
 
-    actor_1 = run_agent("actor", actor_sys, task, tool_names, client, model, addon, budget=budget)
+    actor_1 = run_agent("actor", actor_sys, task, tool_names, client, model, addon, budget=budget, env=env)
     if budget is not None and budget.exceeded:
         return _aborted([actor_1])
 
     # edge 1 (actor_1 -> actor_2): actor_2 sees actor_1's answer
     a2_ctx = task + _user(f"Another solver proposed this answer:\n\n{_handoff(actor_1)}\n\n"
                           "Consider it, then give your own answer.")
-    actor_2 = run_agent("actor", actor_sys, a2_ctx, tool_names, client, model, addon, budget=budget)
+    actor_2 = run_agent("actor", actor_sys, a2_ctx, tool_names, client, model, addon, budget=budget, env=env)
     if budget is not None and budget.exceeded:
         return _aborted([actor_1, actor_2])
 
     # edge 2 (actor_2 -> critic): critic verifies actor_2 (keeps tools to check, not re-solve)
     cr_ctx = task + _user(f"Proposed answer to verify:\n\n{_handoff(actor_2)}")
-    critic = run_agent("critic", critic_sys, cr_ctx, tool_names, client, model, addon, budget=budget)
+    critic = run_agent("critic", critic_sys, cr_ctx, tool_names, client, model, addon, budget=budget, env=env)
     if budget is not None and budget.exceeded:
         return _aborted([actor_1, actor_2, critic])
 
