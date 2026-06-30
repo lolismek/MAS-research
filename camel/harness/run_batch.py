@@ -62,6 +62,10 @@ def main():
     workers, args = pop_opt(args, "--workers")
     limit, args = pop_opt(args, "--limit")
     budget, args = pop_opt(args, "--budget")
+    # --tasks: run ONE curated file (e.g. hard_smoke.jsonl, the 9-task 3x3 subset the
+    # add-on arms are evaluated on) instead of the per-bench sets. Tasks carry their own
+    # `bench` field, so resume/agg/the viewer group them exactly as in a per-bench run.
+    tasks_spec, args = pop_opt(args, "--tasks")
     bench_list = benches.split(",") if benches else BENCHES
     workers = int(workers) if workers else 16   # proxy serves ~19x concurrently (see module docstring)
     budget = float(budget) if budget else BUDGET_USD
@@ -75,7 +79,8 @@ def main():
               f"(forcing fresh runs that supersede the old ones)")
 
     todo, done_n = [], 0
-    for b in bench_list:
+    sources = [tasks_spec] if tasks_spec else bench_list
+    for b in sources:
         tasks = load_tasks(resolve_tasks(b))
         if limit:
             tasks = tasks[:int(limit)]
@@ -89,7 +94,8 @@ def main():
                 todo.append(t)
 
     total = done_n + len(todo)
-    print(f"arm={arm} benches={bench_list} budget=${budget:.2f}/task workers={workers}")
+    print(f"arm={arm} source={tasks_spec or ','.join(bench_list)} "
+          f"budget=${budget:.2f}/task workers={workers}")
     print(f"{total} tasks | {done_n} already done (skipped) | {len(todo)} to run\n", flush=True)
     if not todo:
         print("nothing to run — all done.")
