@@ -761,21 +761,25 @@ _BOARD_READ_PREAMBLE = (
     "own output. It is also unverified — it may contain mistakes or dead ends — so read it "
     "before acting but independently check anything you rely on.")
 
-# Appended to every agent's system prompt in board mode. Adapted from the eval-clean
-# BOARD_NOTE to CAMEL's pipeline: there is no 'posted message to a user' channel — an
-# agent's reply IS its handoff to the next agent, and the board is a SEPARATE channel.
+# Appended to every agent's system prompt in board mode. The TEAM/pipeline is already
+# established by the base role prompts (pipeline.py), so this only adds the scratchpad
+# mechanics + the CAMEL-specific write incentive: downstream agents see your final reply but
+# NOT your tool calls or working, so the board is the only way to expose intermediate facts
+# for the verifier to check and the finalizer to trust (the analog of GC's "teammates can't
+# see your searches, only your message").
 _BOARD_WRITE_NOTE = (
-    "\n\nSHARED SCRATCHPAD: you and your teammates keep a shared scratchpad of notes (shown in "
-    "your context as the shared_scratchpad block) — the team's shared THINKING SPACE. Use it "
-    "generously: call add_note whenever you learn or work out something a teammate could use — "
-    "a fact you established, a value or count you computed (write the ACTUAL number), a partial "
-    "result, a hypothesis you're testing, a dead end you hit, or what is blocking you. Think out "
-    "loud AS YOU WORK; don't wait for final conclusions. The only thing to avoid is repeating a "
-    "note already on the board word-for-word; if an earlier note of YOURS turned out FALSE, fix "
-    "it with revise_note (older notes otherwise stay visible on purpose). Read teammates' notes "
-    "before acting. The scratchpad is a SEPARATE channel from your reply: write to it ONLY by "
-    "calling add_note / revise_note, never by typing notes into your reply — your reply still "
-    "carries your answer to the next agent as usual.")
+    "\n\nSHARED SCRATCHPAD: your team also keeps a shared scratchpad — a running THINKING SPACE "
+    "every agent in the pipeline can read (shown in your context as the shared_scratchpad "
+    "block). Downstream teammates see only your final reply, NOT your tool calls or working — "
+    "so post the key intermediate facts here: call add_note whenever you establish a fact, "
+    "compute a value or count (write the ACTUAL number), reach a partial result or hypothesis, "
+    "or hit a dead end or blocker. That is how the verifier can check your specific claims and "
+    "the finalizer can trust your answer. Think out loud AS YOU WORK; don't wait for final "
+    "conclusions. Don't repeat a note already on the board word-for-word; if an earlier note of "
+    "YOURS turned out FALSE, fix it with revise_note (older notes otherwise stay visible on "
+    "purpose). Read teammates' notes before acting. The scratchpad is a SEPARATE channel from "
+    "your reply: write to it ONLY by calling add_note / revise_note, never by typing notes into "
+    "your reply — your reply still carries your answer down the pipeline as usual.")
 
 
 class BeliefBoard(AddOn):
