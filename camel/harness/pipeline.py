@@ -91,7 +91,7 @@ def _handoff(agent):
     return agent.final
 
 
-def run_pipeline(task_prompt, tool_names, client, model, addon, budget=None) -> PipelineResult:
+def run_pipeline(task_prompt, tool_names, client, model, addon, budget=None, env=None) -> PipelineResult:
     task = _user(task_prompt)
     # The AddOn may swap a role's system prompt (metagpt-M); for every other arm
     # `system_prompt` returns the default unchanged.
@@ -99,20 +99,20 @@ def run_pipeline(task_prompt, tool_names, client, model, addon, budget=None) -> 
     critic_sys = addon.system_prompt("critic", CRITIC_SYS)
     finalizer_sys = addon.system_prompt("finalizer", FINALIZER_SYS)
 
-    actor_1 = run_agent("actor", actor_sys, task, tool_names, client, model, addon, budget=budget)
+    actor_1 = run_agent("actor", actor_sys, task, tool_names, client, model, addon, budget=budget, env=env)
     if budget is not None and budget.exceeded:
         return _aborted([actor_1])
 
     # edge 1 (actor_1 -> actor_2): actor_2 sees actor_1's answer
     a2_ctx = task + _user(f"Another solver proposed this answer:\n\n{_handoff(actor_1)}\n\n"
                           "Consider it, then give your own answer.")
-    actor_2 = run_agent("actor", actor_sys, a2_ctx, tool_names, client, model, addon, budget=budget)
+    actor_2 = run_agent("actor", actor_sys, a2_ctx, tool_names, client, model, addon, budget=budget, env=env)
     if budget is not None and budget.exceeded:
         return _aborted([actor_1, actor_2])
 
     # edge 2 (actor_2 -> critic): critic verifies actor_2 (keeps tools to check, not re-solve)
     cr_ctx = task + _user(f"Proposed answer to verify:\n\n{_handoff(actor_2)}")
-    critic = run_agent("critic", critic_sys, cr_ctx, tool_names, client, model, addon, budget=budget)
+    critic = run_agent("critic", critic_sys, cr_ctx, tool_names, client, model, addon, budget=budget, env=env)
     if budget is not None and budget.exceeded:
         return _aborted([actor_1, actor_2, critic])
 

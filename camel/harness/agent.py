@@ -152,12 +152,13 @@ class AgentResult:
 
 
 def run_agent(role, system_prompt, task_messages, tool_names, client, model,
-              addon, max_inner_steps=MAX_INNER_STEPS, budget=None) -> AgentResult:
+              addon, max_inner_steps=MAX_INNER_STEPS, budget=None, env=None) -> AgentResult:
     """Run one agent's internal loop and return its AgentResult.
 
     `task_messages` is the user-side context (task + upstream agents' outputs).
     `addon.inject_context` may prepend shared state before the loop; for vanilla
-    it's a no-op so only the polished upstream output is visible.
+    it's a no-op so only the polished upstream output is visible. `env` is the
+    per-task stateful environment (pddl tasks) that env-tool calls are routed to.
     """
     messages = [{"role": "system", "content": system_prompt}] + list(task_messages)
     messages = addon.inject_context(role, messages)
@@ -217,7 +218,7 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
         for tc in calls:                       # execute every requested tool, append results
             name = tc.function.name
             out = (addon.run_extra_tool(name, tc.function.arguments)   # addon-owned write-tool
-                   if name in addon_tools else run_tool(name, tc.function.arguments))
+                   if name in addon_tools else run_tool(name, tc.function.arguments, env=env))
             n_tools += 1
             cap = FILE_TOOL_CHARS if name in _FILE_TOOLS else MAX_TOOL_CHARS
             messages.append({"role": "tool", "tool_call_id": tc.id,

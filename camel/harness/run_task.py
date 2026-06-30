@@ -23,7 +23,7 @@ from pipeline import run_pipeline
 from agent import Budget
 from tools import TOOL_PROFILES
 from addons import get_addon
-from scoring import classify_outcome
+from scoring import classify_outcome, classify_pddl_outcome
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)                       # camel/
@@ -87,6 +87,10 @@ def run_one(task, arm="vanilla", budget_usd=None):
     tid = task["id"]
     profile = task.get("tool_profile", "none")
     tool_names = TOOL_PROFILES[profile]
+    env = None
+    if profile == "pddl":                 # per-task interactive world (needs pddlgym)
+        from pddl_env import PddlEnv
+        env = PddlEnv(task.get("meta") or {})
     runs_dir = os.path.join(TRACES, arm, tid)
     n = 1
     while os.path.exists(os.path.join(runs_dir, f"run_{n}")):
@@ -114,19 +118,24 @@ def run_one(task, arm="vanilla", budget_usd=None):
     client = client_for(tag)
     addon = get_addon(arm)
     addon.bind(client, MODEL, budget)   # arms that self-meter (chatdev/generative) reuse this client+budget
-    res = run_pipeline(question, tool_names, client, MODEL, addon, budget=budget)
+    res = run_pipeline(question, tool_names, client, MODEL, addon, budget=budget, env=env)
     dur = time.time() - t0
 
     final = parse_final(res.final)
     expected = str(task["expected_answer"])
     answer_type = task.get("answer_type", "freeform")
     # committed=False (no 'FINAL ANSWER:' line) -> no_answer, not wrong_confident.
-    outcome = classify_outcome(final, expected, answer_type, committed=res.committed)
+    # pddl outcome comes from the env's terminal STATE, not a string match.
+    if answer_type == "pddl":
+        outcome = classify_pddl_outcome(final, env, committed=res.committed)
+    else:
+        outcome = classify_outcome(final, expected, answer_type, committed=res.committed)
     result = dict(
         id=tid, arm=arm, run=n, bench=task.get("bench"), tool_profile=profile,
         answer_type=answer_type, seconds=round(dur, 1),
         final_answer=final, expected_answer=expected,
         outcome=outcome, budget_exceeded=res.budget_exceeded,
+        env=(env.summary() if env is not None else None),   # pddl: goal/progress/steps
         committed=res.committed, finish=res.finish,   # why the pipeline ended (length/step_cap/...)
         exact_match=outcome == "correct",        # kept for the viewer's pass/fail
         n_calls=res.n_calls, n_tool_calls=res.n_tool_calls,

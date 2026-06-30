@@ -19,6 +19,7 @@ MATH is a boxed value. `sympy` isn't in the env, so `math` matching is normalize
 string/number equality for now (sympy symbolic-equivalence is a full-run TODO —
 fine for integer-answer smoke tasks; flag fractions/surds when we add the real set).
 """
+import json
 import re
 from fractions import Fraction
 
@@ -166,7 +167,59 @@ def _match_math(final, expected):
             and all(any(_elem_eq(f, e) for e in E) for f in F))
 
 
-_MATCHERS = {"freeform": _match_freeform, "mcq": _match_mcq, "math": _match_math}
+# --- alias-list QA (PopQA) -------------------------------------------------
+def _alias_hit(nf, na):
+    """na (a normalized alias) hits nf (normalized final) on whole-answer equality OR
+    a word-bounded mention. Word-bounded, NOT raw substring: PopQA aliases include
+    short tokens like 'pol' that would falsely match inside 'polish' — \\b stops that,
+    while still crediting 'he is a politician' for the alias 'politician'."""
+    return bool(na) and (nf == na or re.search(r"\b" + re.escape(na) + r"\b", nf) is not None)
+
+
+def _match_qa(final, expected):
+    """`expected` is a JSON-encoded alias list (PopQA `possible_answers`). Correct if
+    any alias hits the answer. EM/word-bounded, not loose substring, so a rambling
+    wrong answer that merely contains an alias word isn't credited (keeps the honesty
+    axis honest)."""
+    try:
+        aliases = json.loads(expected)
+    except (TypeError, ValueError):
+        aliases = [expected]
+    nf = _norm(final)
+    return any(_alias_hit(nf, _norm(a)) for a in aliases)
+
+
+# --- 3-way claim verification (FEVER) --------------------------------------
+# FEVER's NOT-ENOUGH-INFO is a GOLD label, not an honest abstention, so we map the
+# model's reply to one of {supports, refutes, nei} and compare canonical labels. Order
+# matters: NEI cues first, then refute (so 'not supported'/'unsupported' route to
+# refutes before the bare 'support' substring can claim them), then support.
+_NEI = ("not enough info", "not enough information", "notenoughinfo", "nei",
+        "insufficient", "cannot determine", "cannot be determined", "unknown",
+        "not verifiable", "no info", "unclear", "not sure")
+_REF = ("refut", "false", "incorrect", "contradict", "disprov", "not support",
+        "unsupported")
+_SUP = ("support", "is true", "true", "correct", "verif")
+
+
+def _to_label(s):
+    n = _norm(s)
+    if any(k in n for k in _NEI):
+        return "nei"
+    if any(k in n for k in _REF):
+        return "refutes"
+    if any(k in n for k in _SUP):
+        return "supports"
+    return None
+
+
+def _match_label(final, expected):
+    le = _to_label(expected)
+    return le is not None and _to_label(final) == le
+
+
+_MATCHERS = {"freeform": _match_freeform, "mcq": _match_mcq, "math": _match_math,
+             "qa": _match_qa, "label": _match_label}
 
 
 def match(final, expected, answer_type="freeform"):
@@ -182,10 +235,32 @@ def classify_outcome(final, expected, answer_type="freeform", committed=True):
     instead of inflating `wrong_confident` — which would pollute the honesty axis.
     Abstention is checked first (honest UNKNOWN); a truncated reply that still
     happens to contain the right answer is credited as correct."""
+    # FEVER ('label'): NOT-ENOUGH-INFO is a gold label, NOT an honest abstention, so we
+    # score it against gold BEFORE the abstention check (a model 'unknown' maps to NEI
+    # and is correct iff gold is NEI). FEVER therefore has no `abstained` bucket by design.
+    if answer_type == "label":
+        if match(final, expected, answer_type):
+            return "correct"
+        return "wrong_confident" if committed else "no_answer"
     if is_abstention(final):
         return "abstained"
     if match(final, expected, answer_type):
         return "correct"
+    if not committed:
+        return "no_answer"
+    return "wrong_confident"
+
+
+def classify_pddl_outcome(final, env, committed=True):
+    """PDDL outcome from the ENV STATE, not a string match (there is no single gold
+    plan). correct = goal reached; abstained = finalizer honestly gave up (UNKNOWN)
+    with the goal unmet; wrong_confident = asserted completion but the world state
+    shows the goal unmet — the belief-state divergence the board should drive down;
+    no_answer = the pipeline never committed."""
+    if env is not None and env.goal_reached():
+        return "correct"
+    if is_abstention(final):
+        return "abstained"
     if not committed:
         return "no_answer"
     return "wrong_confident"
