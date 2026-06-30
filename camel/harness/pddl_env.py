@@ -44,7 +44,12 @@ class PddlEnv:
         self.problem_index = meta.get("problem_index", 0)
         self.domain = meta.get("domain", self.env_id)
         self.max_steps = int(meta.get("max_steps", 40))
-        self.env = pddlgym.make(self.env_id)
+        # dynamic_action_space=True makes the action space PRECONDITION-AWARE: without it,
+        # all_ground_literals returns every syntactic grounding (incl. nonsense like
+        # move(peg1,d1)) AND env.step silently no-ops inapplicable actions — so the agent
+        # gets "Applied X" with an unchanged state and spirals. With it, only genuinely
+        # applicable actions are offered/accepted.
+        self.env = pddlgym.make(self.env_id, dynamic_action_space=True)
         if self.problem_index is not None:
             self.env.fix_problem_index(self.problem_index)
         r = self.env.reset()
@@ -56,7 +61,7 @@ class PddlEnv:
 
     # --- state / scoring ---------------------------------------------------
     def _ground_actions(self):
-        return sorted(self.env.action_space.all_ground_literals(self.obs), key=str)
+        return sorted(self.env.action_space.all_ground_literals(self.obs, valid_only=True), key=str)
 
     def goal_reached(self):
         return self.goal_lits.issubset(self.obs.literals)
@@ -98,8 +103,14 @@ class PddlEnv:
             sample = ", ".join(_fmt(a) for a in self._ground_actions()[:8])
             return (f"Invalid action {arg!r} — not applicable in the current state. "
                     f"Valid examples: {sample}. Call pddl_actions for the full list.")
+        before = set(self.obs.literals)
         res = self.env.step(action)
         self.obs = res[0]                                  # (obs, reward, done, [trunc], info)
+        if set(self.obs.literals) == before:               # applied but vacuous: never claim "Applied"
+            self.invalid += 1
+            return (f"Action {_fmt(action)} had NO EFFECT — its preconditions aren't met in the "
+                    f"current state, so nothing changed. Call pddl_actions for the moves that "
+                    f"actually apply now.\n{self._status()}")
         self.steps += 1
         self.done = bool(res[2]) or self.goal_reached() or self.steps >= self.max_steps
         head = "GOAL REACHED. " if self.goal_reached() else f"Applied {_fmt(action)}. "
