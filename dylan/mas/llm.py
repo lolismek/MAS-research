@@ -96,7 +96,7 @@ class GPTChat(LLM):
                 response = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=messages,
-                    max_tokens=min(max_tokens or 28000, 28000),
+                    max_tokens=min(max_tokens or 8000, 8000),
                     temperature=temperature,
                     n=num_comps or 1,
                     # NOTE: `stop` intentionally omitted. MacNet/DyLAN set stop=['\n'], but Qwen3.6

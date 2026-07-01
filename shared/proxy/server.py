@@ -91,7 +91,7 @@ TINKER = dict(
     model=os.environ.get('TINKER_MODEL', 'Qwen/Qwen3.6-35B-A3B'))
 # A thinking model with no client-set cap can generate unboundedly; bound per-call
 # output so a runaway think can't balloon cost (generous enough to finish + answer).
-TINKER_MAX_TOKENS = int(os.environ.get('TINKER_MAX_TOKENS', '28000'))
+TINKER_MAX_TOKENS = int(os.environ.get('TINKER_MAX_TOKENS', '8000'))
 
 
 def _redact_images(messages):
