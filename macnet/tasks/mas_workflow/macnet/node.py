@@ -245,7 +245,9 @@ class Node:
         
         final_prompt = ''
         if spatial_upstream_message != "":
-            final_prompt += f"\n# Outputs from other agents in the current round:\n{spatial_upstream_message}\n"
+            final_prompt += f"\n# Proposals from other agents for this turn's next action:\n{spatial_upstream_message}\n"
+            final_prompt += ("Treat these as advice only. Decide the single best next action for the task below, "
+                             "then output exactly one action line and nothing else.\n")
             final_prompt += "-" * 20
             final_prompt += '\n'
 

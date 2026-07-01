@@ -59,6 +59,10 @@ class MacNet(MetaMAS):
 
         for node in self._agent_nodes.values():
             self.hire([node._agent])
+        # The decision node applies the action to the env, so it must also receive
+        # add_task_instruction (INTERACTION_PROTOCOL + the benchmark's action format);
+        # run.py only calls that on agents in agents_team.
+        self.hire([self._decision_node._agent])
         self.set_env(env)
         self.meta_memory = mas_memory
     
