@@ -12,6 +12,7 @@ from mas.llm import Message
 
 from .graph import GraphMaskInfo, gen_graph_mask_info
 from .node import Node
+from .addons import get_addon
 from .graph_prompt import *
 from ..format import format_task_context, format_task_prompt_with_insights
 
@@ -48,12 +49,23 @@ class MacNet(MetaMAS):
         self.notify_observers(f"Retrieve Threshold: {self._threshold}")
         self.notify_observers(f"Use Role Projector: {self._use_projector}")
 
+        # build the selected add-on arm (vanilla = no-op) and hand it the LLM handle for the
+        # arms that make their own metered calls (voyager reflection, belief extractor). Must
+        # exist before _init_nodes so metagpt can swap the solver system prompt.
+        self._arm: str = config.get('arm', 'vanilla')
+        self._addon = get_addon(self._arm)
+        self._addon.bind(reasoning)
+        self.notify_observers(f"Add-on Arm        : {self._arm}")
+
         # build macnet mas
         self.compute_graph: GraphMaskInfo = gen_graph_mask_info(mode=graph_type, N=node_num)
         self._size: int = len(self.compute_graph.fixed_spatial_masks)
 
         self._agent_nodes, self._decision_node = self._init_nodes(reasoning)
-        
+        for node in self._agent_nodes.values():
+            node._addon = self._addon
+        self._decision_node._addon = self._addon
+
         self._spatial_matrix: np.ndarray[bool] = self._construct_spatial_connection()
         self._temporal_matrix: np.ndarray[bool] = self._construct_temporal_connection()
 
@@ -129,7 +141,9 @@ class MacNet(MetaMAS):
         # Main loop for task execution
         for i in range(env.max_trials):
 
-            upstream_node_ids: dict[str, str] = {}   
+            self._addon.round_start()   # reset per-round add-on state (scratchpad / skills / beliefs)
+
+            upstream_node_ids: dict[str, str] = {}
 
             in_degree = {node.id: len(node.spatial_predecessors) for node in self._agent_nodes.values()}
             zero_in_degree_queue = [node_id for node_id, deg in in_degree.items() if deg == 0] 
@@ -169,6 +183,14 @@ class MacNet(MetaMAS):
                 )
                 upstream_node_ids[curr_node.id] = current_id
 
+                # once per solver, after its retry loop settled: append to the scratchpad / elicit
+                # skills / extract beliefs. Runs before the next topo node so downstream nodes see it.
+                if curr_node._output:
+                    self._addon.on_turn_end(
+                        curr_node.id, curr_node.role, curr_node._output[0],
+                        curr_node._last_reasoning, curr_node._last_input,
+                    )
+
                 for successor in curr_node.spatial_successors:
                     
                     if successor not in self._agent_nodes.values():
@@ -189,7 +211,9 @@ class MacNet(MetaMAS):
             step_message: str = f'Act {i + 1}: {action}\nObs {i + 1}: {observation}'
             self.notify_observers(step_message)
 
-            self.meta_memory.move_memory_state(action, observation, reward=reward) 
+            self.meta_memory.move_memory_state(action, observation, reward=reward)
+
+            self._addon.round_end()
 
             if done:
                 break
@@ -228,9 +252,9 @@ class MacNet(MetaMAS):
         for index in range(self._size):
 
             agent: Agent = Agent(
-                name=f'solver_{index}', 
-                role='solver', 
-                system_instruction=solver_system_prompt, 
+                name=f'solver_{index}',
+                role='solver',
+                system_instruction=self._addon.system_prompt('solver', solver_system_prompt),
                 reasoning_module=reasoning_module,
                 memory_module=None
             )
@@ -238,9 +262,9 @@ class MacNet(MetaMAS):
             system_node[index] = node
         
         decision_agent: Agent = Agent(
-            name='dicision', 
-            role='solver', 
-            system_instruction=decision_system_prompt, 
+            name='dicision',
+            role='solver',
+            system_instruction=self._addon.system_prompt('decision', decision_system_prompt),
             reasoning_module=reasoning_module
         )
         decision_node = Node(decision_agent)

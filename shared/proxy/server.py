@@ -566,7 +566,11 @@ async def _handle_chat(req: Request, tag: str, backend: dict):
     choice = (j.get('choices') or [{}])[0]
     msg = dict(choice.get('message') or {})
     clean, reasoning = _split_think(msg.get('content'))
-    msg.pop('reasoning_content', None)               # Tinker leaves it empty; drop it
+    # Surface the parsed <think> trace on the reply so in-process callers can read the CoT
+    # (MacNet's belief_state extractor needs it). Upstream leaves reasoning_content empty, so
+    # overwrite it with what _split_think recovered. Additive: OpenAI-SDK clients that don't
+    # look for it (camel/dylan/autogen) drop it into .model_extra and ignore it.
+    msg['reasoning_content'] = reasoning
     finish = choice.get('finish_reason') or 'stop'
     # Qwen3.6 always opens <think> (template-prefilled). If it hit the token cap without ever
     # emitting the closing </think>, `content` is truncated reasoning, NOT an answer. Passing it
