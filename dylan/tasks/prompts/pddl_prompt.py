@@ -110,3 +110,22 @@ pddl_prompts = {
         "instruction": tyreworld_instruction,
         "system_msg": "You are a master in car repair."}
 }
+
+
+# Qwen3.6 reasons inside <think>, and for PDDL the actions are prose-shaped phrases
+# ("check valid actions", "left grasp shot1") that blend into the reasoning sentence. So on
+# ~78% of turns the model "says" the action while thinking, closes </think>, and emits
+# nothing visible -> the proxy strips <think> -> empty content -> llm.py logs "LLM returned
+# None" and burns up to 5 retries. FEVER never hits this: its bracketed Search[...]/Finish[...]
+# don't read like prose, AND fever_prompt.py ends with a concrete visible-output example.
+# This anchor gives PDDL the same concrete example plus an explicit "restate the action
+# outside <think>" instruction. `check valid actions` is a valid meta-action in every game.
+pddl_output_format: str = """
+## Output format (critical)
+Your reasoning inside <think>...</think> is discarded and never reaches the environment. After </think> you MUST write your chosen action again, as a single bare action phrase on its own line - even though you already described it while reasoning. If you end your turn without an action outside <think>, the environment receives nothing and the whole turn is wasted.
+- Output ONLY the action phrase, exactly in one of the forms listed above.
+- Do NOT prefix it with "Action:", and do NOT write an "Observation:" line (the environment writes observations, not you).
+
+For example, a turn's entire visible output might be:
+check valid actions
+"""
