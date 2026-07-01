@@ -121,7 +121,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run tasks with specified modules.')
     parser.add_argument('--task', type=str, choices=['alfworld', 'fever', 'pddl', 'sciworld'])
     parser.add_argument('--mas_type', type=str, choices=['autogen', 'macnet', 'dylan'])
-    parser.add_argument('--mas_memory', type=str, default='none', help='Specify mas memory module')
+    parser.add_argument('--mas_memory', type=str, default='empty', help="Specify mas memory module ('empty' = no cross-task memory)")
+    parser.add_argument('--arm', type=str, default=None, help='MacNet add-on arm (overrides configs.yaml macnet.arm): vanilla|full_memory|memorybank|metagpt|voyager|belief_state')
     parser.add_argument('--reasoning', type=str, default='io', help='Specify reasoning module')
     parser.add_argument('--model', type=str, default='gpt-3.5-turbo-0125', help='Specify the LLM model type')
     parser.add_argument('--max_trials', type=int, default=50, help='max number of steps')
@@ -159,6 +160,8 @@ if __name__ == '__main__':
     task_configs.mas_config['insights_topk'] = args.insights_topk
     task_configs.mas_config['threshold'] = args.threshold
     task_configs.mas_config['use_projector'] = args.use_projector
+    if args.arm is not None:
+        task_configs.mas_config['arm'] = args.arm
     task_configs.mem_config.update(
         working_dir=WORKING_DIR,
         hop=args.hop

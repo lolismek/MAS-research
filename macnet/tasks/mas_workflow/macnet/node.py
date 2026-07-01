@@ -1,9 +1,11 @@
 from __future__ import annotations
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 from mas.agents import Agent
 from mas.llm import Message
 from mas.reasoning import ReasoningConfig
+
+from .addons import AddOn
 
 class Node:
 
@@ -21,9 +23,13 @@ class Node:
         self._input: list[str] = []  
         self._output: list[str] = []
 
-        self._memory: Dict[str, List[str]] = {'inputs':[], 'outputs':[]}  
+        self._memory: Dict[str, List[str]] = {'inputs':[], 'outputs':[]}
 
         self.reasoning_config = ReasoningConfig(temperature=0, stop_strs=['\n'])
+
+        self._addon: AddOn = AddOn()               # no-op until graph_mas binds the selected arm
+        self._last_reasoning: Optional[str] = None # captured <think> trace of the last execute()
+        self._last_input: str = ""                 # the exact prompt sent to the model last execute()
     @property
     def id(self) -> str:
         return self._id
@@ -207,7 +213,11 @@ class Node:
             
         user_prompt: str = self._process_inputs(user_message, spatial_info, temporal_info, use_critic)
         answer: str = self._agent.response(user_prompt, self.reasoning_config)
-        
+
+        # capture the proxy-surfaced CoT + the exact prompt, for add-ons that run at turn end
+        self._last_reasoning = getattr(getattr(self._agent.reasoning, 'llm_model', None), 'last_reasoning', None)
+        self._last_input = user_prompt
+
         self._input = [user_message.content]
         self._output = [answer]
 
@@ -233,12 +243,14 @@ class Node:
 
         for uuid, info in spatial_info.items():
             spatial_upstream_message += f"## Agent {uuid}, role is {info['role']}, output is:\n\n {info['output']}\n"
+            spatial_upstream_message += self._addon.decorate_upstream(uuid, info['role'], info['output'])
             if use_critic:
                 critic_message: str = self._critic_upstream_agent(user_prompt, info['output'])
                 spatial_upstream_message += f"## Critic's Suggestions for Improvement:{critic_message}\n\n"
         
         for uuid, info in temporal_info.items():
             temporal_upstream_message += f"## Agent {uuid}, role is {info['role']}, output is:\n\n {info['output']}\n\n"
+            temporal_upstream_message += self._addon.decorate_upstream(uuid, info['role'], info['output'])
             if use_critic:
                 critic_message: str = self._critic_upstream_agent(user_prompt, info['output'])
                 spatial_upstream_message += f"## Critic's Suggestions for Improvement:{critic_message}\n\n"
@@ -256,7 +268,7 @@ class Node:
             final_prompt += "-" * 20
             final_prompt += '\n'
             
-        return final_prompt + user_prompt 
+        return self._addon.inject_context(self.id, self.role, final_prompt + user_prompt)
     
     def _critic_upstream_agent(self, task: str, agent_response: str) -> str:
         """get critic agent's response to the agent's response

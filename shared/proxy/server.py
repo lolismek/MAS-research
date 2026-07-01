@@ -77,6 +77,21 @@ OPENAI = dict(
     model=os.environ.get('OPENAI_MODEL', 'gpt-5.4-mini'),
     reasoning=dict(summary=os.environ.get('REASONING_SUMMARY', 'detailed'),
                    effort=os.environ.get('REASONING_EFFORT', 'low')))
+# Tinker (Thinking Machines) — OpenAI-compatible, but it serves /chat/completions
+# NATIVELY (not /responses), so its route is a passthrough (_handle_chat below), not
+# the Responses translator. Qwen3.6 ALWAYS emits an inline <think>…</think> trace that
+# can't be disabled via the OAI path; the passthrough strips it from `content`
+# (capturing it as `reasoning` for the trace) so the harness stays model-agnostic.
+#   /m/<tag>/...  -> TINKER
+TINKER = dict(
+    name='tinker',
+    base=os.environ.get('TINKER_BASE',
+                        'https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1'),
+    key=os.environ.get('TINKER_API_KEY', ''),
+    model=os.environ.get('TINKER_MODEL', 'Qwen/Qwen3.6-35B-A3B'))
+# A thinking model with no client-set cap can generate unboundedly; bound per-call
+# output so a runaway think can't balloon cost (generous enough to finish + answer).
+TINKER_MAX_TOKENS = int(os.environ.get('TINKER_MAX_TOKENS', '8000'))
 
 
 def _redact_images(messages):
@@ -551,8 +566,18 @@ async def _handle_chat(req: Request, tag: str, backend: dict):
     choice = (j.get('choices') or [{}])[0]
     msg = dict(choice.get('message') or {})
     clean, reasoning = _split_think(msg.get('content'))
-    msg.pop('reasoning_content', None)               # Tinker leaves it empty; drop it
+    # Surface the parsed <think> trace on the reply so in-process callers can read the CoT
+    # (MacNet's belief_state extractor needs it). Upstream leaves reasoning_content empty, so
+    # overwrite it with what _split_think recovered. Additive: OpenAI-SDK clients that don't
+    # look for it (camel/dylan/autogen) drop it into .model_extra and ignore it.
+    msg['reasoning_content'] = reasoning
     finish = choice.get('finish_reason') or 'stop'
+    # Qwen3.6 always opens <think> (template-prefilled). If it hit the token cap without ever
+    # emitting the closing </think>, `content` is truncated reasoning, NOT an answer. Passing it
+    # through would dump the whole ramble as the agent's action (garbage first line) and pollute
+    # downstream agents. Replace it with a short sentinel so the turn is cleanly wasted instead.
+    if backend['name'] == 'tinker' and finish == 'length' and '</think>' not in (msg.get('content') or ''):
+        clean = "[the model could not finish reasoning within the token budget; no action produced this turn]"
     # Recover Qwen3.6's text <tool_call> syntax into structured tool_calls (AutoGen needs
     # them structured). Skip if upstream already structured them (e.g. a 2507 model).
     if not msg.get('tool_calls'):

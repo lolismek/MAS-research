@@ -57,8 +57,9 @@ class PDDLEnv(BaseEnv):
         self.max_trials = max_trials
         self.last_obs = None
 
-    def set_env(self, configs: dict) -> tuple[str, str]: 
+    def set_env(self, configs: dict) -> tuple[str, str]:
         nltk.download('punkt')
+        nltk.download('punkt_tab')  # nltk>=3.9 word_tokenize needs punkt_tab; punkt alone LookupErrors
         
         self.game_name: str = configs.get('game_name')
         problem_index: int = configs.get('problem_index')

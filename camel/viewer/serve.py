@@ -41,8 +41,9 @@ OUTCOME_LABEL = {"correct": "CORRECT", "abstained": "ABSTAINED", "wrong_confiden
                  "no_answer": "NO-ANSWER"}
 
 # Benchmarks, in display order; anything else falls into "other".
-BENCH_ORDER = ["gaia", "gpqa_diamond", "math_l5", "smoke", "other"]
+BENCH_ORDER = ["gaia", "gpqa_diamond", "math_l5", "popqa", "fever", "pddl", "smoke", "other"]
 BENCH_TITLE = {"gaia": "GAIA", "gpqa_diamond": "GPQA-Diamond", "math_l5": "MATH level-5",
+               "popqa": "PopQA", "fever": "FEVER", "pddl": "PDDL",
                "smoke": "smoke / plumbing", "other": "other"}
 
 # The AddOn arm = the only thing that varies across runs (the pipeline is fixed). Each
@@ -63,6 +64,12 @@ ARM_INFO = {
                  "over the fixed edges; no shared memory.",
     "voyager": "skill library — agents save blurbs via an add_skill tool; the whole library "
                "is read back to every agent (as a &lt;skill_library&gt; user block).",
+    "belief_board": "shared belief board — agents publish/revise their OWN notes IN-loop via "
+                    "add_note / revise_note; each agent reads teammates' current notes at turn "
+                    "start (as a &lt;shared_scratchpad&gt; user block). Writes are logged below.",
+    "belief_board_inert": "belief board CONTROL — identical add_note / revise_note write-tools, "
+                          "but the board is NEVER injected (writes go to a board nobody reads). "
+                          "Isolates tool-exposure from the shared-memory effect.",
 }
 
 # An addon-injected context block is a USER message of the form
@@ -82,7 +89,8 @@ def bench_of(res):
         return b if b in BENCH_TITLE else "other"
     tid = res.get("id", "")
     for pre, name in (("gaia_", "gaia"), ("gpqad", "gpqa_diamond"),
-                      ("math_l5", "math_l5"), ("smoke", "smoke")):
+                      ("math_l5", "math_l5"), ("popqa_", "popqa"), ("fever_", "fever"),
+                      ("pddl_", "pddl"), ("smoke", "smoke")):
         if tid.startswith(pre):
             return name
     return "other"
@@ -323,7 +331,8 @@ def render_index():
 
 # arm display order for the compare matrix (vanilla first as the baseline); any arm not
 # listed is appended alphabetically so a new arm shows up without a code change.
-ARM_ORDER = ["vanilla", "full", "memorybank", "generative", "chatdev", "metagpt-M", "voyager"]
+ARM_ORDER = ["vanilla", "full", "memorybank", "generative", "chatdev", "metagpt-M", "voyager",
+             "belief_board", "belief_board_inert"]
 
 
 def _mx_cell(r):
@@ -477,6 +486,49 @@ def render_msg(m, toolmap):
             f"<div class=role style='color:{color}'>{esc(label)}</div>{inner}</div>")
 
 
+def load_board_trace(base):
+    """The belief_board arm's append-only write log (run_task dumps board_trace.jsonl).
+    [] for every other arm (file absent), so the panel is shown only when there were writes."""
+    p = os.path.join(base, "board_trace.jsonl")
+    if not os.path.exists(p):
+        return []
+    out = []
+    for line in open(p):
+        line = line.strip()
+        if line:
+            try:
+                out.append(json.loads(line))
+            except Exception:
+                pass
+    return out
+
+
+def render_board(events):
+    """The belief board's write history as a labeled panel: each add / revise / archive op,
+    who authored it (agent:note_id), the revise chain, and the note text — so the sparse
+    shared 'thinking memory' is legible at the top of the run page. '' when empty."""
+    if not events:
+        return ""
+    OP = {"add": ("#34d399", "added"), "revise": ("#fbbf24", "revised"),
+          "archive": ("#94a3b8", "archived")}
+    rows = []
+    for e in events:
+        color, verb = OP.get(e.get("op"), ("#c4b5fd", e.get("op", "?")))
+        rev = (f" <span class=muted>(replaces {esc(e.get('revised_from'))})</span>"
+               if e.get("revised_from") else "")
+        rows.append(
+            f"<div style='border-top:1px solid #2a2440;padding:8px 0'>"
+            f"<span class=ob style='background:{color}'>{esc(verb)}</span> "
+            f"<b class=mono style='color:#c4b5fd'>{esc(e.get('agent'))}:{esc(e.get('note_id'))}</b>"
+            f"{rev} <span class=muted>&#183; turn {esc(e.get('turn'))}</span>"
+            f"<div class=content style='margin-top:4px'>{esc(e.get('text') or '')}</div></div>")
+    writes = sum(1 for e in events if e.get("op") in ("add", "revise"))
+    return (f"<div class=card style='border-color:#2f7a55'>"
+            f"<div class=role style='color:#34d399'>&#x1F4CB; belief board &#183; "
+            f"{writes} note write(s), {len(events)} event(s)</div>"
+            f"{''.join(rows)}</div>")
+
+
 def render_run(rel):
     base = os.path.join(TRACES, *rel.split("/"))
     res = json.load(open(os.path.join(base, "result.json")))
@@ -533,8 +585,11 @@ def render_run(rel):
     n_skills = sum(1 for ag in agents for mm in ag["transcript"]
                    for tc in (mm.get("tool_calls") or [])
                    if (tc.get("function") or {}).get("name") == "add_skill")
+    board_events = load_board_trace(base)
+    n_notes = sum(1 for e in board_events if e.get("op") in ("add", "revise"))
     counts = ([f"{n_inject} injected context block(s)"] if n_inject else []) \
-        + ([f"{n_skills} add_skill write(s)"] if n_skills else [])
+        + ([f"{n_skills} add_skill write(s)"] if n_skills else []) \
+        + ([f"{n_notes} board note write(s)"] if n_notes else [])
     armbar = (f"<div class=armbar><b>arm: {esc(arm)}</b> — {ARM_INFO.get(arm, 'custom arm.')}"
               + (f"<div class=muted style='margin-top:4px'>this run: " + " · ".join(counts)
                  + "</div>" if counts else "") + "</div>")
@@ -552,6 +607,7 @@ def render_run(rel):
         f"<span class=pill>cost: {esc(_cost_str(res))}</span>"
         f"<span class=pill>{esc(res.get('seconds'))}s</span></div>"
         f"{armbar}"
+        f"{render_board(board_events)}"
         f"<div class='card prompt'><div class=role>task</div>"
         f"<div class=content>{esc(prompt)}</div></div>"
         f"<h2>pipeline</h2><div class=flow>{nodes}</div>"

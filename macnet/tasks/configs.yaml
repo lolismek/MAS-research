@@ -33,11 +33,17 @@ graph:
   use_critic: False
 
 # MacNet reads CONFIG.get('macnet') (the CLI passes mas_type='macnet'); the `graph:` block above is
-# never matched. Keep the team small + critic off to bound the thinking model's call fan-out.
+# never matched. Chain = deterministic solver_0 -> solver_1 -> decision pipeline (Random randomized the
+# inter-node edge every instantiation, injecting uncontrolled variance). Team small + critic off to
+# bound the thinking model's call fan-out.
 macnet:
-  graph_type: Random
+  graph_type: Chain
   node_num: 2
   use_critic: False
+  # Add-on baseline arm (within-round inter-node communication; cross-task memory stays off via
+  # --mas_memory empty). One of: vanilla, full_memory, memorybank, metagpt, voyager,
+  # belief_state. Overridable with --arm. See macnet/.../addons.py.
+  arm: vanilla
 
 dylan:
   node_num: 2

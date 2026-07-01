@@ -74,6 +74,11 @@ class GPTChat(LLM):
             base_url=URL,
             api_key=KEY
         )
+        # Populated after every call so callers can read the stripped <think> trace and the
+        # finish_reason (used by the belief_state add-on's CoT extractor and its truncation
+        # guard). Safe as instance state: MacNet runs one task sequentially, no concurrent calls.
+        self.last_reasoning: Optional[str] = None
+        self.last_finish: Optional[str] = None
 
     def __call__(
         self,
@@ -96,7 +101,7 @@ class GPTChat(LLM):
                 response = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=messages,
-                    max_tokens=min(max_tokens or 8192, 8192),
+                    max_tokens=min(max_tokens or 8000, 8000),
                     temperature=temperature,
                     n=num_comps or 1,
                     # NOTE: `stop` intentionally omitted. MacNet/DyLAN set stop=['\n'], but Qwen3.6
@@ -105,14 +110,19 @@ class GPTChat(LLM):
                     # The envs' process_action() already takes the first line of the reply.
                 )
 
-                answer = response.choices[0].message.content
+                choice = response.choices[0]
+                answer = choice.message.content
+                # Proxy surfaces the parsed <think> trace as reasoning_content (OpenAI SDK puts
+                # unknown fields in model_extra); stash it + finish_reason for add-on callers.
+                self.last_reasoning = (getattr(choice.message, 'model_extra', None) or {}).get('reasoning_content')
+                self.last_finish = choice.finish_reason
                 prompt_tokens += response.usage.prompt_tokens
                 completion_tokens += response.usage.completion_tokens
-                
+
                 if answer is None:
                     print("Error: LLM returned None")
                     continue
-                return answer  
+                return answer
 
             except Exception as e:
                 error_message = str(e)
