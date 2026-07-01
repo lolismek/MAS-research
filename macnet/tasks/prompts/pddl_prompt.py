@@ -3,9 +3,6 @@ You are a robot has four actions: pickup, putdown, stack, and unstack.
 The domain assumes a world where there are a set of blocks that can be stacked on top of each other, an arm that can hold one block at a time, and a table where blocks can be placed.
 
 ## The actions defined in this domain are as follows:
-- think xxx: 
-  - ✅ Format: `think: I need to move block A first because...`  
-  - ❌ Any other format is invalid and will not be recognized by the system.
 - pickup <block>: allows the arm to pick up a block from the table if it is clear and the arm is empty. After the pickup action, the arm will be holding the block, and the block will no longer be on the table or clear.
 - putdown <block>: allows the arm to put down a block on the table if it is holding a block. After the putdown action, the arm will be empty, and the block will be on the table and clear.
 - stack <block> <block>: allows the arm to stack a block on top of another block if the arm is holding the top block and the bottom block is clear. After the stack action, the arm will be empty, the top block will be on top of the bottom block, and the bottom block will no longer be clear.
@@ -21,9 +18,6 @@ You are a robot barman that manipulates drink dispensers, shot glasses and a sha
 You have two hands. The goal is to find a plan that serves a desired set of drinks. 
 
 ## Here are the actions you can do. Each valid action is a short phrase following fixed patterns:
-- think xxx: 
-  - ✅ Format: `think: I need to move block A first because...`  
-  - ❌ Any other format is invalid and will not be recognized by the system.
 - <hand> grasp <container>: Grasp a container
 - <hand> leave <container>: Leave a container on the table
 - fill-shot <shot> <ingredient> <hand1> <hand2> <dispenser>: Fill a shot glass with an ingredient from dispenser
@@ -66,9 +60,6 @@ gripper_instruction: str = """
 You are a robot with a gripper that can move objects between different rooms. Your name is Robby.
 
 ## There are three actions defined in this domain:
-- think xxx: 
-  - ✅ Format: `think: I need to move block A first because...`  
-  - ❌ Any other format is invalid and will not be recognized by the system.
 - move <room1> <room2>: This action allows the robot to move from one room to another.The action has a single precondition, which is that the robot is currently in a room. The effect of this action is to move the robot to another room and to remove the fact that it is in the original room.
 - pick <obj> <room> <gripper>: This action allows the robot to pick up an object using the gripper. The action has three preconditions: (1) the object is located in a room (2) the robot is currently in the same room and (3) the gripper is free (i.e., not holding any object). The effect of this action is to update the state of the world to show that the robot is carrying the object using the gripper, the object is no longer in the room, and the gripper is no longer free.
 - drop <obj> <room> <gripper>: This action allows the robot to drop an object that it is carrying. The action has two preconditions: (1) the robot is currently carrying the object using the gripper, and (2) the robot is currently in a room. The effect of this action is to update the state of the world to show that the robot is no longer carrying the object using the gripper, the object is now located in the room, and the gripper is now free.
@@ -81,9 +72,6 @@ You are a robot with a gripper that can move objects between different rooms. Yo
 tyreworld_instruction: str = """Your goal is to replace flat tyres with intact tyres on the hubs. Remember to open boot first to get tools you need. Intact tyres should be inflated. The nuts should be tight on the hubs. The flat tyres, wrench, jack, and pump should be in the boot. The boot should be closed.
 
 ## There are 13 actions defined in this domain:
-- think xxx: 
-  - ✅ Format: `think: I need to move block A first because...`  
-  - ❌ Any other format is invalid and will not be recognized by the system.
 - open <container>: The precondition for this action is that the container is unlocked and closed. The effect of this action is that the container is open and not closed.
 - close <container>: The precondition for this action is that the container is open. The effect of this action is that the container is closed and not open.
 - fetch <object> <container>: The precondition for this action is that the object is inside the container and the container is open. The effect of this action is that the object is held by the agent and not inside the container.

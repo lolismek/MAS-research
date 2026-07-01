@@ -54,7 +54,6 @@ NOTE:
     - 6. heat a with b. 
     - 7. cool a with b. 
     - 8. use a. 
-    - 9. think: xxx
 
 - You must check carefully whether your output command is consistent with the allowed commands above!!! Any output that is not among the commands listed above is not permitted!!!
 """
