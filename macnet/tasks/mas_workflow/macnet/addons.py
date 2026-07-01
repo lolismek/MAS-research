@@ -249,13 +249,11 @@ class VoyagerAddOn(AddOn):
 class BeliefStateAddOn(AddOn):
     """Post-hoc first-order-ToM: after each solver proposes, an extractor call reads the node's
     input, its real captured CoT, and its action, and emits a compact BELIEF: blurb. The blurb is
-    attached inline to that node's output when the next solver / the decision node read it.
-    `inert=True` runs the extractor (matching cost) but never injects the blurb (control)."""
+    attached inline to that node's output when the next solver / the decision node read it."""
 
     MAX_BELIEFS = 12
 
-    def __init__(self, inert: bool = False) -> None:
-        self._inert = inert
+    def __init__(self) -> None:
         self._beliefs: dict[str, list[str]] = {}
 
     def round_start(self) -> None:
@@ -275,13 +273,11 @@ class BeliefStateAddOn(AddOn):
 
     def inject_context(self, node_id, role, prompt) -> str:
         # one-time explanation of the inline 'Stated beliefs' annotations added below
-        if self._inert or not self._beliefs:
+        if not self._beliefs:
             return prompt
         return f"{BELIEF_PREAMBLE}\n{'-' * 20}\n" + prompt
 
     def decorate_upstream(self, up_id, role, output) -> str:
-        if self._inert:
-            return ""
         blurb = self._beliefs.get(up_id)
         if not blurb:
             return ""
@@ -303,10 +299,8 @@ def get_addon(arm: Optional[str]) -> AddOn:
     if arm == 'voyager':
         return VoyagerAddOn()
     if arm in ('belief', 'belief_state'):
-        return BeliefStateAddOn(inert=False)
-    if arm in ('belief_state_inert', 'belief_inert'):
-        return BeliefStateAddOn(inert=True)
+        return BeliefStateAddOn()
     raise ValueError(
         f"Unknown arm '{arm}'. Choices: vanilla, full_memory, memorybank, metagpt, voyager, "
-        "belief_state, belief_state_inert"
+        "belief_state"
     )
