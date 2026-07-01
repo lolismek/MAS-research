@@ -3,9 +3,23 @@ try:
     from langchain_core.documents import Document
 except ImportError:  # older langchain layout
     from langchain.docstore.document import Document
+import os
 import string
 import re
+from datetime import timedelta
 import wikipedia
+
+# Wikipedia now enforces its User-Agent policy: the wikipedia lib's built-in default UA
+# is rejected with HTTP 403 (a non-JSON body the lib then fails to parse -> JSONDecodeError
+# -> the FeverEnv reports "Cannot find corresponding pages." for *every* Search, pinning the
+# whole FEVER arm near reward 0 for reasons unrelated to the model). Set a descriptive UA
+# with a contact URL (override via WIKI_USER_AGENT), and rate-limit to stay a good API
+# citizen since each Search fires several page fetches.
+wikipedia.set_user_agent(os.environ.get(
+    "WIKI_USER_AGENT",
+    "macnet-gmemory-eval/0.1 (research; +https://github.com/bingreeky/GMemory)",
+))
+wikipedia.set_rate_limiting(True, min_wait=timedelta(milliseconds=200))
 
 class LangChainWiki:
 
