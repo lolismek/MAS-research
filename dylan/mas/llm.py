@@ -96,9 +96,7 @@ class GPTChat(LLM):
                 response = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=messages,
-                    max_tokens=min(max_tokens or 28000, 28000),  # 28K cap: give Qwen3.6 room to finish
-                    # its <think> trace AND emit the action. At 8K the think alone hit the cap, the proxy
-                    # stripped the unclosed <think> to empty content, and DyLAN looped on the empty reply.
+                    max_tokens=min(max_tokens or 28000, 28000),
                     temperature=temperature,
                     n=num_comps or 1,
                     # NOTE: `stop` intentionally omitted. MacNet/DyLAN set stop=['\n'], but Qwen3.6
