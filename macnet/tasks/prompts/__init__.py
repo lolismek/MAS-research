@@ -1,7 +1,7 @@
 from .alfworld_prompt import alfworld_solver_system_prompt, alfworld_few_shots
 from .sciworld_prompt import sciworld_solver_system_prompt, sciworld_few_shots
 from .fever_prompt import fever_solver_system_prompt, fever_few_shots
-from .pddl_prompt import pddl_prompts
+from .pddl_prompt import pddl_prompts, pddl_output_format
 
 INTERACTION_PROTOCOL = """\
 ## How to act (read this first)
@@ -31,7 +31,7 @@ def get_dataset_system_prompt(task: str, task_config: dict) -> str:
         return INTERACTION_PROTOCOL + prompt_map.get(task)
     else:
         task_type: str = task_config.get('game_name')
-        return INTERACTION_PROTOCOL + pddl_prompts[task_type]['instruction']
+        return INTERACTION_PROTOCOL + pddl_prompts[task_type]['instruction'] + pddl_output_format
         
 
 

@@ -56,4 +56,12 @@ NOTE:
     - 8. use a. 
 
 - You must check carefully whether your output command is consistent with the allowed commands above!!! Any output that is not among the commands listed above is not permitted!!!
+
+## Output format (critical)
+Your reasoning inside <think>...</think> is discarded and never reaches the environment. After </think> you MUST output exactly ONE household action, as a single bare line, using one of the command forms listed above (take a from b / go to a / open a / put a in/on b / clean a with b / heat a with b / cool a with b / use a). If you end your turn with no action outside <think>, or you spill reasoning into your visible output, the environment executes only the FIRST visible line - so a stray sentence of reasoning becomes a bogus command, the environment replies "Nothing happens", and the whole turn is wasted.
+- Output ONLY the action, on a single line. Do NOT prefix it with "Action:", do NOT wrap it in quotes, and do NOT write an "Observation:" line (the environment writes observations, not you).
+- The worked examples you are shown use "> think:" lines to show reasoning. In THIS setup that thinking belongs inside your private <think> block, so do NOT emit a "> think:" line (or any other commentary) as your visible action - your visible output is always one real household action.
+
+For example, a turn's entire visible output might be:
+go to cabinet 1
 """

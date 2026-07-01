@@ -30,7 +30,13 @@ class AlfworldEnv(BaseEnv):
         max_trials: int = 50
     ): 
         self.env_config = env_config
-        self.main_env = getattr(alfworld.agents.environment, self.env_config['env']['type'])(self.env_config, train_eval=self.env_config['split'])
+        # alfworld<=0.3.x exposed env classes directly on alfworld.agents.environment;
+        # 0.4.x moved them behind a get_environment(name) factory. Support both.
+        _env_mod = alfworld.agents.environment
+        _env_type = self.env_config['env']['type']
+        _EnvCls = getattr(_env_mod, _env_type) if hasattr(_env_mod, _env_type) \
+            else _env_mod.get_environment(_env_type)
+        self.main_env = _EnvCls(self.env_config, train_eval=self.env_config['split'])
         
         self.max_trials: int = max_trials
         self.reset()
