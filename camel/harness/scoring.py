@@ -192,14 +192,18 @@ def _match_qa(final, expected):
 # --- 3-way claim verification (FEVER) --------------------------------------
 # FEVER's NOT-ENOUGH-INFO is a GOLD label, not an honest abstention, so we map the
 # model's reply to one of {supports, refutes, nei} and compare canonical labels. Order
-# matters: NEI cues first, then refute (so 'not supported'/'unsupported' route to
-# refutes before the bare 'support' substring can claim them), then support.
-_NEI = ("not enough info", "not enough information", "notenoughinfo", "nei",
-        "insufficient", "cannot determine", "cannot be determined", "unknown",
-        "not verifiable", "no info", "unclear", "not sure")
-_REF = ("refut", "false", "incorrect", "contradict", "disprov", "not support",
-        "unsupported")
-_SUP = ("support", "is true", "true", "correct", "verif")
+# matters and the cues are NEGATION-SAFE: every bare positive SUPPORT cue ('true',
+# 'correct', 'support') has its negated/incapable form listed under NEI or REF AND
+# checked first — so 'unverifiable'/'cannot verify' -> nei and 'not true'/'unsupported'
+# -> refutes, instead of greedily matching the 'verif'/'true'/'support' substring.
+_NEI = ("not enough info", "not enough information", "notenoughinfo", "nei", "insufficient",
+        "cannot determine", "cannot be determined", "undetermined", "unknown",
+        "not verifiable", "unverifiable", "cannot verify", "can't verify",
+        "cannot be verified", "unverified", "no evidence", "no information", "no info",
+        "unclear", "not sure")
+_REF = ("refut", "false", "incorrect", "not correct", "untrue", "not true", "contradict",
+        "disprov", "debunk", "not supported", "not support", "unsupported")
+_SUP = ("support", "true", "correct")
 
 
 def _to_label(s):
