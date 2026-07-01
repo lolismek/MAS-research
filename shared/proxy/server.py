@@ -91,7 +91,7 @@ TINKER = dict(
     model=os.environ.get('TINKER_MODEL', 'Qwen/Qwen3.6-35B-A3B'))
 # A thinking model with no client-set cap can generate unboundedly; bound per-call
 # output so a runaway think can't balloon cost (generous enough to finish + answer).
-TINKER_MAX_TOKENS = int(os.environ.get('TINKER_MAX_TOKENS', '8192'))
+TINKER_MAX_TOKENS = int(os.environ.get('TINKER_MAX_TOKENS', '28000'))
 
 
 def _redact_images(messages):
@@ -568,6 +568,12 @@ async def _handle_chat(req: Request, tag: str, backend: dict):
     clean, reasoning = _split_think(msg.get('content'))
     msg.pop('reasoning_content', None)               # Tinker leaves it empty; drop it
     finish = choice.get('finish_reason') or 'stop'
+    # Qwen3.6 always opens <think> (template-prefilled). If it hit the token cap without ever
+    # emitting the closing </think>, `content` is truncated reasoning, NOT an answer. Passing it
+    # through would dump the whole ramble as the agent's action (garbage first line) and pollute
+    # downstream agents. Replace it with a short sentinel so the turn is cleanly wasted instead.
+    if backend['name'] == 'tinker' and finish == 'length' and '</think>' not in (msg.get('content') or ''):
+        clean = "[the model could not finish reasoning within the token budget; no action produced this turn]"
     # Recover Qwen3.6's text <tool_call> syntax into structured tool_calls (AutoGen needs
     # them structured). Skip if upstream already structured them (e.g. a 2507 model).
     if not msg.get('tool_calls'):
