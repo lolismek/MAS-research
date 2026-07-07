@@ -60,6 +60,22 @@ MAX_TOOL_CHARS = 6000   # cap a web/tool result: one big fetched page can exceed
 FILE_TOOL_CHARS = 45000  # read_file returns the task's OWN attachment — don't clip data rows
 _FILE_TOOLS = {"read_file"}
 
+# The proxy replaces a think-truncated reply (finish=='length' with no closing </think>) with
+# this EXACT sentinel string (shared/proxy/server.py). Because it is non-empty, a naive
+# "retry only when content is empty" guard would accept it as a real answer. We detect it
+# explicitly so the wrap-up treats it as no-output and re-asks instead of crossing it.
+PROXY_TRUNCATION_SENTINEL = (
+    "[the model could not finish reasoning within the token budget; no action produced this turn]"
+)
+
+
+def _usable_text(content):
+    """A wrap-up reply is usable only if it is non-empty AND not the proxy's think-truncation
+    sentinel. Empty = the model emitted only a <tool_call>/think trace (proxy left content
+    null); sentinel = it spent the whole budget reasoning without ever answering."""
+    c = (content or "").strip()
+    return bool(c) and c != PROXY_TRUNCATION_SENTINEL
+
 
 def _est_prompt_tokens(messages):
     """Cheap char/4 estimate (no tiktoken in env); only used to leave output headroom,
@@ -115,6 +131,33 @@ def _bound_context(messages, trigger_headroom=_COMPACT_TRIGGER_HEADROOM,
         m["content"] = f"{_STUB_PREFIX}{label} -> {len(orig)} chars elided to free context"
 
 
+def _compact_for_wrapup(messages):
+    """Aggressively stub EVERY tool result except the most recent, in place, before a wrap-up
+    call (the hand-off note / forced commit). Unlike `_bound_context` this is unconditional:
+    a *reflective* ask ("summarize what you established") over many RAW tool dumps makes
+    Qwen3.6 re-read and re-analyze all of them and spiral past the token cap inside <think>,
+    yielding the proxy's truncation sentinel and NO note — even when the context is small
+    enough that lazy compaction never triggers (observed on gaia_983bba7c: ~12k prompt, still
+    'length'). Stubbing the dumps forces the note to be written from the worker's own memory
+    of what it found — which is exactly what a real hand-off is — not by re-deriving from
+    every fetched page. The freshest tool result is kept whole (the evidence in hand).
+    Idempotent: already-stubbed results are skipped. The agent's own assistant reasoning
+    turns are untouched."""
+    idx = _tool_call_index(messages)
+    tool_pos = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    keep_last = tool_pos[-1] if tool_pos else None
+    for i in tool_pos:
+        if i == keep_last:
+            continue
+        m = messages[i]
+        if (m.get("content") or "").startswith(_STUB_PREFIX):
+            continue
+        orig = m.get("content") or ""
+        label = idx.get(m.get("tool_call_id"), "tool result")
+        m["content"] = (f"{_STUB_PREFIX}{label} -> {len(orig)} chars elided; "
+                        "write your note from memory, do not re-fetch")
+
+
 def _is_context_overflow(e):
     s = str(e).lower()
     return "context" in s or "exceeds" in s or "max_tokens" in s
@@ -163,15 +206,21 @@ class AgentResult:
         return "FINAL ANSWER:" in (self.final or "")
 
 
-def _call(client, model, messages, specs, usd_budget):
+def _call(client, model, messages, specs, usd_budget, cap=None):
     """One model call with lazy context-bounding + a single compact-and-retry on overflow.
     Returns (message, finish_reason, over_budget). On unrecoverable overflow, returns a
-    synthetic (None, 'ctx_overflow', over_budget)."""
+    synthetic (None, 'ctx_overflow', over_budget). `cap`, if given, is an explicit hard
+    ceiling on output tokens (min'd with the adaptive room) — the wrap-up uses a small cap so
+    a think-spiral hits 'length' cheaply instead of burning the full context (a clean note is
+    ~1.5k tokens; a spiral would otherwise waste ~28k)."""
+    def _mt():
+        room = _max_tokens_for(messages)
+        return min(room, cap) if cap else room
     _bound_context(messages)
     try:
         resp = client.chat.completions.create(
             model=model, messages=messages, tools=specs, temperature=TEMPERATURE,
-            stream=False, max_tokens=_max_tokens_for(messages))
+            stream=False, max_tokens=_mt())
     except Exception as e:
         if not _is_context_overflow(e):
             raise
@@ -179,7 +228,7 @@ def _call(client, model, messages, specs, usd_budget):
         try:
             resp = client.chat.completions.create(
                 model=model, messages=messages, tools=specs, temperature=TEMPERATURE,
-                stream=False, max_tokens=_max_tokens_for(messages))
+                stream=False, max_tokens=_mt())
         except Exception:
             return None, "ctx_overflow", False
     over = usd_budget.charge(getattr(resp, "usage", None)) if usd_budget is not None else False
@@ -277,6 +326,13 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
 
 
 WRAPUP_MAX_TRIES = 3
+# The FIRST wrap-up attempt gets the full adaptive cap: a hard-but-solvable note can need a
+# long think first (observed on gaia_50f58759 — its good note required >6k output; a small cap
+# would regress it to a marker). RETRIES are capped cheaply: a retry after a think-spiral
+# ('length' -> the proxy sentinel) deterministically re-spirals at temperature 0, so paying the
+# full ~28k again is pure waste; the other retry case (an empty tool-call turn) barely thinks
+# anyway. So attempt 1 buys quality, attempts 2+ stay cheap.
+WRAPUP_RETRY_CAP = int(os.environ.get("DUET_WRAPUP_RETRY_CAP", "6000"))
 
 
 def continue_agent(result, user_prompt, client, model, addon, usd_budget=None) -> AgentResult:
@@ -286,13 +342,21 @@ def continue_agent(result, user_prompt, client, model, addon, usd_budget=None) -
     or the last shift is forced to commit. This is a terminal artifact (reflection /
     decision), NOT more investigation, so no tools are offered.
 
-    Robustness: a shift cut off mid-work often tries to keep investigating — it emits a
-    <tool_call>, which the proxy parses into tool_calls even though we sent no schemas,
-    leaving the visible content empty. We do NOT honor that call (there is no tool at a
-    wrap-up): we record the turn text-only and re-ask, firmly, for plain prose (up to
-    WRAPUP_MAX_TRIES). If it never writes text, `.final` is '' and the caller substitutes a
-    marker (raw reasoning / a blank must never cross an edge — rule 6)."""
+    Robustness (two coupled failure modes on Qwen3.6, both fixed here):
+      1. A shift cut off mid-work often tries to keep investigating — it emits a <tool_call>,
+         which the proxy parses into tool_calls even though we sent no schemas, leaving the
+         visible content empty.
+      2. Asked to REFLECT over its raw tool dumps, the model re-analyzes all of them and
+         spirals past the token cap inside <think>; the proxy returns its truncation sentinel
+         (finish=='length'), a NON-empty string that must not be mistaken for a real note.
+    We first `_compact_for_wrapup` (stub old tool dumps -> no spiral), then loop: any reply
+    that is empty, the sentinel, or a truncated ('length') generation is NOT honored — we
+    record it text-only (dropping unhonored tool_calls so ordering stays valid) and re-ask,
+    firmly, for plain prose (up to WRAPUP_MAX_TRIES). If it never writes usable text, `.final`
+    is '' and finish carries the last failure so the caller substitutes a marker (raw
+    reasoning / a blank / a truncated stub must never cross an edge — rule 6)."""
     messages = result.transcript
+    _compact_for_wrapup(messages)   # stub raw tool dumps so the reflective ask can't spiral
     messages.append({"role": "user", "content": user_prompt})
     n_extra = 0
     final, finish = "", "stop"
@@ -300,7 +364,8 @@ def continue_agent(result, user_prompt, client, model, addon, usd_budget=None) -
         if usd_budget is not None and usd_budget.exceeded:
             finish = "budget"
             break
-        msg, fr, _ = _call(client, model, messages, None, usd_budget)
+        cap = None if attempt == 0 else WRAPUP_RETRY_CAP   # full quality first, cheap retries
+        msg, fr, _ = _call(client, model, messages, None, usd_budget, cap=cap)
         n_extra += 1
         if msg is None:
             finish = "ctx_overflow"
@@ -309,11 +374,12 @@ def continue_agent(result, user_prompt, client, model, addon, usd_budget=None) -
         # ordering stays valid across retries (no dangling tool_calls awaiting a response).
         messages.append({"role": "assistant", "content": msg.content or ""})
         finish = "length" if fr == "length" else "stop"
-        content = (msg.content or "").strip()
-        if content:
-            final = content
+        # Usable only if it is real text AND cleanly terminated. A 'length' generation is a
+        # partial/spiralled note; retry for a clean short one rather than crossing a stub.
+        if fr != "length" and _usable_text(msg.content):
+            final = (msg.content or "").strip()
             break
-        if attempt < WRAPUP_MAX_TRIES - 1:      # empty (tool-call-only / think-only) -> re-ask
+        if attempt < WRAPUP_MAX_TRIES - 1:      # empty / sentinel / truncated -> re-ask firmly
             messages.append({"role": "user", "content": prompts.WRAPUP_NUDGE})
     out = AgentResult(role=result.role, final=final, n_steps=result.n_steps + n_extra,
                       n_tool_calls=result.n_tool_calls, transcript=messages, finish=finish)

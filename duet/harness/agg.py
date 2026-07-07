@@ -56,11 +56,19 @@ def main():
         secs = sum(r.get("seconds", 0) for r in rs)
         shifts = Counter(r.get("shifts_used") for r in rs if r.get("shifts_used") is not None)
         multi = sum(v for s, v in shifts.items() if s and s >= 2)
+        # note-yield: fraction of relay edges that carried a real hand-off (vs a marker). The
+        # transfer-robustness axis — compare across arms to catch note-truncation confounds.
+        tot_edges = sum(r.get("edges", 0) or 0 for r in rs)
+        tot_markers = sum(r.get("edge_markers", 0) or 0 for r in rs)
         print(f"\n== {key[0]} / {key[1]} / {key[2]} ==  n={n}  ${cost:.3f}  {secs:.0f}s")
         print("   outcomes: " + "  ".join(f"{o}={oc.get(o,0)}" for o in OUTCOMES))
         if shifts:
             dist = " ".join(f"{s}sh×{shifts[s]}" for s in sorted(shifts))
             print(f"   shifts_used: {dist}   (>=2 shifts: {multi}/{n} = {100*multi//max(n,1)}%)")
+        if tot_edges:
+            transferred = tot_edges - tot_markers
+            print(f"   note_yield: {transferred}/{tot_edges} edges carried a note "
+                  f"= {100*transferred//tot_edges}%  ({tot_markers} markers)")
         # per-task one-liners for eyeballing
         for r in sorted(rs, key=lambda x: x["id"]):
             extra = f" shifts={r.get('shifts_used')}" if r.get("shifts_used") else ""

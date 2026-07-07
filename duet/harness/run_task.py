@@ -125,6 +125,15 @@ def run_one(task, topology="relay", arm="vanilla", k=DEFAULT_K, tool_budget=DEFA
                     budget_tool_names=budget_tool_names, usd_budget=budget, env=env)
     dur = time.time() - t0
 
+    # Note-yield: what actually crossed each relay edge. A marker means the producer left no
+    # usable hand-off (think-spiral / empty wrap-up / a shift that established little), so ZERO
+    # information transferred there. Logged as a first-class axis so any vanilla-vs-arm gap in
+    # transfer robustness is MEASURED, not a hidden confound (the note-truncation concern).
+    import prompts as _p
+    edges = len(res.notes)
+    markers = sum(1 for nt in res.notes if nt == _p.TRUNCATED_MARKER)
+    note_yield = round((edges - markers) / edges, 3) if edges else None
+
     final = parse_final(res.final)
     expected = str(task["expected_answer"])
     answer_type = task.get("answer_type", "freeform")
@@ -139,6 +148,7 @@ def run_one(task, topology="relay", arm="vanilla", k=DEFAULT_K, tool_budget=DEFA
         k=k, tool_budget=tool_budget, shifts_used=res.shifts_used,
         final_answer=final, expected_answer=expected, outcome=outcome,
         committed=res.committed, budget_exceeded=res.budget_exceeded, finish=res.finish,
+        edges=edges, edge_markers=markers, note_yield=note_yield,
         env=(env.summary() if env is not None else None),
         exact_match=outcome == "correct",
         n_calls=res.n_calls, n_tool_calls=res.n_tool_calls,
@@ -159,8 +169,8 @@ def run_one(task, topology="relay", arm="vanilla", k=DEFAULT_K, tool_budget=DEFA
     print(f"[{topology}/{arm}/{tid}] {dur:.0f}s shifts={res.shifts_used} "
           f"final={final!r} expected={expected!r} outcome={outcome}{env_flag}"
           f"{' [BUDGET]' if res.budget_exceeded else ''} calls={res.n_calls} "
-          f"tools={res.n_tool_calls} tok={result['total_tokens']} cost=${result['cost_usd']:.3f} "
-          f"finishes={[a.finish for a in res.shifts]}", flush=True)
+          f"tools={res.n_tool_calls} notes={edges - markers}/{edges} tok={result['total_tokens']} "
+          f"cost=${result['cost_usd']:.3f} finishes={[a.finish for a in res.shifts]}", flush=True)
     return result
 
 

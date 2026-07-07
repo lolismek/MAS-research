@@ -13,7 +13,7 @@ import json, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "harness"))
 
 import prompts
-from agent import run_agent, Budget
+from agent import run_agent, Budget, _STUB_PREFIX, PROXY_TRUNCATION_SENTINEL
 from relay import run_relay
 from arms import get_addon
 
@@ -142,12 +142,15 @@ def test_loop_guard_trips_on_repeats():
 
 
 def test_truncated_note_becomes_marker():
-    """A hand-off note cut off mid-generation (finish_reason 'length') must NOT cross the
-    edge; the TRUNCATED_MARKER does instead (hygiene rule 6)."""
+    """A hand-off note that stays cut off (finish_reason 'length') across EVERY retry must
+    NOT cross the edge; the TRUNCATED_MARKER does instead (hygiene rule 6). A single 'length'
+    now triggers a nudge-retry, so persistent truncation is needed to reach the marker."""
     script = [
         tool_turn(("run_python", {"code": "print(1)"})),
         tool_turn(("run_python", {"code": "print(2)"})),
-        text_turn("this note was cut off mid-sen", finish="length"),   # truncated note
+        text_turn("this note was cut off mid-sen", finish="length"),   # attempt 1: truncated
+        text_turn("still spiralling, cut off", finish="length"),       # attempt 2 (post-nudge): truncated
+        text_turn("and truncated once more", finish="length"),         # attempt 3 (post-nudge): truncated
         text_turn("FINAL ANSWER: X"),                                  # shift 2 commit (early)
     ]
     c = FakeClient(script)
@@ -155,7 +158,50 @@ def test_truncated_note_becomes_marker():
     assert r.notes == [prompts.TRUNCATED_MARKER], r.notes
     joined = "".join(m.get("content") or "" for m in r.shifts[1].transcript if m["role"] == "user")
     assert prompts.TRUNCATED_MARKER in joined and "cut off mid-sen" not in joined
-    print("ok  test_truncated_note_becomes_marker  marker crossed, raw text withheld")
+    print("ok  test_truncated_note_becomes_marker  marker crossed after 3 truncated tries")
+
+
+def test_sentinel_wrapup_reasks_for_plaintext():
+    """The proxy replaces a think-truncated reply with a NON-empty sentinel string. A naive
+    'retry only when empty' guard would cross it as the note; instead it must be treated as
+    no-output and re-asked (the bug that caused gaia_983bba7c's markers)."""
+    script = [
+        tool_turn(("run_python", {"code": "print(1)"})),   # shift 1: spend B=2
+        tool_turn(("run_python", {"code": "print(2)"})),
+        text_turn(PROXY_TRUNCATION_SENTINEL, finish="length"),   # attempt 1: spiralled think -> sentinel
+        text_turn("RECOVERED NOTE after nudge"),                 # attempt 2 (post-nudge): the real note
+        text_turn("FINAL ANSWER: S"),                            # shift 2 early finish
+    ]
+    c = FakeClient(script)
+    r = run_relay("solve it", PY, c, "m", get_addon("vanilla"), k=2, tool_budget=2, usd_budget=budget())
+    assert r.notes == ["RECOVERED NOTE after nudge"], r.notes
+    assert PROXY_TRUNCATION_SENTINEL not in r.notes[0]
+    assert r.final == "FINAL ANSWER: S"
+    print("ok  test_sentinel_wrapup_reasks_for_plaintext  sentinel not mistaken for a note")
+
+
+def test_wrapup_compacts_tool_dumps():
+    """Before a wrap-up, raw tool dumps are stubbed (except the freshest) so the reflective
+    ask can't spiral over them; the note is written from memory (the gaia_983bba7c fix)."""
+    # Use computed outputs (7*6=42, 8*9=72) so the OUTPUT value is absent from the call args:
+    # a stub keeps the args as a re-fetchable label, so asserting on the output proves the
+    # raw result body was elided, not merely that the code string differs.
+    script = [
+        tool_turn(("run_python", {"code": "print(7*6)"})),     # tool result 0 (output '42') -> stubbed
+        tool_turn(("run_python", {"code": "print(8*9)"})),     # tool result 1 (output '72', freshest) -> kept
+        text_turn("NOTE: from memory"),                        # hand-off note (clean)
+        text_turn("FINAL ANSWER: ok"),                         # shift 2 early finish
+    ]
+    c = FakeClient(script)
+    r = run_relay("solve it", PY, c, "m", get_addon("vanilla"), k=2, tool_budget=2, usd_budget=budget())
+    tool_msgs = [m for m in r.shifts[0].transcript if m["role"] == "tool"]
+    assert len(tool_msgs) == 2, tool_msgs
+    assert tool_msgs[0]["content"].startswith(_STUB_PREFIX), "old tool dump not compacted before wrap-up"
+    assert "42" not in tool_msgs[0]["content"], "raw output survived compaction"
+    assert not tool_msgs[1]["content"].startswith(_STUB_PREFIX), "freshest tool result should be kept whole"
+    assert "72" in tool_msgs[1]["content"], "freshest evidence lost"
+    assert r.notes == ["NOTE: from memory"]
+    print("ok  test_wrapup_compacts_tool_dumps  old dumps stubbed, freshest kept")
 
 
 def test_empty_wrapup_reasks_for_plaintext():
