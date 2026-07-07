@@ -1,0 +1,216 @@
+"""Cell runner: (benchmark x topology x arm) -> scored, metered, persisted traces.
+
+A run = one task through one topology under one arm. Each run gets a unique proxy tag,
+so its every model call groups under that tag in shared/proxy/calls.jsonl and we
+self-meter tokens from there (Tinker exposes no usage API). Backend is the shared Tinker
+proxy route (/m/<tag>/v1), model 'gpt-4o' aliased upstream to Qwen/Qwen3.6-35B-A3B; the
+proxy must be running (PROXY_URL).
+
+Traces land in duet/traces/<topology>/<arm>/<bench>/<id>/run_N/. P0 wires only the RELAY
+topology and the VANILLA arm; hub/dialogue and the other arms register later without
+touching this file.
+
+Usage (from repo root). --tasks accepts a benchmark name (benchmarks/<name>/tasks.jsonl),
+a path, or a duet-local file (duet/tasks/<name>):
+  conda run -n autogen_gc python duet/harness/run_task.py --tasks smoke_relay.jsonl --all
+  conda run -n autogen_gc python duet/harness/run_task.py --tasks gaia --limit 3
+  conda run -n autogen_gc python duet/harness/run_task.py --tasks pddl pddl_000 --budget 8 --k 3
+"""
+import json, os, re, sys, time
+
+from openai import OpenAI
+
+from relay import run_relay, DEFAULT_K, DEFAULT_BUDGET
+from agent import Budget
+from tools import TOOL_PROFILES
+from arms import get_addon
+from scoring import classify_outcome, classify_pddl_outcome
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)                       # duet/
+REPO_ROOT = os.path.dirname(ROOT)                  # multi-benchmark-eval/
+TASKS_DIR = os.path.join(ROOT, "tasks")            # duet-local smoke files
+BENCH_DIR = os.path.join(REPO_ROOT, "benchmarks")  # framework-agnostic benchmark data
+TRACES = os.path.join(ROOT, "traces")
+CALLS_LOG = os.path.join(REPO_ROOT, "shared", "proxy", "calls.jsonl")
+
+PROXY = os.environ.get("PROXY_URL", "http://127.0.0.1:8744/v1")
+MODEL = os.environ.get("DUET_MODEL", "gpt-4o")     # aliased to Qwen by the proxy
+
+# Tinker console rates for Qwen/Qwen3.6-35B-A3B, USD per MILLION tokens. No usage API ->
+# self-meter tokens from calls.jsonl and price them here.
+PREFILL_PER_MTOK = float(os.environ.get("DUET_PREFILL_RATE", 0.36))
+SAMPLE_PER_MTOK = float(os.environ.get("DUET_SAMPLE_RATE", 0.89))
+
+# Per-task USD safety cap: a runaway task stops and publishes an honest UNKNOWN. A relay
+# is K shifts deep, so size it above the most expensive legitimate run (raised over camel's
+# single-pipeline $1 because K=3 shifts each with a tool budget cost more).
+BUDGET_USD = float(os.environ.get("DUET_BUDGET_USD", "2.0"))
+
+# PDDL bills only env steps toward the shift budget (observe/actions are free lookups).
+_BUDGET_TOOLS = {"pddl": {"pddl_step"}}
+
+
+def parse_final(text):
+    m = re.findall(r"FINAL ANSWER:\s*(.+)", text or "")
+    return m[-1].strip() if m else (text or "").strip()
+
+
+def client_for(tag):
+    base, v1 = PROXY.rsplit("/", 1)
+    return OpenAI(base_url=f"{base}/m/{tag}/{v1}", api_key="dummy")
+
+
+def meter(tag, t0):
+    """Sum tokens/calls for this run's tag from the proxy log (lines at/after t0)."""
+    pt = ct = n = errs = 0
+    if os.path.exists(CALLS_LOG):
+        for line in open(CALLS_LOG):
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if r.get("tag") != tag or r.get("ts", 0) < t0 - 1:
+                continue
+            n += 1
+            if r.get("error"):
+                errs += 1
+                continue
+            pt += r.get("prompt_tokens", 0) or 0
+            ct += r.get("completion_tokens", 0) or 0
+    cost = round(pt / 1e6 * PREFILL_PER_MTOK + ct / 1e6 * SAMPLE_PER_MTOK, 6)
+    return dict(proxy_calls=n, proxy_errors=errs, prompt_tokens=pt,
+                completion_tokens=ct, total_tokens=pt + ct, cost_usd=cost)
+
+
+def run_one(task, topology="relay", arm="vanilla", k=DEFAULT_K, tool_budget=DEFAULT_BUDGET,
+            budget_usd=None):
+    tid = task["id"]
+    bench = task.get("bench", "unknown")
+    profile = task.get("tool_profile", "none")
+    tool_names = TOOL_PROFILES[profile]
+    budget_tool_names = _BUDGET_TOOLS.get(profile)
+    env = None
+    if profile == "pddl":
+        from pddl_env import PddlEnv
+        env = PddlEnv(task.get("meta") or {})
+
+    runs_dir = os.path.join(TRACES, topology, arm, bench, tid)
+    n = 1
+    while os.path.exists(os.path.join(runs_dir, f"run_{n}")):
+        n += 1
+    rundir = os.path.join(runs_dir, f"run_{n}")
+    os.makedirs(rundir)
+    tag = f"duet_{topology}_{arm}_{tid}_run{n}"
+
+    question = task["question"]
+    floc = (task.get("meta") or {}).get("file_local")     # staged attachment (GAIA doc tasks)
+    if floc:
+        apath = os.path.join(REPO_ROOT, floc)
+        question += prompts_attachment(apath)
+
+    with open(os.path.join(rundir, "prompt.txt"), "w") as f:
+        f.write(question)
+    with open(os.path.join(rundir, "expected_answer.txt"), "w") as f:
+        f.write(str(task["expected_answer"]))
+
+    print(f"[{topology}/{arm}/{tid}] profile={profile} B={tool_budget} K={k} starting", flush=True)
+    t0 = time.time()
+    budget = Budget(BUDGET_USD if budget_usd is None else budget_usd,
+                    PREFILL_PER_MTOK, SAMPLE_PER_MTOK)
+    client = client_for(tag)
+    addon = get_addon(arm)
+    addon.bind(client, MODEL, budget)
+    res = run_relay(question, tool_names, client, MODEL, addon, k=k, tool_budget=tool_budget,
+                    budget_tool_names=budget_tool_names, usd_budget=budget, env=env)
+    dur = time.time() - t0
+
+    final = parse_final(res.final)
+    expected = str(task["expected_answer"])
+    answer_type = task.get("answer_type", "freeform")
+    if answer_type == "pddl":
+        outcome = classify_pddl_outcome(final, env, committed=res.committed)
+    else:
+        outcome = classify_outcome(final, expected, answer_type, committed=res.committed)
+
+    result = dict(
+        id=tid, topology=topology, arm=arm, run=n, bench=bench, tool_profile=profile,
+        answer_type=answer_type, seconds=round(dur, 1),
+        k=k, tool_budget=tool_budget, shifts_used=res.shifts_used,
+        final_answer=final, expected_answer=expected, outcome=outcome,
+        committed=res.committed, budget_exceeded=res.budget_exceeded, finish=res.finish,
+        env=(env.summary() if env is not None else None),
+        exact_match=outcome == "correct",
+        n_calls=res.n_calls, n_tool_calls=res.n_tool_calls,
+        per_shift=[dict(role=a.role, finish=a.finish, steps=a.n_steps,
+                        tool_calls=a.n_tool_calls, final=a.final[:400]) for a in res.shifts],
+        **meter(tag, t0))
+    with open(os.path.join(rundir, "result.json"), "w") as f:
+        json.dump(result, f, indent=1)
+    with open(os.path.join(rundir, "transcript.json"), "w") as f:
+        json.dump([dict(role=a.role, finish=a.finish, transcript=a.transcript)
+                   for a in res.shifts], f, indent=1)
+    if res.notes:                                  # the hand-off notes that crossed edges
+        with open(os.path.join(rundir, "handoff_notes.txt"), "w") as f:
+            for j, note in enumerate(res.notes, 1):
+                f.write(f"===== edge {j} -> shift_{j + 1} =====\n{note}\n\n")
+
+    env_flag = f" goal={'✓' if env and env.goal_reached() else '✗'}" if env else ""
+    print(f"[{topology}/{arm}/{tid}] {dur:.0f}s shifts={res.shifts_used} "
+          f"final={final!r} expected={expected!r} outcome={outcome}{env_flag}"
+          f"{' [BUDGET]' if res.budget_exceeded else ''} calls={res.n_calls} "
+          f"tools={res.n_tool_calls} tok={result['total_tokens']} cost=${result['cost_usd']:.3f} "
+          f"finishes={[a.finish for a in res.shifts]}", flush=True)
+    return result
+
+
+def prompts_attachment(path):
+    import prompts
+    return prompts.ATTACHMENT_NOTE.format(path=path)
+
+
+def resolve_tasks(spec):
+    cands = [os.path.join(BENCH_DIR, spec, "tasks.jsonl"), spec,
+             os.path.join(REPO_ROOT, spec), os.path.join(TASKS_DIR, spec)]
+    for p in cands:
+        if os.path.isfile(p):
+            return p
+    sys.exit(f"--tasks {spec!r} not found (looked in benchmarks/, cwd, repo root, duet/tasks/)")
+
+
+def load_tasks(path):
+    if path.endswith(".jsonl"):
+        return [json.loads(line) for line in open(path) if line.strip()]
+    return json.load(open(path))
+
+
+def pop_opt(args, flag):
+    if flag in args:
+        i = args.index(flag)
+        return args[i + 1], args[:i] + args[i + 2:]
+    return None, args
+
+
+def main():
+    args = sys.argv[1:]
+    topology, args = pop_opt(args, "--topology"); topology = topology or "relay"
+    arm, args = pop_opt(args, "--arm"); arm = arm or "vanilla"
+    spec, args = pop_opt(args, "--tasks"); spec = spec or "smoke_relay.jsonl"
+    k, args = pop_opt(args, "--k"); k = int(k) if k else DEFAULT_K
+    budget, args = pop_opt(args, "--budget"); budget = int(budget) if budget else DEFAULT_BUDGET
+    limit, args = pop_opt(args, "--limit")
+
+    if topology != "relay":
+        sys.exit(f"P0 wires only topology=relay (got {topology!r})")
+    tasks = load_tasks(resolve_tasks(spec))
+    sel = tasks if (args == ["--all"] or not args) else [t for t in tasks if t["id"] in args]
+    if limit:
+        sel = sel[:int(limit)]
+    if not sel:
+        sys.exit(f"no tasks matched {args}; have e.g. {[t['id'] for t in tasks[:8]]}")
+    results = [run_one(t, topology=topology, arm=arm, k=k, tool_budget=budget) for t in sel]
+    print(json.dumps(results, indent=1))
+
+
+if __name__ == "__main__":
+    main()
