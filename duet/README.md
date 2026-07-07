@@ -1,0 +1,117 @@
+# duet/ — two asymmetry geometries × three mechanism families
+
+A fresh, minimal MAS harness built to isolate **inter-agent misalignment** to its cause —
+information asymmetry — in exactly two geometries, and to race mechanism families
+(context / protocol / **shared belief state**) across them. The design rationale,
+predictions, and full build order are in **[PLAN.md](PLAN.md)**; this README tracks what
+is actually built and how to run it.
+
+## Status
+
+| Phase | What | State |
+|---|---|---|
+| **P0** | agent primitive + **RELAY** topology + `vanilla` arm + calibration | ✅ done |
+| P1 | **HUB** topology + FEVER-compound filter + FanOutQA loader | ⬜ next |
+| P2 | `store.py` + the 6 real arms + prompt-diff audit | ⬜ |
+| P3 | metrics + process judges + challenge suite | ⬜ |
+| P4 | full grid (handed to user to run) | ⬜ |
+| P5 | **DIALOGUE** topology + gradient cell | ⬜ |
+
+## The agent primitive (`harness/agent.py`)
+
+`run_agent(...)` is the ONLY place an LLM is called: one ReAct inner loop (model → tool
+calls → observe → …) that stops when the model stops, spends its **tool-call budget B**,
+trips the repeated-action guard, or hits a truncation/backstop. `continue_agent(...)`
+appends one user message to a finished agent and does a single no-tool call — this is the
+wrap-up seam (the hand-off note; the last shift's forced commit), keeping the wrap-up its
+own delimited message (hygiene rule 3).
+
+Two independent budgets: **B** (tool calls) forces the hand-off so "when to hand off" is
+never a confound; **usd_budget** is a per-task USD safety cap that short-circuits a runaway
+task to an honest `UNKNOWN`. Hard-won guards ported from `camel/`: truncated output never
+crosses an edge (a marker does), lazy context compaction under the 64k wall, and a **28k
+output cap** (Qwen3.6's think trace counts against `max_tokens`; 8k truncates hard GAIA
+reasoning before the answer — measured, not assumed).
+
+### The wrap-up spiral (and why the note-yield metric exists)
+
+Asked to *reflect* ("summarize what you established") over its raw tool dumps, Qwen3.6
+re-analyzes all of them and spirals past the token cap inside `<think>` — the proxy then
+returns a **non-empty truncation sentinel**, not a note. Two things were wrong and are now
+fixed in `continue_agent`: (1) the sentinel was mistaken for a real note (the retry only
+fired on *empty* content); (2) nothing stopped the spiral. The fix: **compact the tool
+dumps to stubs before every wrap-up** (the note is written from the worker's memory of what
+it found — what a real hand-off is — not by re-reading every page), treat
+sentinel/`length`/empty as no-output and **re-ask** (first try at full quality, retries at a
+cheap cap since a re-spiral is deterministic at temp 0). This took GAIA note-yield from
+~0/6 → 5/6 and every wrap-up now finishes cleanly. The residual markers are *faithful* — a
+shift that truncated early established little to hand off — and are surfaced as a
+first-class **`note_yield`** axis (per-run `edges`/`edge_markers`/`note_yield`, per-cell in
+`agg.py`) so any arm-to-arm gap in transfer robustness is measured, never a hidden confound.
+
+## Topology 1 — RELAY (`harness/relay.py`)
+
+K=3 identical shifts work one task in sequence; each is a fresh context with budget B; at
+budget exhaustion a shift is asked (with its working memory intact) for a free-text
+hand-off note, and the next shift starts from `[task, that note]` — **never** the
+predecessor's transcript. That destroyed-context edge is the **temporal asymmetry**. The
+PDDL world persists across shifts (the note carries beliefs about world state). Full
+mechanics: PLAN "Topology 1".
+
+## The arm seam (`harness/arms.py`)
+
+An arm is a policy over two decisions: what crosses an edge, and what is written to /
+rendered from one shared store. P0 ships only `vanilla` — an all-no-op `AddOn` == the
+seamless harness. The belief ledger (`store.py`) and the six real arms (`full`, `sop`,
+`down`, `board`, `extract`, `board_inert`) land in P2 on these same hooks, so agent/relay/
+hub code does not change.
+
+## Layout
+
+```
+harness/
+  prompts.py    # ALL literal prompt strings (hygiene rule 7)
+  agent.py      # run_agent + continue_agent — the only LLM callers
+  tools.py      # web_search, fetch_url, run_python, read_file (+ PDDL env schemas)  [ported]
+  pddl_env.py   # interactive pddlgym world (per-task, stateful)                     [ported]
+  scoring.py    # LaTeX-aware + negation-safe FEVER + PDDL scorers                   [ported]
+  relay.py      # the shift loop: K × budget B, forced hand-off
+  arms.py       # the arm seam (P0: vanilla only)
+  run_task.py   # cell runner: (bench × topology × arm) → traces/…/run_N/
+  agg.py        # scoreboard + relay shifts-used calibration view
+tasks/
+  smoke_relay.jsonl   # 3 GAIA + 2 PDDL P0 smoke slice
+tests/
+  test_relay_offline.py   # scripted fake client — mechanics, NO LLM / NO network
+```
+
+## Run
+
+The harness needs the shared Tinker proxy running (`PROXY_URL`, default
+`http://127.0.0.1:8744/v1`). Web benchmarks (GAIA/FEVER/FanOutQA) run under **`autogen_gc`**;
+PDDL needs **`camel_pddl`** (has `pddlgym`).
+
+```
+# offline mechanics test (no spend)
+conda run -n autogen_gc python duet/tests/test_relay_offline.py
+
+# relay vanilla smoke
+conda run -n autogen_gc python duet/harness/run_task.py --tasks smoke_relay.jsonl gaia_50f58759
+conda run -n camel_pddl  python duet/harness/run_task.py --tasks smoke_relay.jsonl pddl_001
+
+# scoreboard + calibration
+conda run -n autogen_gc python duet/harness/agg.py
+```
+
+Knobs: `--arm vanilla` · `--k 3` (shifts) · `--budget 8` (B, tool calls / env steps).
+
+## P0 result (relay · vanilla · smoke)
+
+Calibration gate — *"budget B tuned so vanilla uses ≥2 shifts on ~70% of tasks"*: **met
+(5/5 = 100% at B=8, K=3).** Hand-off notes are faithful (PDDL notes carry exact world
+state + a next-step plan; GAIA notes summarize evidence and open threads). The 4-way
+outcome axis fires across the slice (correct / wrong-confident / abstained). **Note-yield
+after the wrap-up-spiral fix: GAIA 5/6 (83%), PDDL 2/2 (100%)** — every wrap-up finishes
+`stop`; the one GAIA marker is a shift that truncated on an action turn before establishing
+much. Scoreboard is regenerated by `agg.py`; see `traces/relay/vanilla/` and each run's
+`handoff_notes.txt`.
