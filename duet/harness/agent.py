@@ -293,7 +293,8 @@ def _sig(tc):
 
 def run_agent(role, system_prompt, task_messages, tool_names, client, model,
               addon, tool_budget=None, budget_tool_names=None,
-              max_inner_steps=MAX_INNER_STEPS, usd_budget=None, env=None) -> AgentResult:
+              max_inner_steps=MAX_INNER_STEPS, usd_budget=None, env=None,
+              resume=None) -> AgentResult:
     """Run one agent's internal loop and return its AgentResult.
 
     `task_messages` is the user-side context (task + any hand-off note / shared-state).
@@ -306,8 +307,16 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
 
     `budget_tool_names`: if None, every tool call counts toward `tool_budget`; else only
     calls with those names count (PDDL bills 'pddl_step' env steps, not free observe/actions
-    lookups — PLAN relay mechanic 1). All calls are always metered in `n_tool_calls`."""
-    messages = [{"role": "system", "content": system_prompt}] + list(task_messages)
+    lookups — PLAN relay mechanic 1). All calls are always metered in `n_tool_calls`.
+
+    `resume`: a PERSISTENT message list from this agent's previous turns (dialogue
+    topology) — used verbatim instead of building [system]+task_messages, so the agent
+    keeps its whole working memory across turns. The caller appends the new incoming
+    user messages before calling; `inject_context` still runs (a store re-render
+    REPLACES its previous block — the arms' no-accumulation contract). Counters
+    (n_steps/n_tool_calls, the budget) are per-call: each turn gets a fresh budget."""
+    messages = resume if resume is not None else (
+        [{"role": "system", "content": system_prompt}] + list(task_messages))
     messages = addon.inject_context(role, messages)
     base_specs = tool_specs(tool_names) or []
     extra_specs = addon.extra_tool_specs(role)

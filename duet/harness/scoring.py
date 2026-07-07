@@ -222,8 +222,33 @@ def _match_label(final, expected):
     return le is not None and _to_label(final) == le
 
 
+# --- list answers (FanOutQA) -------------------------------------------------
+def _match_list(final, expected):
+    """`expected` is a JSON-encoded list of gold items (FanOutQA aggregation answers).
+    Correct iff EVERY gold item appears in the reply — word-bounded or numerically
+    (so '1,234,567' matches '1234567' after _norm strips commas). Order-insensitive;
+    one missing/wrong branch fails the whole answer (that is the benchmark's point).
+    Extra prose is tolerated: the reply is an aggregation sentence, not a bare list."""
+    try:
+        gold = json.loads(expected)
+    except (TypeError, ValueError):
+        gold = [expected]
+    nf = _norm(final)
+    nf_tokens = [_norm(t) for t in re.split(r"[,;\n]| and ", final or "")]
+    for g in gold:
+        ng = _norm(str(g))
+        if not ng:
+            continue
+        if _alias_hit(nf, ng):
+            continue
+        if any(_num_eq(t, ng) or t == ng for t in nf_tokens):
+            continue
+        return False
+    return True
+
+
 _MATCHERS = {"freeform": _match_freeform, "mcq": _match_mcq, "math": _match_math,
-             "qa": _match_qa, "label": _match_label}
+             "qa": _match_qa, "label": _match_label, "list": _match_list}
 
 
 def match(final, expected, answer_type="freeform"):
