@@ -32,7 +32,9 @@ class _TC:
 
 
 class _Msg:
-    def __init__(self, content, tool_calls): self.content, self.tool_calls = content, tool_calls
+    def __init__(self, content, tool_calls, reasoning=None):
+        self.content, self.tool_calls = content, tool_calls
+        self.reasoning_content = reasoning       # mirrors the proxy's recovered <think> trace
 
 
 class _Choice:
@@ -47,13 +49,13 @@ class _Resp:
     def __init__(self, msg, fr): self.choices, self.usage = [_Choice(msg, fr)], _Usage()
 
 
-def tool_turn(*calls):
+def tool_turn(*calls, reasoning=None):
     """calls: (name, args_dict) pairs -> one assistant turn requesting those tools."""
-    return _Resp(_Msg(None, [_TC(n, json.dumps(a)) for n, a in calls]), "tool_calls")
+    return _Resp(_Msg(None, [_TC(n, json.dumps(a)) for n, a in calls], reasoning), "tool_calls")
 
 
-def text_turn(content, finish="stop"):
-    return _Resp(_Msg(content, None), finish)
+def text_turn(content, finish="stop", reasoning=None):
+    return _Resp(_Msg(content, None, reasoning), finish)
 
 
 class _Completions:
@@ -180,28 +182,64 @@ def test_sentinel_wrapup_reasks_for_plaintext():
     print("ok  test_sentinel_wrapup_reasks_for_plaintext  sentinel not mistaken for a note")
 
 
-def test_wrapup_compacts_tool_dumps():
-    """Before a wrap-up, raw tool dumps are stubbed (except the freshest) so the reflective
-    ask can't spiral over them; the note is written from memory (the gaia_983bba7c fix)."""
+def test_wrapup_compacts_wire_but_keeps_raw_transcript():
+    """The wrap-up must see the raw tool dumps STUBBED (except the freshest) so a reflective
+    ask can't spiral over them (the gaia_983bba7c fix) — but the SAVED transcript must KEEP
+    the raw observations (the audit trail). So compaction is on the wire the model sees, not
+    on the stored record."""
     # Use computed outputs (7*6=42, 8*9=72) so the OUTPUT value is absent from the call args:
     # a stub keeps the args as a re-fetchable label, so asserting on the output proves the
-    # raw result body was elided, not merely that the code string differs.
+    # raw result body was elided (or kept), not merely that the code string differs.
     script = [
-        tool_turn(("run_python", {"code": "print(7*6)"})),     # tool result 0 (output '42') -> stubbed
-        tool_turn(("run_python", {"code": "print(8*9)"})),     # tool result 1 (output '72', freshest) -> kept
+        tool_turn(("run_python", {"code": "print(7*6)"})),     # tool result 0 (output '42') -> older
+        tool_turn(("run_python", {"code": "print(8*9)"})),     # tool result 1 (output '72') -> freshest
         text_turn("NOTE: from memory"),                        # hand-off note (clean)
         text_turn("FINAL ANSWER: ok"),                         # shift 2 early finish
     ]
     c = FakeClient(script)
     r = run_relay("solve it", PY, c, "m", get_addon("vanilla"), k=2, tool_budget=2, usd_budget=budget())
+
+    # (1) SAVED transcript keeps BOTH raw observations — nothing clobbered.
     tool_msgs = [m for m in r.shifts[0].transcript if m["role"] == "tool"]
     assert len(tool_msgs) == 2, tool_msgs
-    assert tool_msgs[0]["content"].startswith(_STUB_PREFIX), "old tool dump not compacted before wrap-up"
-    assert "42" not in tool_msgs[0]["content"], "raw output survived compaction"
-    assert not tool_msgs[1]["content"].startswith(_STUB_PREFIX), "freshest tool result should be kept whole"
-    assert "72" in tool_msgs[1]["content"], "freshest evidence lost"
+    assert not tool_msgs[0]["content"].startswith(_STUB_PREFIX) and "42" in tool_msgs[0]["content"], \
+        "raw observation was clobbered in the saved transcript"
+    assert "72" in tool_msgs[1]["content"], "freshest observation lost from the saved transcript"
+
+    # (2) the WIRE the model saw at the wrap-up (the no-tools call) had the older dump stubbed.
+    wrap_calls = [kw for kw in c.calls if kw.get("tools") is None]
+    assert wrap_calls, "no wrap-up (no-tools) call was recorded"
+    wire_tools = [m for m in wrap_calls[0]["messages"] if m.get("role") == "tool"]
+    assert len(wire_tools) == 2, wire_tools
+    assert wire_tools[0]["content"].startswith(_STUB_PREFIX) and "42" not in wire_tools[0]["content"], \
+        "old dump not stubbed on the wrap-up wire (spiral risk)"
+    assert not wire_tools[1]["content"].startswith(_STUB_PREFIX) and "72" in wire_tools[1]["content"], \
+        "freshest evidence should still reach the model"
     assert r.notes == ["NOTE: from memory"]
-    print("ok  test_wrapup_compacts_tool_dumps  old dumps stubbed, freshest kept")
+    print("ok  test_wrapup_compacts_wire_but_keeps_raw_transcript  wire stubbed, record raw")
+
+
+def test_reasoning_captured_but_not_resent():
+    """The model's recovered <think> trace (reasoning_content) is stored on each assistant
+    turn for auditing, but is STRIPPED from every outgoing request (resending past CoT would
+    balloon prompt tokens and some backends 400 on the unknown field)."""
+    script = [
+        tool_turn(("run_python", {"code": "print(1)"}), reasoning="Let me run the code first."),
+        tool_turn(("run_python", {"code": "print(2)"}), reasoning="Now the second step."),
+        text_turn("NOTE with a plan", reasoning="Summarising what I established."),
+        text_turn("FINAL ANSWER: done", reasoning="I'm confident now."),
+    ]
+    c = FakeClient(script)
+    r = run_relay("solve it", PY, c, "m", get_addon("vanilla"), k=2, tool_budget=2, usd_budget=budget())
+    # stored: at least one assistant turn carries its CoT
+    assts = [m for sh in r.shifts for m in sh.transcript if m["role"] == "assistant"]
+    assert any(m.get("reasoning_content") for m in assts), "no reasoning_content captured on the transcript"
+    assert any("Let me run the code first." == m.get("reasoning_content") for m in assts), "CoT text not stored"
+    # wire: NO outgoing request ever carried reasoning_content
+    for kw in c.calls:
+        for m in kw["messages"]:
+            assert "reasoning_content" not in m, "reasoning_content leaked onto the wire"
+    print("ok  test_reasoning_captured_but_not_resent  CoT stored, never resent")
 
 
 def test_empty_wrapup_reasks_for_plaintext():
