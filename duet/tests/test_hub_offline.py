@@ -147,6 +147,28 @@ def test_unusable_report_becomes_marker():
     print("ok  test_unusable_report_becomes_marker")
 
 
+def test_merge_length_death_gets_constrained_retry():
+    """Live regression (hub smoke, 2/14 runs): the merge dies at finish=='length' with
+    the proxy's think-truncation sentinel as its whole reply. That reply stores only the
+    tiny sentinel, so the constrained NO_FINAL_RETRY starts from a clean context and
+    must FIRE (it used to be skipped for any truncated finish -> guaranteed no_answer)."""
+    from agent import PROXY_TRUNCATION_SENTINEL
+    script = [
+        text_turn("SUBQ: is A true?"),                              # decompose (degenerate)
+        text_turn("Looked into A; it checks out."),                 # worker_1 working turn
+        text_turn(REPORT_1),                                        # worker_1 report wrap-up
+        text_turn(PROXY_TRUNCATION_SENTINEL, finish="length"),      # merge rabbit-holes
+        text_turn("FINAL ANSWER: yes"),                             # constrained retry lands
+    ]
+    c = FakeClient(script)
+    r = run_hub("claim", PY, c, "m", get_addon("vanilla"), worker_budget=2, usd_budget=budget())
+    assert not c.script, "the retry call was not made"
+    retry_ask = c.calls[-1]["messages"][-1]["content"]
+    assert prompts.NO_FINAL_RETRY in retry_ask
+    assert r.final == "FINAL ANSWER: yes" and r.committed
+    print("ok  test_merge_length_death_gets_constrained_retry")
+
+
 def test_usd_budget_short_circuits():
     """Once the USD cap latches, the hub publishes an honest UNKNOWN instead of
     thrashing through the remaining rounds."""

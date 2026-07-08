@@ -64,6 +64,41 @@ def textually_compound(claim):
     return bool(_COORD_VP.search(c) or _REL_CLAUSE.search(c) or _APPOSITION.search(c))
 
 
+# --- NEI label-noise screen (hand-review, 2026-07-07) ---------------------------
+# FEVER's NOT-ENOUGH-INFO is relative to the 2017 wiki snapshot. Run OPEN-BOOK, an
+# NEI gold is only trustworthy when the claim has a genuinely unverifiable conjunct
+# ("has a fan base", "is highly usable") — those measure honest abstention. NEI
+# claims where EVERY part is objectively decidable today (or one part is verifiably
+# false, which decides the whole claim under "every part must hold") are label
+# noise and are excluded by original_id below. Reviewed by hand; extend this list
+# when regenerating with a larger PER_CLASS.
+_NEI_NOISY_IDS = {
+    161127,  # "Jarhead ... produced by Sam Mendes" — Mendes directed it; decidable
+    158310,  # "Kenny Chesney ... born in Kentucky" — born in Knoxville, TN; decidable REFUTES
+    171489,  # "Jiang Wen is from China and is a professional director" — decidable SUPPORTS
+    34750,   # "Night of the Living Dead ... created the image of the modern zombie" — documented
+    23956,   # "electric chair ... South Carolina, and redwood" — ill-formed mutation, models REFUTE
+    109365,  # "MiLB ... International League, Pacific Coast League, Mexican League" — all checkable
+    54055,   # "electric chair is NOT optional in AL/FL/SC/VA as of 2014" — it was; decidable REFUTES
+    4868,    # "Shannon Lee born in 1969 and is a Baby Boomer" — 1969 > 1964; decidable REFUTES
+    18452,   # "Yugoslavia consisted of the coterminous Balkan peninsula" — decidably false conjunct
+    168077,  # "Jean-Jacques Dessalines was a pacifist" — decidably false
+    188653,  # "Foot Locker's full business name ... stock market" — listing name checkable
+    191882,  # "Padua ... located 30 miles from Rome" — ~300 miles; decidable REFUTES
+    134439,  # "Harrison divorced Pattie Boyd, who acted in Help!, in 1977" — all conjuncts checkable
+    108308,  # "Louie (season 1) written/directed by Louis C.K., based on his life" — documented
+    109606,  # "Caesar was directed and produced by Cary Grant" — Grant never directed; decidable
+    # near-duplicate NEI families (same unverifiable conjunct, keep <=2 per family):
+    101505,  # 4th "John S. McCain Jr. ... has a fan base" variant
+    121571,  # 3rd "John S. McCain Jr. ... has a fan base" variant
+    18088,   # 2nd "Python ... is very usable" variant
+}
+
+
+def nei_noisy(row):
+    return row.get("label") == "NOT ENOUGH INFO" and row.get("original_id") in _NEI_NOISY_IDS
+
+
 def multi_page(row):
     pages = {e[0] for e in row.get("evidence") or [] if e and e[0]}
     return len(pages) >= 2
@@ -105,7 +140,7 @@ def build():
         if lab not in buckets or len(buckets[lab]) >= PER_CLASS * (3 if LLM_SCREEN else 1):
             continue
         claim = r["claim"].strip()
-        if claim.lower() in seen_claims or not is_compound(r):
+        if claim.lower() in seen_claims or not is_compound(r) or nei_noisy(r):
             continue
         seen_claims.add(claim.lower())
         buckets[lab].append(r)

@@ -221,7 +221,11 @@ def run_hub(task_prompt, tool_names, client, model, addon, *,
         if usd_budget is not None and usd_budget.exceeded:
             return _unknown(None, shape=out)
 
-    if not mer.has_final_answer and not mer.truncated:   # format slip -> constrained retry
+    # Format slip OR a think-rabbit-hole (finish=='length' stores only the tiny
+    # placeholder, so the retry context is clean) -> ONE constrained retry. Skipping
+    # the retry on truncation lost 2/14 hub smokes to no_answer; only ctx_overflow
+    # is unretryable (the context itself is full).
+    if not mer.has_final_answer and mer.finish != "ctx_overflow":
         mer = continue_agent(mer, prompts.NO_FINAL_RETRY, client, model, addon,
                              usd_budget=usd_budget)
         out.orch[-1] = mer

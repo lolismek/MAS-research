@@ -181,13 +181,53 @@ dialogue turn cap) · `--budget` (tool calls per shift / worker / turn; defaults
   rendered block — the no-cooperation acquisition path works end-to-end.
 - **relay · down · feverc_008**: early single-shift finish → no edge, challenge never
   fired (valid mechanic; exercised offline). ALSO surfaced a **benchmark caveat**: the
-  claim (gold NOT ENOUGH INFO) is verifiable on today's web — FEVER NEI labels reflect
-  the 2017 Wikipedia snapshot, so under the OPEN-BOOK bridge the NEI class will carry
-  label noise (a model can legitimately verify some "NEI" claims). Before the full grid,
-  decide: keep NEI and read its accuracy as snapshot-relative, or hand-screen the ~20
-  NEI bridge claims for currently-unverifiable ones.
+  claim (gold NOT ENOUGH INFO) was verifiable on today's web — FEVER NEI labels reflect
+  the 2017 Wikipedia snapshot. **RESOLVED by hand-screen** (`_NEI_NOISY_IDS` in
+  `benchmarks/fever_compound/prep.py`): NEI claims where every conjunct is objectively
+  decidable open-book today (or one conjunct is decidably false, which settles the whole
+  claim under "every part must hold") are excluded; the 13 surviving NEI claims each
+  carry a genuinely unverifiable conjunct ("has a fan base", "is highly usable") and so
+  measure honest abstention. Set size is now 48 (21 SUP / 14 REF / 13 NEI) — the
+  textual-compoundness filter exhausts FEVER's test split, so PLAN's 60–80 target is
+  not reachable without loosening the filter; the class imbalance is documented, agg
+  reads per-label anyway. (The pre-screen `relay/down/feverc_008` trace is archived in
+  `traces_archive/`.) Hub plan-compression got a prompt fix in the same pass:
+  `ORCH_DECOMPOSE_SYS` now forbids settling facts from memory (every fact the answer
+  depends on must appear in some sub-question; batching lookups is allowed).
 - **dialogue · vanilla · feverc_001**: peer_A decomposed the claim and proposed REFUTES
   turn 1, peer_B ratified turn 2 — correct, `ratified=true`.
+
+## Full 3×7 grid smoke (2026-07-07, every topology × arm on feverc_001 + fanout_002, ~$0.94 incl. probes)
+
+All 42 cells ran with zero proxy errors and zero harness exceptions. `feverc_001`
+(Westworld, REFUTES) scored **correct under all 21 topology×arm cells**. Mechanics
+observed live: dialogue's contest path fired (dialogue·full·fanout_002: 1 contest,
+proposal rejected), extract's observer pulled 6–19 beliefs per run across all three
+topologies, full stored transcripts on handoff/report/message edges, sop counted
+conformance, down parsed CONFIDENCE (1.0 → no challenge; a live challenge firing is
+still unobserved — needs a low-confidence edge), board write-adoption stayed near zero
+(1 write in 12 board/board_inert runs — measured, expected on short tasks).
+
+Three defects found by the grid, all fixed + regression-tested:
+1. **FanOutQA gold is a 2023-11-20 snapshot** — open-web agents answered TODAY's truth
+   (all 21 fanout_002 runs "wrong": Ne Zha 2 is now in the top 5). Fix: `prep.py`
+   prompt pins "answer as of 2023-11-20" (the paper's own convention). Validated live:
+   hub picked the 2023 list post-pin and scored exact_match.
+2. **`_match_list` false negatives** — gold `"J. J. Abrams"` missed answer "J.J. Abrams"
+   (initials spacing) and compound gold items ("Anthony Russo and Joe Russo") never
+   matched comma-separated answers. Fixed with two strictness-preserving relaxations;
+   `tests/test_scoring_offline.py` holds the live examples as regressions.
+3. **Think-rabbit-hole at commit points → guaranteed `no_answer`** — 2/14 hub runs died
+   with the merge at `finish=='length'` (the whole output budget eaten inside `<think>`)
+   and the constrained NO_FINAL_RETRY was *skipped* for truncated finishes. Since a
+   length-death stores only the tiny proxy sentinel, the retry context is clean — all
+   three topologies now retry once unless the finish was `ctx_overflow`.
+
+Challenge suite live (vanilla): temporal inheritance **0/3** (both label probes rejected
+the planted wrong belief; the NEI probe flipped to REFUTES = "other", an
+abstention-calibration signal), spatial 3/3 correct incl. the SUPPORTS control.
+Caveat for P4: with full B=8 successors simply re-verify, so vanilla may sit at a
+rejection ceiling — consider a tighter `--budget` for the challenge cells.
 
 ## P0 result (relay · vanilla · smoke)
 

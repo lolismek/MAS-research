@@ -114,7 +114,9 @@ def run_relay(task_prompt, tool_names, client, model, addon, *, k=DEFAULT_K,
             # Shift K spent its budget without committing — force a commit (mechanic 4).
             fin = continue_agent(res, prompts.FINAL_COMMIT_REQUEST, client, model, addon,
                                  usd_budget=usd_budget)
-            if not fin.has_final_answer and not fin.truncated and not (
+            # retry even after a 'length' death — that stores only the placeholder,
+            # so the constrained re-ask starts clean (see hub.py merge for the live case)
+            if not fin.has_final_answer and fin.finish != "ctx_overflow" and not (
                     usd_budget is not None and usd_budget.exceeded):
                 fin = continue_agent(fin, prompts.NO_FINAL_RETRY, client, model, addon,
                                      usd_budget=usd_budget)

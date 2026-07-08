@@ -38,7 +38,14 @@ MIN_WIDTH, MAX_WIDTH = 3, 6
 DEV_URL = ("https://raw.githubusercontent.com/zhudotexe/fanoutqa/main/"
            "fanoutqa/data/fanout-final-dev.json")
 
-PROMPT = ("{question}\n\nResearch as needed, then answer concisely. Give only the "
+# FanOutQA gold answers are frozen against the 2023-11-20 Wikipedia snapshot, but
+# ~half the dev questions are time-mutable ("top 5 highest-grossing films", "most
+# recent ..."), and open-web agents otherwise answer TODAY's truth (seen live:
+# fanout_002 answered with Ne Zha 2's director — correct now, wrong vs gold). The
+# paper's own convention is the fix: pin every prompt to the snapshot date.
+PROMPT = ("{question}\n\nAnswer as of late November 2023: base every part of your "
+          "answer on the state of the world on 2023-11-20 and ignore later "
+          "developments. Research as needed, then answer concisely. Give only the "
           "requested answer(s); if the answer is a list, give all items, separated "
           "by commas.")
 
