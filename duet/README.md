@@ -161,6 +161,10 @@ python duet/challenge/analyze.py
 # scoreboard + calibration; process judges (validate on a hand-labeled slice first!)
 conda run -n autogen_gc python duet/harness/agg.py
 conda run -n autogen_gc python duet/metrics/judge.py --sample 5
+
+# trace viewer — prompts, thinking, tool turns, edge payloads + a per-run
+# architecture-invariant board (blindness / context-reset / store-rendering). See viewer/README.md
+python duet/viewer/build.py && open duet/viewer/index.html
 ```
 
 Knobs: `--topology relay|hub|dialogue` · `--arm <7 arms>` · `--k` (relay shifts /
