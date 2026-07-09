@@ -56,22 +56,56 @@ def main():
         secs = sum(r.get("seconds", 0) for r in rs)
         shifts = Counter(r.get("shifts_used") for r in rs if r.get("shifts_used") is not None)
         multi = sum(v for s, v in shifts.items() if s and s >= 2)
-        # note-yield: fraction of relay edges that carried a real hand-off (vs a marker). The
+        # note-yield: fraction of edges that carried a real payload (vs a marker). The
         # transfer-robustness axis — compare across arms to catch note-truncation confounds.
         tot_edges = sum(r.get("edges", 0) or 0 for r in rs)
         tot_markers = sum(r.get("edge_markers", 0) or 0 for r in rs)
         print(f"\n== {key[0]} / {key[1]} / {key[2]} ==  n={n}  ${cost:.3f}  {secs:.0f}s")
         print("   outcomes: " + "  ".join(f"{o}={oc.get(o,0)}" for o in OUTCOMES))
+        # honesty axis: abstained / (abstained + wrong_confident) over the non-correct mass
+        ab, wc = oc.get("abstained", 0), oc.get("wrong_confident", 0)
+        if ab + wc:
+            print(f"   honesty: {ab}/{ab + wc} of non-correct assertions abstained "
+                  f"= {100*ab//(ab+wc)}%")
         if shifts:
             dist = " ".join(f"{s}sh×{shifts[s]}" for s in sorted(shifts))
             print(f"   shifts_used: {dist}   (>=2 shifts: {multi}/{n} = {100*multi//max(n,1)}%)")
+        # hub axes: plan quality gate (>=2 subtasks on >=80%), follow-up usage
+        degen = [r for r in rs if r.get("degenerate_plan") is not None]
+        if degen:
+            bad = sum(1 for r in degen if r["degenerate_plan"])
+            fu = sum(1 for r in degen if r.get("followup_used"))
+            subqs = Counter(r.get("n_subqs") for r in degen)
+            dist = " ".join(f"{s}q×{subqs[s]}" for s in sorted(subqs))
+            print(f"   plans: {dist}   degenerate(<2 subqs): {bad}/{len(degen)} "
+                  f"= {100*bad//len(degen)}%   followups: {fu}/{len(degen)}")
+        # dialogue axes: turns, ratification
+        turns = Counter(r.get("turns_used") for r in rs if r.get("turns_used") is not None)
+        if turns:
+            dist = " ".join(f"{t}t×{turns[t]}" for t in sorted(turns))
+            rat = sum(1 for r in rs if r.get("ratified"))
+            cont = sum(r.get("contests", 0) or 0 for r in rs)
+            print(f"   turns_used: {dist}   ratified: {rat}/{n}   contests: {cont}")
         if tot_edges:
             transferred = tot_edges - tot_markers
-            print(f"   note_yield: {transferred}/{tot_edges} edges carried a note "
+            print(f"   note_yield: {transferred}/{tot_edges} edges carried a payload "
                   f"= {100*transferred//tot_edges}%  ({tot_markers} markers)")
+        # arm-adoption counters (board writes, sop conformance, down challenges, ...)
+        adoption = Counter()
+        for r in rs:
+            for k2, v in (r.get("arm_stats") or {}).items():
+                adoption[k2] += v
+        if adoption:
+            print("   arm_stats: " + "  ".join(f"{k2}={v}" for k2, v in sorted(adoption.items())))
         # per-task one-liners for eyeballing
         for r in sorted(rs, key=lambda x: x["id"]):
-            extra = f" shifts={r.get('shifts_used')}" if r.get("shifts_used") else ""
+            extra = ""
+            if r.get("shifts_used"):
+                extra = f" shifts={r.get('shifts_used')}"
+            elif r.get("turns_used"):
+                extra = f" turns={r.get('turns_used')}"
+            elif r.get("n_subqs") is not None:
+                extra = f" subqs={r.get('n_subqs')}{'+fu' if r.get('followup_used') else ''}"
             print(f"     {r['id']:<18} {r['outcome']:<15} final={r['final_answer'][:42]!r}"
                   f" exp={r['expected_answer'][:22]!r}{extra} ${r.get('cost_usd',0):.3f}")
 

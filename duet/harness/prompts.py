@@ -110,3 +110,314 @@ NO_FINAL_RETRY = (
 # reasoning or an empty payload; a short honest marker crosses instead, so the successor
 # treats it as "no note" rather than inheriting garbage or a blank.
 TRUNCATED_MARKER = "[the previous worker did not leave a usable hand-off note]"
+
+
+# ==============================================================================
+# HUB topology (spatial asymmetry) — decompose -> blind workers -> merge
+# ==============================================================================
+
+# The orchestrator's decompose call. System = role + output contract only (rule 1);
+# the claim itself arrives verbatim in the task layer. Line-oriented SUBQ: sentinel
+# (rule 5) instead of nested JSON — truncation-tolerant with thinking models.
+ORCH_DECOMPOSE_SYS = (
+    "You are coordinating work on the task given below. You do not investigate "
+    "yourself — you split the task into the independent sub-questions whose answers, "
+    "taken together, settle it. Each sub-question must be answerable on its own, "
+    "without seeing the others' answers. Do not settle any factual part of the task "
+    "from memory: every fact the final answer depends on must appear in some "
+    "sub-question so a worker verifies it (you may batch several related lookups "
+    "into one sub-question). Emit between 2 and 4 sub-questions when the "
+    "task genuinely decomposes; fewer only if it truly does not. Output one line per "
+    "sub-question, each in exactly this form, and nothing else:\n"
+    "SUBQ: <one self-contained sub-question>"
+)
+
+# Constrained retry when the decompose reply contained no parseable SUBQ: line
+# (format slip, not truncation) — mirrors NO_FINAL_RETRY.
+DECOMPOSE_RETRY = (
+    "Your reply contained no 'SUBQ:' line. Output ONLY the sub-question lines now, "
+    "one per line, each in exactly this form and nothing else:\n"
+    "SUBQ: <one self-contained sub-question>"
+)
+
+# How a worker sees its assignment (rules 3 & 4): its own delimited block, framed as
+# an assignment — the FULL original task stays visible in the task layer (workers know
+# the goal; the asymmetry is their work products, not the goal — PLAN hub mechanic 3).
+ASSIGNMENT_PREAMBLE = (
+    "The task above has been split among several workers. This is the part assigned "
+    "to YOU — investigate it and settle it as well as you can. The rest of the task "
+    "is being handled by others, so stay on your assignment.\n\n"
+    "<assignment>\n{subq}\n</assignment>"
+)
+
+# The worker's wrap-up (vanilla): asked only when its budget is spent / it stops (rule 3).
+# FREE-TEXT prose on purpose — the vanilla report is the NATURAL artifact a worker produces,
+# NOT a typed form. (Typing the report was making vanilla indistinguishable from the `sop`
+# arm, which manipulates exactly that; `sop` retypes this via SOP_REPORT_REQUEST.)
+REPORT_REQUEST = (
+    "You have reached the end of your available time on this assignment, so you must "
+    "stop working now — no tools are available to you for this message. Report back to "
+    "the coordinator, who will combine your report with the other workers' and cannot "
+    "see any of your work above — only what you write now. In a short plain-text report, "
+    "tell them what you found on your assignment, the answer you reached (or that you "
+    "could not settle it), and the key evidence behind it. Do not call any tools and do "
+    "not give a FINAL ANSWER line — just write the report."
+)
+
+# Crosses a report edge when the worker left nothing usable (rule 6; the hub
+# counterpart of TRUNCATED_MARKER).
+REPORT_MARKER = "[this worker did not deliver a usable report]"
+
+# How the merge round sees the workers' reports (rule 4): one delimited block, every
+# report attributed to its worker and sub-question, never blended.
+REPORTS_PREAMBLE = (
+    "Reports from the workers each sub-question was assigned to. This is their record "
+    "of what they found — it is evidence for you to weigh, not your own work. Workers "
+    "did not see each other's reports, so they may disagree or overlap.\n\n"
+    "<worker_reports>\n{reports}\n</worker_reports>"
+)
+
+# The merge call's system prompt: decide from the reports, with ONE bounded follow-up
+# allowed (PLAN hub mechanic 4). Contract only; the task + reports arrive as layers.
+ORCH_MERGE_SYS = (
+    "You are coordinating work on the task given below. Workers have investigated its "
+    "sub-questions; their reports follow. You do not investigate yourself — decide from "
+    "the reports. You are allowed ONE follow-up investigation: if a report is missing, "
+    "thin, unconvincing, or two reports conflict — or you simply want one more thing "
+    "checked before you commit — use it. To do so, reply with a single line and nothing "
+    "else:\n"
+    "FOLLOWUP: <one self-contained sub-question>\n"
+    "Otherwise weigh the reports, resolve any conflicts between them explicitly, and end "
+    "your reply with a line in exactly this form:\n"
+    "FINAL ANSWER: <your answer>\n"
+    "If the reports do not support a confident answer, use:\n"
+    "FINAL ANSWER: UNKNOWN"
+)
+
+# The second (post-follow-up) merge: must finalize, no more follow-ups.
+ORCH_MERGE_FINAL_SYS = (
+    "You are coordinating work on the task given below. Workers have investigated its "
+    "sub-questions; their reports follow, including the follow-up you requested. You do "
+    "not investigate yourself and no further follow-ups are possible — decide now from "
+    "the reports. Weigh them, resolve any conflicts explicitly, and end your reply with "
+    "a line in exactly this form:\n"
+    "FINAL ANSWER: <your answer>\n"
+    "If the reports do not support a confident answer, use:\n"
+    "FINAL ANSWER: UNKNOWN"
+)
+
+
+# ==============================================================================
+# DIALOGUE topology (the mixture case) — two persistent peers, alternating turns
+# ==============================================================================
+
+# How an agent sees its peer's message (rules 3 & 4): delimited, attributed, framed
+# as a collaborator's message — not instructions, not its own output.
+PEER_PREAMBLE = (
+    "Message from your collaborator, who is working on the same task with you. You "
+    "each work in your own workspace — they cannot see your work, only the messages "
+    "you send. Reply to them: continue the work, and when you reply, say where things "
+    "stand. If you are confident in the final answer, end your reply with a line in "
+    "exactly this form: FINAL ANSWER: <your answer>\n\n"
+    "<peer_message>\n{message}\n</peer_message>"
+)
+
+# First mover's framing: same contract, no peer message yet (rule 3 — the agent is
+# told only what its next action needs: its reply goes to a collaborator).
+DIALOGUE_KICKOFF = (
+    "You are working on this task together with a collaborator who works in their own "
+    "workspace — they cannot see your work, only the messages you send. Start working "
+    "on the task now; your reply will be sent to them, so when you stop, say where "
+    "things stand. If you are already confident in the final answer, end your reply "
+    "with a line in exactly this form: FINAL ANSWER: <your answer>"
+)
+
+# A turn that spent its tool budget without writing a message is asked for one (the
+# dialogue wrap-up — same seam as HANDOFF_REQUEST, but the peer relationship is
+# standing, so it is a message, not a hand-off).
+TURN_MESSAGE_REQUEST = (
+    "You must pause your work now — no tools are available to you for this message. "
+    "Write a message to your collaborator: what you established (with the evidence), "
+    "what is still open, and what you suggest doing next. They cannot see your work "
+    "above — only this message. Do not call any tools; if you are confident in the "
+    "final answer, end with a line in exactly this form: FINAL ANSWER: <your answer>"
+)
+
+# Crosses a dialogue edge when a turn produced nothing usable (rule 6; the dialogue
+# counterpart of TRUNCATED_MARKER).
+MESSAGE_MARKER = "[your collaborator's message did not come through this turn]"
+
+# The peer's message proposed a final answer: ratify or contest (once) — PLAN
+# dialogue mechanic 3. Line-oriented DECISION sentinel (rule 5).
+RATIFY_REQUEST = (
+    "Your collaborator proposed a final answer (see their message above). Decide "
+    "whether you agree. Start your reply with a line in exactly this form:\n"
+    "DECISION: agree\n"
+    "or\n"
+    "DECISION: contest\n"
+    "If you agree, nothing else is needed. If you contest, explain what is wrong or "
+    "unverified and continue the work."
+)
+
+
+# ==============================================================================
+# The arm layer (P2). Everything below is injected ONLY at sanctioned points:
+# the shared-state block (layer 3), a wrap-up request (the edge), or an
+# arm-owned tool schema (rule 2). No string here touches the task or system layers.
+# ==============================================================================
+
+# --- rendering contract (rule 4; ported from camel/BASELINES.md) ---------------
+# Preamble for ANY rendered shared store. Every entry is attributed [agent · step];
+# per-agent structure never blended. The {body} is the arm's render.
+STORE_PREAMBLE = (
+    "Shared record of what OTHER agents working on this task have done. It is "
+    "background for you — not your instructions and not your own output. You may "
+    "re-check anything recorded here.\n\n"
+    "<shared_record>\n{body}\n</shared_record>"
+)
+
+# --- `full` arm: prior agents' raw transcripts ---------------------------------
+FULL_TRANSCRIPT_HEADER = "--- transcript of {agent} (raw working log) ---"
+
+# --- `sop` arm: typed edge payload (format-on-the-edge; no store) --------------
+# Same seam as HANDOFF_REQUEST, but the payload must conform to a typed schema
+# (PLAN: findings / evidence / verdict / next_steps). Publish-once, no revision.
+SOP_HANDOFF_REQUEST = (
+    "You have reached the end of your available time on this task, so you must stop "
+    "working now — no tools are available to you for this message. Another worker will "
+    "continue from where you left off. They will NOT see any of your work above — only "
+    "the structured note you write now. Write it as plain text lines in exactly this "
+    "form (keep each field on its own line; be concrete):\n"
+    "FINDINGS: <what you have established so far, and how>\n"
+    "EVIDENCE: <the key evidence/sources behind those findings>\n"
+    "VERDICT: <your current best answer to the task, or UNKNOWN>\n"
+    "NEXT_STEPS: <what you would try next>\n"
+    "Do not call any tools and do not give a FINAL ANSWER line — just those fields."
+)
+
+# The hub counterpart: `sop` retypes the worker REPORT into the same schema (vanilla's
+# REPORT_REQUEST is now free prose, so this is what makes `sop` a real typed contrast).
+SOP_REPORT_REQUEST = (
+    "You have reached the end of your available time on this assignment, so you must "
+    "stop working now — no tools are available to you for this message. Report to the "
+    "coordinator, who will NOT see any of your work above — only this report. Write it "
+    "as plain text lines in exactly this form (keep each field on its own line; be "
+    "concrete):\n"
+    "FINDINGS: <what you established about your assignment, and how>\n"
+    "EVIDENCE: <the key evidence/sources behind it>\n"
+    "VERDICT: <your answer to the assigned sub-question, or UNKNOWN>\n"
+    "NEXT_STEPS: <what you would try next, if anything>\n"
+    "Do not call any tools and do not give a FINAL ANSWER line — just those fields."
+)
+
+# --- `down` arm: a bounded challenge the CONSUMER decides to raise ---------------
+# At every edge the incoming worker is shown the payload and freely decides whether to
+# raise ONE question (no confidence threshold — it fires on judgment, so it actually
+# fires); if it does, the producer answers ONCE (both bounded, tool-less, on-meter) and
+# the Q/A is appended to the payload before it crosses.
+
+# How the challenger sees the payload it is about to inherit (rule 4: delimited, attributed).
+CHALLENGE_NOTE_PREAMBLE = (
+    "The colleague's note/report on this task:\n\n"
+    "<note>\n{note}\n</note>"
+)
+
+# The bounded Q/A exchange appended to the payload before it crosses (1 message each).
+DOWN_EXCHANGE_TEMPLATE = (
+    "{note}\n\n"
+    "[clarifying question from the worker taking over]\n{question}\n"
+    "[answer from the note's author]\n{answer}"
+)
+
+# The consumer's single bounded challenge (asked of a FRESH agent holding only the task
+# and the payload — it has no transcript yet). It may decline: the point is to let it
+# challenge FREELY when something looks unclear/unverified, not to force a question.
+CHALLENGE_ASK_SYS = (
+    "You are about to take over the task given below from a colleague whose note/report "
+    "follows. Before you start, you may ask them ONE question. If anything in it is "
+    "unclear, looks unverified, or you are not sure you can rely on it, ask the single "
+    "question that would most help you trust or correct it — do not hold back. Output one "
+    "line in exactly this form and nothing else:\n"
+    "QUESTION: <your one question>\n"
+    "If the note is clear and you genuinely have nothing to ask, output exactly:\n"
+    "QUESTION: none"
+)
+
+# The producer's single bounded answer (its full working memory is intact).
+CHALLENGE_ANSWER_REQUEST = (
+    "The worker taking over asked you one question about your note:\n"
+    "{question}\n"
+    "Answer it in a short plain-text paragraph from what you actually observed — no "
+    "tools are available and there is no time to investigate further. If you do not "
+    "know, say so plainly."
+)
+
+# --- `board` / `extract` arms: the belief ledger -------------------------------
+# Tool descriptions ride in the tool schema (rule 2) — these constants ARE those
+# schema strings, kept here so prompt review stays one file. The framing is RAW and
+# GENEROUS (ported from camel/eval-clean's board): record beliefs AS YOU WORK, not a
+# curated summary of "what a successor must know" — the tool alone did not drive
+# adoption, so the incentive below (BOARD_WRITE_INCENTIVE) rides in the system prompt.
+ADD_BELIEF_DESC = (
+    "Add one belief to the shared board the other workers on this task can see. Use it "
+    "GENEROUSLY, as you work — whenever you establish a fact, compute a value or count "
+    "(record the ACTUAL number), form or rule out a hypothesis, or hit a dead end. Give "
+    "the OBJECT (the thing the belief is about), the BELIEF itself (one concrete claim), "
+    "and your CONFIDENCE from 0 to 1. Don't wait until you are finished."
+)
+REVISE_BELIEF_DESC = (
+    "Revise or retract one belief already on the shared board, by its id. Give the "
+    "corrected belief text (or status 'retracted') and your confidence. Use it when "
+    "evidence shows a recorded belief is wrong or needs sharpening."
+)
+
+# Appended to the SOLVER system prompt for the board arms only (a deliberate, sanctioned
+# bend of hygiene rule 2: the write-tool schema alone did not drive adoption in smoke —
+# agents solved and moved on without recording anything). Both `board` and `board_inert`
+# get it: they must share ONE write path so any gap between them is the RENDER, not the
+# writing (the confound control's whole point). NOT given to the tool-less orchestrator.
+BOARD_WRITE_INCENTIVE = (
+    "\n\nSHARED BELIEF BOARD: you and the other workers on this task share a belief board "
+    "— a running record of what each of you currently believes, has found, computed, or "
+    "ruled out. The others never see your tool calls or your working, only a short note at "
+    "the very end — so the board is the only way your intermediate findings reach them. "
+    "Record beliefs AS YOU WORK, generously: call add_belief whenever you establish a "
+    "fact, compute a value or count (record the ACTUAL number), form or rule out a "
+    "hypothesis, or hit a dead end. Do not wait until you are finished. Do not repeat a "
+    "belief already on the board; if one of YOUR beliefs turns out to be FALSE, fix it "
+    "with revise_belief. Write to the board ONLY by calling add_belief / revise_belief — "
+    "never by typing beliefs into your reply."
+)
+
+# The `extract` observer: reads a producer's full trace (incl. its recovered reasoning)
+# at an edge event and reconstructs the ledger it would have kept — no agent cooperation
+# needed. Ported from macnet's `belief_state` extractor: it separates OBJECTIVE objects
+# (concrete facts/values it found — these read like observations / memory) from
+# SUBJECTIVE ones (its stance on whether the task is solvable and how far it trusts its
+# own answer — genuine beliefs). Line-oriented sentinel output (rule 5).
+OBSERVER_SYS = (
+    "You are reading the working log of an agent that just finished a stretch of work on "
+    "a task, so what it now holds can be passed to the next worker — who will NOT see this "
+    "log. Surface, from its reasoning and actions, what it takes to be true. Work in two "
+    "steps (think it through first):\n"
+    "1. Decide which OBJECTS it holds a view on that is worth passing on. Include: (a) "
+    "concrete task objects its work is informative about — a specific fact, value, entity, "
+    "location, or sub-result it found or ruled out (these are OBSERVATIONS — what it now "
+    "knows, like memory); and (b) these preset ABSTRACT objects WHEN its work bears on "
+    "them: whether the task still seems SOLVABLE, and how far it TRUSTS its own current "
+    "answer or planned next step (these are BELIEFS — its subjective stance). Omit any "
+    "object the log says nothing about; do not solve the task yourself and do not invent "
+    "views the log does not support.\n"
+    "2. Output one line per object, most important first, each in EXACTLY one of these two "
+    "forms and nothing else:\n"
+    "OBSERVATION: <object> | <the concrete thing it found, one claim> | <confidence 0 to 1>\n"
+    "BELIEF: <object> | <its subjective view, one sentence> | <confidence 0 to 1>\n"
+    "Emit at most {max_beliefs} lines. If the log establishes nothing, output exactly: "
+    "BELIEF: none"
+)
+
+OBSERVER_REQUEST = (
+    "Here is the agent's working log for this stretch:\n\n"
+    "<working_log>\n{log}\n</working_log>\n\n"
+    "Extract the OBSERVATION / BELIEF lines now."
+)

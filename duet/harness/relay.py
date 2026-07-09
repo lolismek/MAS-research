@@ -82,9 +82,13 @@ def _committed(final, finish):
 
 def run_relay(task_prompt, tool_names, client, model, addon, *, k=DEFAULT_K,
               tool_budget=DEFAULT_BUDGET, budget_tool_names=None, usd_budget=None,
-              env=None) -> RelayResult:
+              env=None, initial_note=None) -> RelayResult:
+    """`initial_note`: a pre-authored hand-off note injected before shift 1 — the
+    temporal challenge-probe mechanism (PLAN "Challenge suite"): shift 1 then plays
+    the successor inheriting OUR note (containing one plausible-but-wrong belief),
+    and the probe asks whether the arm lets it detect/reject the planted belief."""
     shifts, notes = [], []
-    prev_note = None
+    prev_note = initial_note
     for i in range(k):
         is_last = i == k - 1
         role = f"shift_{i + 1}"
@@ -110,7 +114,9 @@ def run_relay(task_prompt, tool_names, client, model, addon, *, k=DEFAULT_K,
             # Shift K spent its budget without committing — force a commit (mechanic 4).
             fin = continue_agent(res, prompts.FINAL_COMMIT_REQUEST, client, model, addon,
                                  usd_budget=usd_budget)
-            if not fin.has_final_answer and not fin.truncated and not (
+            # retry even after a 'length' death — that stores only the placeholder,
+            # so the constrained re-ask starts clean (see hub.py merge for the live case)
+            if not fin.has_final_answer and fin.finish != "ctx_overflow" and not (
                     usd_budget is not None and usd_budget.exceeded):
                 fin = continue_agent(fin, prompts.NO_FINAL_RETRY, client, model, addon,
                                      usd_budget=usd_budget)
@@ -119,9 +125,11 @@ def run_relay(task_prompt, tool_names, client, model, addon, *, k=DEFAULT_K,
                                committed=_committed(fin.final, fin.finish),
                                budget_exceeded=bool(usd_budget and usd_budget.exceeded))
 
-        # Non-terminal shift: request the hand-off note, then decide what crosses the edge.
-        note_res = continue_agent(res, prompts.HANDOFF_REQUEST, client, model, addon,
-                                  usd_budget=usd_budget)
+        # Non-terminal shift: request the hand-off note, then decide what crosses the
+        # edge. The wrap-up ask itself is an arm decision (sop retypes it, down appends
+        # a confidence ask) — vanilla passes HANDOFF_REQUEST through untouched.
+        note_res = continue_agent(res, addon.wrapup_prompt("handoff", prompts.HANDOFF_REQUEST),
+                                  client, model, addon, usd_budget=usd_budget)
         # A truncated OR empty note must not cross the edge (rule 6) — the marker does.
         usable = note_res.final and not note_res.truncated
         default_payload = note_res.final if usable else prompts.TRUNCATED_MARKER

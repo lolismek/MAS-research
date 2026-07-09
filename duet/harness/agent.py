@@ -132,30 +132,39 @@ def _bound_context(messages, trigger_headroom=_COMPACT_TRIGGER_HEADROOM,
 
 
 def _compact_for_wrapup(messages):
-    """Aggressively stub EVERY tool result except the most recent, in place, before a wrap-up
-    call (the hand-off note / forced commit). Unlike `_bound_context` this is unconditional:
-    a *reflective* ask ("summarize what you established") over many RAW tool dumps makes
-    Qwen3.6 re-read and re-analyze all of them and spiral past the token cap inside <think>,
-    yielding the proxy's truncation sentinel and NO note — even when the context is small
-    enough that lazy compaction never triggers (observed on gaia_983bba7c: ~12k prompt, still
-    'length'). Stubbing the dumps forces the note to be written from the worker's own memory
-    of what it found — which is exactly what a real hand-off is — not by re-deriving from
-    every fetched page. The freshest tool result is kept whole (the evidence in hand).
-    Idempotent: already-stubbed results are skipped. The agent's own assistant reasoning
-    turns are untouched."""
+    """Return a COPY of `messages` with every tool result except the most recent stubbed,
+    for a wrap-up call (the hand-off note / forced commit). Unlike `_bound_context` this is
+    unconditional: a *reflective* ask ("summarize what you established") over many RAW tool
+    dumps makes Qwen3.6 re-read and re-analyze all of them and spiral past the token cap inside
+    <think>, yielding the proxy's truncation sentinel and NO note — even when the context is
+    small enough that lazy compaction never triggers (observed on gaia_983bba7c: ~12k prompt,
+    still 'length'). Stubbing the dumps forces the note to be written from the worker's own
+    memory of what it found — which is exactly what a real hand-off is — not by re-deriving
+    from every fetched page. The freshest tool result is kept whole (the evidence in hand).
+
+    NON-MUTATING by design: the wrap-up call should not see the raw dumps, but the SAVED
+    transcript must still keep them (else the audit trail — what the worker actually observed —
+    is destroyed; the very thing that makes a wrong hand-off diagnosable). So we copy rather
+    than stub in place, and the caller sends the copy but stores the originals. Every tool
+    message is shallow-copied (so no tool dict is shared with the original and a later
+    `_bound_context` on the copy can't reach back); other messages pass through by reference.
+    Idempotent: already-stubbed results are left as-is."""
     idx = _tool_call_index(messages)
     tool_pos = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
     keep_last = tool_pos[-1] if tool_pos else None
-    for i in tool_pos:
-        if i == keep_last:
+    out = []
+    for i, m in enumerate(messages):
+        if m.get("role") != "tool":
+            out.append(m)
             continue
-        m = messages[i]
-        if (m.get("content") or "").startswith(_STUB_PREFIX):
-            continue
-        orig = m.get("content") or ""
-        label = idx.get(m.get("tool_call_id"), "tool result")
-        m["content"] = (f"{_STUB_PREFIX}{label} -> {len(orig)} chars elided; "
-                        "write your note from memory, do not re-fetch")
+        m = dict(m)                                   # copy: never mutate the stored dict
+        content = m.get("content") or ""
+        if i != keep_last and not content.startswith(_STUB_PREFIX):
+            label = idx.get(m.get("tool_call_id"), "tool result")
+            m["content"] = (f"{_STUB_PREFIX}{label} -> {len(content)} chars elided; "
+                            "write your note from memory, do not re-fetch")
+        out.append(m)
+    return out
 
 
 def _is_context_overflow(e):
@@ -206,6 +215,15 @@ class AgentResult:
         return "FINAL ANSWER:" in (self.final or "")
 
 
+def _wire_messages(messages):
+    """The message list as the UPSTREAM should see it. Drops harness-only annotation keys
+    that we keep on the stored transcript but must NOT resend: `reasoning_content` (the
+    model's own recovered <think> trace — resending past CoT would balloon prompt tokens and
+    perturb behaviour, and some backends 400 on the unknown field). Cheap shallow copies; the
+    stored `messages` keep every annotation."""
+    return [{k: v for k, v in m.items() if k != "reasoning_content"} for m in messages]
+
+
 def _call(client, model, messages, specs, usd_budget, cap=None):
     """One model call with lazy context-bounding + a single compact-and-retry on overflow.
     Returns (message, finish_reason, over_budget). On unrecoverable overflow, returns a
@@ -219,7 +237,7 @@ def _call(client, model, messages, specs, usd_budget, cap=None):
     _bound_context(messages)
     try:
         resp = client.chat.completions.create(
-            model=model, messages=messages, tools=specs, temperature=TEMPERATURE,
+            model=model, messages=_wire_messages(messages), tools=specs, temperature=TEMPERATURE,
             stream=False, max_tokens=_mt())
     except Exception as e:
         if not _is_context_overflow(e):
@@ -227,7 +245,7 @@ def _call(client, model, messages, specs, usd_budget, cap=None):
         _bound_context(messages, trigger_headroom=MODEL_CTX, target_headroom=MODEL_CTX // 2)
         try:
             resp = client.chat.completions.create(
-                model=model, messages=messages, tools=specs, temperature=TEMPERATURE,
+                model=model, messages=_wire_messages(messages), tools=specs, temperature=TEMPERATURE,
                 stream=False, max_tokens=_mt())
         except Exception:
             return None, "ctx_overflow", False
@@ -235,15 +253,38 @@ def _call(client, model, messages, specs, usd_budget, cap=None):
     return resp.choices[0].message, resp.choices[0].finish_reason, over
 
 
-def _record_assistant(messages, msg):
-    """Append the assistant turn verbatim (so a later call sees its own tool_calls)."""
+def _reasoning_of(msg):
+    """The model's recovered <think> chain-of-thought for this reply, if the proxy surfaced
+    one. The Tinker route strips the inline <think>…</think> from `content` and re-attaches it
+    as `reasoning_content` (lands in the SDK object's model_extra). None when the reply had no
+    visible think block (e.g. a truncated 'length' turn with no closing </think>)."""
+    r = getattr(msg, "reasoning_content", None)
+    if r is None:
+        extra = getattr(msg, "model_extra", None) or {}
+        r = extra.get("reasoning_content")
+    return (r or None)
+
+
+def _assistant_dict(msg, drop_tool_calls=False):
+    """Build the stored assistant turn: content, its recovered CoT (reasoning_content), and —
+    unless suppressed — the tool_calls (so a later call sees its own calls). `drop_tool_calls`
+    is used by the wrap-up, which offers no tools: any <tool_call> the model emits there is
+    unhonored and must not dangle without a matching tool response."""
     a = {"role": "assistant", "content": msg.content}
-    if msg.tool_calls:
+    r = _reasoning_of(msg)
+    if r:
+        a["reasoning_content"] = r
+    if msg.tool_calls and not drop_tool_calls:
         a["tool_calls"] = [{"id": tc.id, "type": "function",
                             "function": {"name": tc.function.name,
                                          "arguments": tc.function.arguments}}
                            for tc in msg.tool_calls]
-    messages.append(a)
+    return a
+
+
+def _record_assistant(messages, msg):
+    """Append the assistant turn verbatim (so a later call sees its own tool_calls)."""
+    messages.append(_assistant_dict(msg))
 
 
 def _sig(tc):
@@ -252,7 +293,8 @@ def _sig(tc):
 
 def run_agent(role, system_prompt, task_messages, tool_names, client, model,
               addon, tool_budget=None, budget_tool_names=None,
-              max_inner_steps=MAX_INNER_STEPS, usd_budget=None, env=None) -> AgentResult:
+              max_inner_steps=MAX_INNER_STEPS, usd_budget=None, env=None,
+              resume=None) -> AgentResult:
     """Run one agent's internal loop and return its AgentResult.
 
     `task_messages` is the user-side context (task + any hand-off note / shared-state).
@@ -265,8 +307,16 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
 
     `budget_tool_names`: if None, every tool call counts toward `tool_budget`; else only
     calls with those names count (PDDL bills 'pddl_step' env steps, not free observe/actions
-    lookups — PLAN relay mechanic 1). All calls are always metered in `n_tool_calls`."""
-    messages = [{"role": "system", "content": system_prompt}] + list(task_messages)
+    lookups — PLAN relay mechanic 1). All calls are always metered in `n_tool_calls`.
+
+    `resume`: a PERSISTENT message list from this agent's previous turns (dialogue
+    topology) — used verbatim instead of building [system]+task_messages, so the agent
+    keeps its whole working memory across turns. The caller appends the new incoming
+    user messages before calling; `inject_context` still runs (a store re-render
+    REPLACES its previous block — the arms' no-accumulation contract). Counters
+    (n_steps/n_tool_calls, the budget) are per-call: each turn gets a fresh budget."""
+    messages = resume if resume is not None else (
+        [{"role": "system", "content": system_prompt}] + list(task_messages))
     messages = addon.inject_context(role, messages)
     base_specs = tool_specs(tool_names) or []
     extra_specs = addon.extra_tool_specs(role)
@@ -355,9 +405,13 @@ def continue_agent(result, user_prompt, client, model, addon, usd_budget=None) -
     firmly, for plain prose (up to WRAPUP_MAX_TRIES). If it never writes usable text, `.final`
     is '' and finish carries the last failure so the caller substitutes a marker (raw
     reasoning / a blank / a truncated stub must never cross an edge — rule 6)."""
-    messages = result.transcript
-    _compact_for_wrapup(messages)   # stub raw tool dumps so the reflective ask can't spiral
-    messages.append({"role": "user", "content": user_prompt})
+    # Two views of the same conversation. `record` is the real transcript we STORE — it keeps
+    # the raw tool observations (the audit trail). `wire` is a stubbed copy we SEND, so the
+    # reflective ask can't spiral over raw dumps. Each wrap-up turn is appended to BOTH.
+    record = result.transcript
+    wire = _compact_for_wrapup(record)
+    user_msg = {"role": "user", "content": user_prompt}
+    record.append(user_msg); wire.append(user_msg)
     n_extra = 0
     final, finish = "", "stop"
     for attempt in range(WRAPUP_MAX_TRIES):
@@ -365,14 +419,17 @@ def continue_agent(result, user_prompt, client, model, addon, usd_budget=None) -
             finish = "budget"
             break
         cap = None if attempt == 0 else WRAPUP_RETRY_CAP   # full quality first, cheap retries
-        msg, fr, _ = _call(client, model, messages, None, usd_budget, cap=cap)
+        msg, fr, _ = _call(client, model, wire, None, usd_budget, cap=cap)
         n_extra += 1
         if msg is None:
             finish = "ctx_overflow"
             break
         # text-only: any tool_calls the model emitted are dropped (unhonored), so message
         # ordering stays valid across retries (no dangling tool_calls awaiting a response).
-        messages.append({"role": "assistant", "content": msg.content or ""})
+        # The stored turn keeps its recovered CoT; `_call` strips reasoning_content before it
+        # ever reaches the wire, so the same dict is safe to share with `wire`.
+        a = _assistant_dict(msg, drop_tool_calls=True)
+        record.append(a); wire.append(a)
         finish = "length" if fr == "length" else "stop"
         # Usable only if it is real text AND cleanly terminated. A 'length' generation is a
         # partial/spiralled note; retry for a clean short one rather than crossing a stub.
@@ -380,8 +437,9 @@ def continue_agent(result, user_prompt, client, model, addon, usd_budget=None) -
             final = (msg.content or "").strip()
             break
         if attempt < WRAPUP_MAX_TRIES - 1:      # empty / sentinel / truncated -> re-ask firmly
-            messages.append({"role": "user", "content": prompts.WRAPUP_NUDGE})
+            nudge = {"role": "user", "content": prompts.WRAPUP_NUDGE}
+            record.append(nudge); wire.append(nudge)
     out = AgentResult(role=result.role, final=final, n_steps=result.n_steps + n_extra,
-                      n_tool_calls=result.n_tool_calls, transcript=messages, finish=finish)
+                      n_tool_calls=result.n_tool_calls, transcript=record, finish=finish)
     addon.on_turn_end(result.role, out)
     return out
