@@ -10,7 +10,7 @@ by the prompt-diff audit in tests/test_arms_offline.py).
 | vanilla      | natural artifact                               | —                           |
 | full         | natural artifact                               | producers' raw transcripts  |
 | sop          | typed schema (FINDINGS/EVIDENCE/VERDICT/NEXT)  | —                           |
-| down         | payload + confidence; low conf -> 1 challenge  | —                           |
+| down         | payload + consumer-raised 1 challenge (if any) | —                           |
 | board        | natural artifact                               | belief ledger, agent-written|
 | extract      | natural artifact                               | same ledger, observer-written|
 | board_inert  | natural artifact                               | write-tools, never rendered |
@@ -192,7 +192,13 @@ class SopAddOn(AddOn):
     name = "sop"
 
     def wrapup_prompt(self, kind, default):
-        return prompts.SOP_HANDOFF_REQUEST if kind == "handoff" else default
+        # retype BOTH edge asks — the relay hand-off and the (now free-text) hub report —
+        # into the typed schema; that retyping is exactly what `sop` manipulates.
+        if kind == "handoff":
+            return prompts.SOP_HANDOFF_REQUEST
+        if kind == "report":
+            return prompts.SOP_REPORT_REQUEST
+        return default
 
     def edge_payload(self, kind, producer_result, default):
         if kind not in ("handoff", "report") or default in (
@@ -205,38 +211,31 @@ class SopAddOn(AddOn):
 
 
 # ------------------------------------------------------------------------------
-# down — protocol family: verbalized confidence + one bounded challenge exchange
+# down — protocol family: a bounded challenge the CONSUMER decides to raise
 # ------------------------------------------------------------------------------
-DOWN_THETA = float(os.environ.get("DUET_DOWN_THETA", "0.6"))
-_CONF_LINE = re.compile(r"^\s*CONFIDENCE\s*:\s*([0-9.]+)", re.I | re.M)
 _QUESTION_LINE = re.compile(r"^\s*QUESTION\s*:\s*(.+?)\s*$", re.M)
+_DECLINE = {"none", "no question", "no", "n/a", "nothing", ""}
 
 
 class DownAddOn(AddOn):
-    """The wrap-up additionally asks for a CONFIDENCE line; if the stated confidence
-    is below θ (or missing), the consumer asks ONE question and the producer answers
-    ONCE (1 message each, both tool-less and on-meter), and the Q/A is appended to
-    the payload before it crosses. No store, no persistence."""
+    """At every work-product edge the incoming consumer (a fresh agent holding the task +
+    the payload) is asked whether it wants to raise ONE question — it decides freely, on
+    judgment, with NO confidence threshold (the old θ-gate never fired: the model always
+    self-reported high confidence). If it raises one, the producer answers ONCE (its
+    working memory intact), and the Q/A is appended to the payload before it crosses.
+    Both calls are tool-less and on-meter. No store, no persistence."""
 
     name = "down"
-    theta = DOWN_THETA
-
-    def wrapup_prompt(self, kind, default):
-        # hub reports already carry a CONFIDENCE field; only the relay note needs one
-        return default + prompts.DOWN_CONFIDENCE_SUFFIX if kind == "handoff" else default
 
     def edge_payload(self, kind, producer_result, default):
         if kind not in ("handoff", "report") or default in (
                 prompts.TRUNCATED_MARKER, prompts.REPORT_MARKER):
             return default
-        m = _CONF_LINE.search(default)
-        conf = float(m.group(1)) if m else None
         self.stats["down_edges"] = self.stats.get("down_edges", 0) + 1
-        if conf is not None and conf >= self.theta:
+        if producer_result is None:
             return default
-        # low/missing confidence -> one bounded challenge exchange
         question = self._ask_question(default)
-        if not question or producer_result is None:
+        if not question:
             return default
         answer = self._answer(producer_result, question)
         if not answer:
@@ -252,7 +251,10 @@ class DownAddOn(AddOn):
         res = run_agent("challenger", prompts.CHALLENGE_ASK_SYS, ctx, [], self.client,
                         self.model, _NOOP, usd_budget=self.usd_budget)
         m = _QUESTION_LINE.search(res.final or "")
-        return m.group(1) if m and not res.truncated else None
+        if not m or res.truncated:
+            return None
+        q = m.group(1).strip()
+        return None if q.lower() in _DECLINE else q
 
     def _answer(self, producer_result, question):
         from agent import continue_agent
@@ -295,7 +297,22 @@ class BoardAddOn(_StoreArm):
         super().__init__()
         self.ledger = BeliefLedger()
 
+    def inject_context(self, role, messages):
+        # layer-3 render block (board renders; board_inert overrides render() to "")
+        messages = super().inject_context(role, messages)
+        # the write incentive rides in the SOLVER system prompt (sanctioned rule-2 bend,
+        # board arms only). The tool-less orchestrator reads the board but never writes,
+        # so it is skipped. Idempotent: persistent (dialogue) agents re-enter each turn.
+        if role != "orchestrator" and messages and messages[0].get("role") == "system":
+            sysm = messages[0]
+            if prompts.BOARD_WRITE_INCENTIVE not in (sysm.get("content") or ""):
+                sysm["content"] = (sysm.get("content") or "") + prompts.BOARD_WRITE_INCENTIVE
+        return messages
+
     def extra_tool_specs(self, role):
+        # the orchestrator plans/merges only — no write-tools (PLAN: it has NO tools)
+        if role == "orchestrator":
+            return []
         return [_ADD_BELIEF_SPEC, _REVISE_BELIEF_SPEC]
 
     def run_extra_tool(self, name, arguments):
@@ -369,8 +386,8 @@ class ExtractAddOn(_StoreArm):
         res = run_agent("observer", sys_p, ctx, [], self.client, self.model, _NOOP,
                         usd_budget=self.usd_budget)
         beliefs = parse_belief_lines(res.final)[:OBSERVER_MAX_BELIEFS]
-        for obj, belief, conf in beliefs:
-            self.ledger.add(producer_result.role, obj, belief, conf)
+        for kind, obj, belief, conf in beliefs:
+            self.ledger.add(producer_result.role, obj, belief, conf, kind=kind)
         self.stats["observer_calls"] = self.stats.get("observer_calls", 0) + 1
         self.stats["beliefs_extracted"] = self.stats.get("beliefs_extracted", 0) + len(beliefs)
 

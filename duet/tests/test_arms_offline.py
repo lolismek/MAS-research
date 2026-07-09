@@ -95,33 +95,39 @@ def test_sop_normalizes_payload():
     print("ok  test_sop_normalizes_payload")
 
 
-def test_down_challenge_fires_on_low_confidence():
-    low_note = "I think A holds but could not verify.\nCONFIDENCE: 0.2"
+def test_down_challenge_consumer_decides():
+    # the consumer raises a question -> producer answers -> Q/A appended to the payload
+    note = "I looked into A; here is where things stand."
     script = [
         tool_turn(("run_python", {"code": "print(1)"})),      # shift 1 spends B=1
-        text_turn(low_note),                                  # low-confidence note
-        text_turn("QUESTION: which source says A holds?"),    # challenger (fresh agent)
+        text_turn(note),                                      # shift 1 hand-off note
+        text_turn("QUESTION: which source says A holds?"),    # consumer challenges (fresh agent)
         text_turn("The 1999 archive page, section 3."),       # producer's answer
         text_turn("FINAL ANSWER: done"),                      # shift 2 early finish
     ]
     r, c, addon = _run("down", script)
     assert addon.stats.get("down_challenges") == 1, addon.stats
-    note = r.notes[0]
-    assert "which source says A holds?" in note and "1999 archive page" in note
-    assert note.startswith(low_note.split("\n")[0][:20])      # original note kept
+    payload = r.notes[0]
+    assert "which source says A holds?" in payload and "1999 archive page" in payload
+    assert payload.startswith(note[:20])                      # original note kept
     # successor saw the whole exchange
     s2 = "".join(m.get("content") or "" for m in r.shifts[1].transcript if m["role"] == "user")
     assert "1999 archive page" in s2
-    # high confidence -> no challenge, payload untouched
-    r2, c2, addon2 = _run("down", _base_script())
-    assert addon2.stats.get("down_challenges") is None
-    assert r2.notes[0] == NOTE
-    # the down wrap-up asked for the confidence line
-    wrap = [m for kw in c2.calls for m in kw["messages"]
-            if m["role"] == "user" and prompts.DOWN_CONFIDENCE_SUFFIX.strip()[:40] in
-            (m.get("content") or "")]
-    assert wrap, "DOWN confidence ask never reached the wire"
-    print("ok  test_down_challenge_fires_on_low_confidence")
+    # the challenge is NOT gated on any confidence number (no CONFIDENCE ask on the wire)
+    assert not any("CONFIDENCE:" in (m.get("content") or "")
+                   for kw in c.calls for m in kw["messages"] if m["role"] == "user")
+    # consumer declines -> no challenge, payload untouched
+    clear = "A is settled and verified."
+    script2 = [
+        tool_turn(("run_python", {"code": "print(1)"})),
+        text_turn(clear),
+        text_turn("QUESTION: none"),                          # consumer has nothing to ask
+        text_turn("FINAL ANSWER: done"),
+    ]
+    r2, c2, addon2 = _run("down", script2)
+    assert addon2.stats.get("down_challenges") is None and addon2.stats.get("down_edges") == 1
+    assert r2.notes[0] == clear
+    print("ok  test_down_challenge_consumer_decides")
 
 
 def test_board_tools_write_and_render():
@@ -189,13 +195,14 @@ def test_extract_observer_populates_ledger():
     script = [
         tool_turn(("run_python", {"code": "print(1)"}), reasoning="I suspect A is true."),
         text_turn(NOTE),                                       # shift 1 note
-        text_turn("BELIEF: A | A is established | 0.9\n"       # the observer's reply
-                  "BELIEF: B | B remains unverified | 0.4"),
+        text_turn("OBSERVATION: A | A is established | 0.9\n"  # objective object -> memory
+                  "BELIEF: confidence | fairly sure of the answer | 0.4"),  # subjective -> belief
         text_turn("FINAL ANSWER: done"),                       # shift 2 early finish
     ]
     r, c, addon = _run("extract", script)
     entries = addon.store_json()
     assert len(entries) == 2 and entries[0]["author"] == "shift_1"
+    assert entries[0]["kind"] == "observation" and entries[1]["kind"] == "belief"
     assert addon.stats == {"observer_calls": 1, "beliefs_extracted": 2}
     # the observer call carried the OBSERVER system prompt and the producer's log,
     # including its recovered <think> trace
@@ -205,10 +212,11 @@ def test_extract_observer_populates_ledger():
     assert len(ob) == 1
     log = "".join(m.get("content") or "" for m in ob[0]["messages"] if m["role"] == "user")
     assert "I suspect A is true." in log, "recovered reasoning missing from observer input"
-    # the successor saw the extracted ledger
+    # the successor saw the extracted ledger, objective object surfaced as observed memory
     s2 = [m.get("content") or "" for m in r.shifts[1].transcript if m["role"] == "user"]
     block = [m for m in s2 if m.startswith(_STORE_PREFIX)]
-    assert block and "B remains unverified" in block[0]
+    assert block and "fairly sure of the answer" in block[0]
+    assert "observed — A:" in block[0], block[0]
     # note payload itself untouched (extract manipulates the store, not the edge)
     assert r.notes == [NOTE]
     print("ok  test_extract_observer_populates_ledger")
@@ -216,9 +224,12 @@ def test_extract_observer_populates_ledger():
 
 def test_parse_belief_lines():
     assert parse_belief_lines("BELIEF: none") == []
-    got = parse_belief_lines("junk\nBELIEF: door | locked | 0.8\nBELIEF: odd line no pipes")
-    assert got[0] == ("door", "locked", 0.8)
-    assert got[1][1] == "odd line no pipes" and got[1][2] == 0.5
+    got = parse_belief_lines("junk\nOBSERVATION: door | locked | 0.8\n"
+                             "BELIEF: solvable | still looks doable | 0.6\n"
+                             "BELIEF: odd line no pipes")
+    assert got[0] == ("observation", "door", "locked", 0.8), got
+    assert got[1] == ("belief", "solvable", "still looks doable", 0.6)
+    assert got[2][0] == "belief" and got[2][2] == "odd line no pipes" and got[2][3] == 0.5
     print("ok  test_parse_belief_lines")
 
 
@@ -266,7 +277,9 @@ def test_prompt_diff_audit():
     arm_scripts = {
         "full": _base_script(),
         "sop": _base_script(),
-        "down": _base_script(),
+        "down": [_base_script()[0], _base_script()[1],
+                 text_turn("QUESTION: none"),          # consumer declines -> minimal diff
+                 _base_script()[2]],
         "board": _base_script(),
         "board_inert": _base_script(),
         "extract": [_base_script()[0], _base_script()[1],
@@ -274,15 +287,20 @@ def test_prompt_diff_audit():
                     _base_script()[2]],
     }
     extra_tools = {"board", "board_inert"}
-    retyped_wrapup = {"sop": prompts.SOP_HANDOFF_REQUEST,
-                      "down": prompts.HANDOFF_REQUEST + prompts.DOWN_CONFIDENCE_SUFFIX}
+    retyped_wrapup = {"sop": prompts.SOP_HANDOFF_REQUEST}
 
     for arm, script in arm_scripts.items():
         _r, c, _a = _run(arm, script)
         solver, machinery = _split_solver_calls(_wire(c))
         assert len(solver) == len(vw), f"{arm}: solver call count changed"
         for i, ((vs, vrest, vtools), (s, rest, tools)) in enumerate(zip(vw, solver)):
-            assert s == vs, f"{arm}: system prompt differs on call {i}"
+            # board arms append the sanctioned write incentive to the system prompt
+            # (rule-2 bend, board only); everyone else must be byte-identical to vanilla.
+            if arm in ("board", "board_inert"):
+                assert s == vs + prompts.BOARD_WRITE_INCENTIVE, \
+                    f"{arm}: system prompt is not vanilla + the board incentive on call {i}"
+            else:
+                assert s == vs, f"{arm}: system prompt differs on call {i}"
             # tools may differ only by the arm's own write-tools
             extra = set(tools) - set(vtools)
             assert not extra or (arm in extra_tools and extra <= {"add_belief", "revise_belief"}), \

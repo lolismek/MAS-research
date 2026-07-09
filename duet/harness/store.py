@@ -20,9 +20,13 @@ class BeliefLedger:
     def __init__(self):
         self.entries = []                     # dicts, id = b1, b2, ... in insert order
 
-    def add(self, author, obj, belief, confidence):
+    def add(self, author, obj, belief, confidence, kind="belief"):
+        """`kind`: 'belief' (a subjective stance — the default; all agent-written board
+        entries) or 'observation' (a concrete found fact — set by the `extract` observer,
+        which types objective objects as memory vs subjective ones as belief)."""
         e = dict(id=f"b{len(self.entries) + 1}", author=author, object=(obj or "").strip(),
                  belief=(belief or "").strip(), confidence=_clamp(confidence),
+                 kind=("observation" if kind == "observation" else "belief"),
                  status="active", revises=None)
         self.entries.append(e)
         return e
@@ -41,7 +45,7 @@ class BeliefLedger:
         e = dict(id=f"b{len(self.entries) + 1}", author=author, object=old["object"],
                  belief=(belief or old["belief"]).strip(),
                  confidence=_clamp(confidence if confidence is not None else old["confidence"]),
-                 status="active", revises=belief_id)
+                 kind=old.get("kind", "belief"), status="active", revises=belief_id)
         self.entries.append(e)
         return e
 
@@ -59,7 +63,10 @@ class BeliefLedger:
             head = f"[{e['id']} · {e['author']}]"
             if e["status"] == "active":
                 rev = f" (revises {e['revises']})" if e["revises"] else ""
-                lines.append(f"{head} {e['object']}: {e['belief']} "
+                # objective objects are surfaced as observed memory, subjective ones as
+                # belief (the `extract` typing; plain agent-written entries stay belief)
+                lead = "observed — " if e.get("kind") == "observation" else ""
+                lines.append(f"{head} {lead}{e['object']}: {e['belief']} "
                              f"(confidence {e['confidence']:.2f}){rev}")
             elif e["status"] == "retracted":
                 lines.append(f"{head} {e['object']}: RETRACTED by {e.get('retracted_by', '?')} "
@@ -80,16 +87,19 @@ def _clamp(c):
 
 
 # --- observer-line parsing (`extract` arm) -------------------------------------
-_BELIEF_LINE = re.compile(r"^\s*BELIEF\s*:\s*(.+?)\s*$", re.M)
+# The observer types each line OBSERVATION: (objective/memory) or BELIEF: (subjective).
+_BELIEF_LINE = re.compile(r"^\s*(OBSERVATION|BELIEF)\s*:\s*(.+?)\s*$", re.M | re.I)
 
 
 def parse_belief_lines(text):
-    """OBSERVER_SYS output -> [(object, belief, confidence)]. Lines are
-    'BELIEF: <object> | <claim> | <confidence>'; a lone 'BELIEF: none' yields []."""
+    """OBSERVER_SYS output -> [(kind, object, belief, confidence)]. Lines are
+    '<OBSERVATION|BELIEF>: <object> | <claim> | <confidence>'; a lone 'BELIEF: none'
+    yields []. `kind` is 'observation' or 'belief' (defaulting to belief)."""
     out = []
-    for body in _BELIEF_LINE.findall(text or ""):
+    for tok, body in _BELIEF_LINE.findall(text or ""):
         if body.strip().lower() == "none":
             continue
+        kind = "observation" if tok.upper() == "OBSERVATION" else "belief"
         parts = [p.strip() for p in body.split("|")]
         if len(parts) >= 3:
             obj, belief, conf = parts[0], " | ".join(parts[1:-1]), parts[-1]
@@ -98,7 +108,7 @@ def parse_belief_lines(text):
         else:
             obj, belief, conf = "task", parts[0], "0.5"
         if belief:
-            out.append((obj, belief, _clamp(_first_float(conf))))
+            out.append((kind, obj, belief, _clamp(_first_float(conf))))
     return out
 
 

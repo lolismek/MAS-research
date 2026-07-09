@@ -150,20 +150,18 @@ ASSIGNMENT_PREAMBLE = (
     "<assignment>\n{subq}\n</assignment>"
 )
 
-# The worker's wrap-up: asked only when its budget is spent / it stops (rule 3). The
-# structured report IS the hub's natural artifact (PLAN hub mechanic 3): line-oriented
-# sentinel fields (rule 5), free text within each.
+# The worker's wrap-up (vanilla): asked only when its budget is spent / it stops (rule 3).
+# FREE-TEXT prose on purpose — the vanilla report is the NATURAL artifact a worker produces,
+# NOT a typed form. (Typing the report was making vanilla indistinguishable from the `sop`
+# arm, which manipulates exactly that; `sop` retypes this via SOP_REPORT_REQUEST.)
 REPORT_REQUEST = (
     "You have reached the end of your available time on this assignment, so you must "
-    "stop working now — no tools are available to you for this message. Report what you "
-    "found to the coordinator, who will combine it with other workers' reports. They "
-    "will NOT see any of your work above — only this report. Write it as plain text "
-    "lines in exactly this form (keep each field on its own line; be concrete):\n"
-    "FINDINGS: <what you established about your assignment, and how>\n"
-    "VERDICT: <your answer to the assigned sub-question, or UNKNOWN>\n"
-    "CONFIDENCE: <a number from 0 to 1>\n"
-    "EVIDENCE: <the key evidence/sources behind the verdict>\n"
-    "Do not call any tools and do not give a FINAL ANSWER line — just the report."
+    "stop working now — no tools are available to you for this message. Report back to "
+    "the coordinator, who will combine your report with the other workers' and cannot "
+    "see any of your work above — only what you write now. In a short plain-text report, "
+    "tell them what you found on your assignment, the answer you reached (or that you "
+    "could not settle it), and the key evidence behind it. Do not call any tools and do "
+    "not give a FINAL ANSWER line — just write the report."
 )
 
 # Crosses a report edge when the worker left nothing usable (rule 6; the hub
@@ -184,8 +182,10 @@ REPORTS_PREAMBLE = (
 ORCH_MERGE_SYS = (
     "You are coordinating work on the task given below. Workers have investigated its "
     "sub-questions; their reports follow. You do not investigate yourself — decide from "
-    "the reports. If — and only if — one specific missing piece blocks the decision, you "
-    "may request exactly ONE follow-up investigation by replying with a single line:\n"
+    "the reports. You are allowed ONE follow-up investigation: if a report is missing, "
+    "thin, unconvincing, or two reports conflict — or you simply want one more thing "
+    "checked before you commit — use it. To do so, reply with a single line and nothing "
+    "else:\n"
     "FOLLOWUP: <one self-contained sub-question>\n"
     "Otherwise weigh the reports, resolve any conflicts between them explicitly, and end "
     "your reply with a line in exactly this form:\n"
@@ -295,18 +295,30 @@ SOP_HANDOFF_REQUEST = (
     "Do not call any tools and do not give a FINAL ANSWER line — just those fields."
 )
 
-# --- `down` arm: verbalized confidence + one bounded challenge -----------------
-# The wrap-up additionally asks for a confidence line; if it comes back low, the
-# consumer may ask ONE question and the producer answers ONCE (both bounded).
-DOWN_CONFIDENCE_SUFFIX = (
-    "\nFinally, end your note with one line in exactly this form, rating how "
-    "confident you are in what you handed over:\n"
-    "CONFIDENCE: <a number from 0 to 1>"
+# The hub counterpart: `sop` retypes the worker REPORT into the same schema (vanilla's
+# REPORT_REQUEST is now free prose, so this is what makes `sop` a real typed contrast).
+SOP_REPORT_REQUEST = (
+    "You have reached the end of your available time on this assignment, so you must "
+    "stop working now — no tools are available to you for this message. Report to the "
+    "coordinator, who will NOT see any of your work above — only this report. Write it "
+    "as plain text lines in exactly this form (keep each field on its own line; be "
+    "concrete):\n"
+    "FINDINGS: <what you established about your assignment, and how>\n"
+    "EVIDENCE: <the key evidence/sources behind it>\n"
+    "VERDICT: <your answer to the assigned sub-question, or UNKNOWN>\n"
+    "NEXT_STEPS: <what you would try next, if anything>\n"
+    "Do not call any tools and do not give a FINAL ANSWER line — just those fields."
 )
 
-# How the challenger sees the low-confidence payload (rule 4: delimited, attributed).
+# --- `down` arm: a bounded challenge the CONSUMER decides to raise ---------------
+# At every edge the incoming worker is shown the payload and freely decides whether to
+# raise ONE question (no confidence threshold — it fires on judgment, so it actually
+# fires); if it does, the producer answers ONCE (both bounded, tool-less, on-meter) and
+# the Q/A is appended to the payload before it crosses.
+
+# How the challenger sees the payload it is about to inherit (rule 4: delimited, attributed).
 CHALLENGE_NOTE_PREAMBLE = (
-    "The colleague's note/report on this task, with their stated confidence:\n\n"
+    "The colleague's note/report on this task:\n\n"
     "<note>\n{note}\n</note>"
 )
 
@@ -317,14 +329,18 @@ DOWN_EXCHANGE_TEMPLATE = (
     "[answer from the note's author]\n{answer}"
 )
 
-# The consumer's single bounded challenge (asked of a FRESH agent holding only the
-# task and the low-confidence payload — it has no transcript yet).
+# The consumer's single bounded challenge (asked of a FRESH agent holding only the task
+# and the payload — it has no transcript yet). It may decline: the point is to let it
+# challenge FREELY when something looks unclear/unverified, not to force a question.
 CHALLENGE_ASK_SYS = (
-    "You are about to take over the task given below from a colleague whose note "
-    "follows. Their stated confidence is low. Before you start, you may ask them "
-    "exactly ONE question — the single thing that would most help you trust or "
-    "correct their note. Output one line in exactly this form and nothing else:\n"
-    "QUESTION: <your one question>"
+    "You are about to take over the task given below from a colleague whose note/report "
+    "follows. Before you start, you may ask them ONE question. If anything in it is "
+    "unclear, looks unverified, or you are not sure you can rely on it, ask the single "
+    "question that would most help you trust or correct it — do not hold back. Output one "
+    "line in exactly this form and nothing else:\n"
+    "QUESTION: <your one question>\n"
+    "If the note is clear and you genuinely have nothing to ask, output exactly:\n"
+    "QUESTION: none"
 )
 
 # The producer's single bounded answer (its full working memory is intact).
@@ -338,12 +354,16 @@ CHALLENGE_ANSWER_REQUEST = (
 
 # --- `board` / `extract` arms: the belief ledger -------------------------------
 # Tool descriptions ride in the tool schema (rule 2) — these constants ARE those
-# schema strings, kept here so prompt review stays one file.
+# schema strings, kept here so prompt review stays one file. The framing is RAW and
+# GENEROUS (ported from camel/eval-clean's board): record beliefs AS YOU WORK, not a
+# curated summary of "what a successor must know" — the tool alone did not drive
+# adoption, so the incentive below (BOARD_WRITE_INCENTIVE) rides in the system prompt.
 ADD_BELIEF_DESC = (
-    "Record one belief about the task on the shared board other workers on this task "
-    "can see. State the OBJECT (the thing the belief is about), the BELIEF itself "
-    "(one concrete claim), and your CONFIDENCE from 0 to 1. Use it when you establish "
-    "or rule out something another worker should not have to re-derive."
+    "Add one belief to the shared board the other workers on this task can see. Use it "
+    "GENEROUSLY, as you work — whenever you establish a fact, compute a value or count "
+    "(record the ACTUAL number), form or rule out a hypothesis, or hit a dead end. Give "
+    "the OBJECT (the thing the belief is about), the BELIEF itself (one concrete claim), "
+    "and your CONFIDENCE from 0 to 1. Don't wait until you are finished."
 )
 REVISE_BELIEF_DESC = (
     "Revise or retract one belief already on the shared board, by its id. Give the "
@@ -351,22 +371,53 @@ REVISE_BELIEF_DESC = (
     "evidence shows a recorded belief is wrong or needs sharpening."
 )
 
-# The `extract` observer: reads a producer's full trace (incl. its recovered
-# reasoning) at an edge event and reconstructs the ledger-worthy beliefs — no agent
-# cooperation needed. Line-oriented sentinel output (rule 5).
+# Appended to the SOLVER system prompt for the board arms only (a deliberate, sanctioned
+# bend of hygiene rule 2: the write-tool schema alone did not drive adoption in smoke —
+# agents solved and moved on without recording anything). Both `board` and `board_inert`
+# get it: they must share ONE write path so any gap between them is the RENDER, not the
+# writing (the confound control's whole point). NOT given to the tool-less orchestrator.
+BOARD_WRITE_INCENTIVE = (
+    "\n\nSHARED BELIEF BOARD: you and the other workers on this task share a belief board "
+    "— a running record of what each of you currently believes, has found, computed, or "
+    "ruled out. The others never see your tool calls or your working, only a short note at "
+    "the very end — so the board is the only way your intermediate findings reach them. "
+    "Record beliefs AS YOU WORK, generously: call add_belief whenever you establish a "
+    "fact, compute a value or count (record the ACTUAL number), form or rule out a "
+    "hypothesis, or hit a dead end. Do not wait until you are finished. Do not repeat a "
+    "belief already on the board; if one of YOUR beliefs turns out to be FALSE, fix it "
+    "with revise_belief. Write to the board ONLY by calling add_belief / revise_belief — "
+    "never by typing beliefs into your reply."
+)
+
+# The `extract` observer: reads a producer's full trace (incl. its recovered reasoning)
+# at an edge event and reconstructs the ledger it would have kept — no agent cooperation
+# needed. Ported from macnet's `belief_state` extractor: it separates OBJECTIVE objects
+# (concrete facts/values it found — these read like observations / memory) from
+# SUBJECTIVE ones (its stance on whether the task is solvable and how far it trusts its
+# own answer — genuine beliefs). Line-oriented sentinel output (rule 5).
 OBSERVER_SYS = (
-    "You are reading the working log of an agent that just finished a stretch of work "
-    "on a task. Extract the beliefs it formed that a successor should know: things it "
-    "established, things it ruled out, and assumptions it is leaning on — with how "
-    "certain the log shows it to be. Do not solve the task and do not add beliefs of "
-    "your own. Output one line per belief, each in exactly this form, and nothing else:\n"
-    "BELIEF: <object> | <one concrete claim> | <confidence 0 to 1>\n"
-    "Emit at most {max_beliefs} lines, most important first. If the log establishes "
-    "nothing, output exactly: BELIEF: none"
+    "You are reading the working log of an agent that just finished a stretch of work on "
+    "a task, so what it now holds can be passed to the next worker — who will NOT see this "
+    "log. Surface, from its reasoning and actions, what it takes to be true. Work in two "
+    "steps (think it through first):\n"
+    "1. Decide which OBJECTS it holds a view on that is worth passing on. Include: (a) "
+    "concrete task objects its work is informative about — a specific fact, value, entity, "
+    "location, or sub-result it found or ruled out (these are OBSERVATIONS — what it now "
+    "knows, like memory); and (b) these preset ABSTRACT objects WHEN its work bears on "
+    "them: whether the task still seems SOLVABLE, and how far it TRUSTS its own current "
+    "answer or planned next step (these are BELIEFS — its subjective stance). Omit any "
+    "object the log says nothing about; do not solve the task yourself and do not invent "
+    "views the log does not support.\n"
+    "2. Output one line per object, most important first, each in EXACTLY one of these two "
+    "forms and nothing else:\n"
+    "OBSERVATION: <object> | <the concrete thing it found, one claim> | <confidence 0 to 1>\n"
+    "BELIEF: <object> | <its subjective view, one sentence> | <confidence 0 to 1>\n"
+    "Emit at most {max_beliefs} lines. If the log establishes nothing, output exactly: "
+    "BELIEF: none"
 )
 
 OBSERVER_REQUEST = (
     "Here is the agent's working log for this stretch:\n\n"
     "<working_log>\n{log}\n</working_log>\n\n"
-    "Extract the BELIEF lines now."
+    "Extract the OBSERVATION / BELIEF lines now."
 )
