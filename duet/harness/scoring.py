@@ -234,15 +234,19 @@ def _match_list(final, expected):
     (so '1,234,567' matches '1234567' after _norm strips commas). Order-insensitive;
     one missing/wrong branch fails the whole answer (that is the benchmark's point).
     Extra prose is tolerated: the reply is an aggregation sentence, not a bare list.
-    Two relaxations (both still require every part present): initials-spacing is
-    normalized, and a compound gold item ('Anthony Russo and Joe Russo') hits when
-    ALL of its conjuncts hit individually."""
+    Three relaxations (each still requires every part present): initials-spacing is
+    normalized; a compound gold item ('Anthony Russo and Joe Russo') hits when ALL of
+    its conjuncts hit individually; and a compound item also hits when all its content
+    tokens land inside ONE list segment of the reply — so the factored surname
+    'Anthony and Joe Russo' counts, but the same tokens scattered across different
+    list items ('Joe Russo, Anthony Curtis') do not."""
     try:
         gold = json.loads(expected)
     except (TypeError, ValueError):
         gold = [expected]
     nf = _norm(final)
     nf_tokens = [_norm(t) for t in re.split(r"[,;\n]| and ", final or "")]
+    segments = [_norm(t) for t in re.split(r"[,;\n]", final or "")]
     for g in gold:
         ng = _norm(str(g))
         if not ng:
@@ -252,8 +256,13 @@ def _match_list(final, expected):
         if any(_num_eq(t, ng) or t == ng for t in nf_tokens):
             continue
         parts = [p for p in re.split(r"\s+and\s+|\s*&\s*", ng) if p]
-        if len(parts) > 1 and all(_alias_hit(nf, p) for p in parts):
-            continue
+        if len(parts) > 1:
+            if all(_alias_hit(nf, p) for p in parts):
+                continue
+            toks = [w for w in ng.split() if w not in ("and", "&")]
+            if any(all(re.search(rf"\b{re.escape(w)}\b", seg) for w in toks)
+                   for seg in segments):
+                continue
         return False
     return True
 

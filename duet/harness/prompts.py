@@ -119,16 +119,22 @@ TRUNCATED_MARKER = "[the previous worker did not leave a usable hand-off note]"
 # The orchestrator's decompose call. System = role + output contract only (rule 1);
 # the claim itself arrives verbatim in the task layer. Line-oriented SUBQ: sentinel
 # (rule 5) instead of nested JSON — truncation-tolerant with thinking models.
+# No batching allowance: "you may batch several related lookups into one sub-question"
+# collapsed FanOutQA to degenerate 1-subq plans (7/9 smokes on a natively 5-branch
+# question took that escape hatch) — the hub's fan-out never engaged. Enumerations now
+# split explicitly instead.
 ORCH_DECOMPOSE_SYS = (
     "You are coordinating work on the task given below. You do not investigate "
     "yourself — you split the task into the independent sub-questions whose answers, "
     "taken together, settle it. Each sub-question must be answerable on its own, "
     "without seeing the others' answers. Do not settle any factual part of the task "
     "from memory: every fact the final answer depends on must appear in some "
-    "sub-question so a worker verifies it (you may batch several related lookups "
-    "into one sub-question). Emit between 2 and 4 sub-questions when the "
-    "task genuinely decomposes; fewer only if it truly does not. Output one line per "
-    "sub-question, each in exactly this form, and nothing else:\n"
+    "sub-question so a worker verifies it. When the task asks about several entities "
+    "(a list, a top-N, an enumeration), give each entity its own sub-question rather "
+    "than one sub-question for the whole list; if there are more than 4 entities, "
+    "split them evenly across 4 sub-questions. Emit between 2 and 4 sub-questions "
+    "when the task genuinely decomposes; fewer only if it truly does not. Output one "
+    "line per sub-question, each in exactly this form, and nothing else:\n"
     "SUBQ: <one self-contained sub-question>"
 )
 
