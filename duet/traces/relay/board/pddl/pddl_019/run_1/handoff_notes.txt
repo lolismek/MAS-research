@@ -1,0 +1,40 @@
+===== edge 1 =====
+Current state: d1 is on d3, d2 is on peg3, d3 is on peg1.
+Goal: on(d1,d2), on(d2,d3), on(d3,peg3).
+
+Plan to reach goal:
+1. move(d1,d2) -> d1 on d2, d2 on peg3, d3 on peg1
+2. move(d2,peg2) -> d1 on d2, d2 on peg2, d3 on peg1
+3. move(d3,peg3) -> d1 on d2, d2 on peg2, d3 on peg3
+4. move(d2,d3) -> d1 on d2, d2 on d3, d3 on peg3
+
+After step 4, all goal facts should be satisfied. Execute these steps in order.
+
+===== edge 2 =====
+The previous agent's plan was flawed. It proposed moving `d2` while `d1` was still on top of it, which is impossible because `d2` would not be clear.
+
+**Current State:**
+- `d1` is on `d3`
+- `d2` is on `peg3`
+- `d3` is on `peg1`
+- `peg2` is empty.
+
+**Goal:**
+- `on(d1, d2)`
+- `on(d2, d3)`
+- `on(d3, peg3)`
+
+**Correct Plan:**
+1. **`move(d2, peg2)`**: Move `d2` from `peg3` to `peg2`. This clears `peg3` for `d3`.
+   - State: `d1` on `d3`, `d2` on `peg2`, `d3` on `peg1`.
+2. **`move(d3, peg3)`**: Move `d3` from `peg1` to `peg3`. This satisfies `on(d3, peg3)`.
+   - State: `d1` on `d3`, `d2` on `peg2`, `d3` on `peg3`.
+3. **`move(d1, peg1)`**: Move `d1` from `d3` to `peg1`. This clears `d3` so `d2` can be placed on it.
+   - State: `d1` on `peg1`, `d2` on `peg2`, `d3` on `peg3`.
+4. **`move(d2, d3)`**: Move `d2` from `peg2` to `d3`. This satisfies `on(d2, d3)`.
+   - State: `d1` on `peg1`, `d2` on `d3`, `d3` on `peg3`.
+5. **`move(d1, d2)`**: Move `d1` from `peg1` to `d2`. This satisfies `on(d1, d2)`.
+   - State: `d1` on `d2`, `d2` on `d3`, `d3` on `peg3`.
+
+Execute these 5 steps in order.
+

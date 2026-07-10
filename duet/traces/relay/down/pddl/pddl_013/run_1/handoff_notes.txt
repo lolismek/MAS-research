@@ -1,0 +1,46 @@
+===== edge 1 =====
+Current State:
+- Robot `robby` is in `roomb`.
+- Robot is holding `ball3` in the right gripper (`carry(ball3,right)`).
+- Left gripper is free (`free(left)`).
+- Balls `ball1`, `ball2`, `ball3` are in `roomb`.
+- Balls `ball4` through `ball36` are in `rooma`.
+- Goal: Move all 36 balls to `roomb`.
+
+Progress: 3/36 balls moved.
+
+Next Steps:
+1. Drop `ball3` in `roomb` using `drop(ball3, roomb, right)`.
+2. Move back to `rooma` using `move(roomb, rooma)`.
+3. Pick up two balls (e.g., `ball4` and `ball5`) using `pick(ball4, rooma, left)` and `pick(ball5, rooma, right)`.
+4. Move to `roomb` using `move(rooma, roomb)`.
+5. Drop both balls using `drop(ball4, roomb, left)` and `drop(ball5, roomb, right)`.
+6. Repeat steps 2-5 until all balls are in `roomb`.
+
+[clarifying question from the worker taking over]
+Is `ball3` currently in `roomb` or held by the robot, as the note contains a contradiction regarding its location?
+[answer from the note's author]
+`ball3` is currently held by the robot in its right gripper. The robot is standing in `roomb`, but since the ball has not been dropped yet, it is not considered "at" `roomb` in the goal sense. Only `ball1` and `ball2` have been successfully placed on the floor in `roomb`. The robot needs to drop `ball3` to finish moving it.
+
+===== edge 2 =====
+Current State:
+- Robot `robby` is in `rooma`.
+- Both grippers are free.
+- Balls `ball1` through `ball5` are in `roomb`.
+- Balls `ball6` through `ball36` are in `rooma`.
+- Goal: Move all 36 balls to `roomb`.
+- Progress: 5/36 balls moved.
+
+Next Steps:
+1. Pick up `ball6` using `pick(ball6, rooma, left)`.
+2. Pick up `ball7` using `pick(ball7, rooma, right)`.
+3. Move to `roomb` using `move(rooma, roomb)`.
+4. Drop `ball6` using `drop(ball6, roomb, left)`.
+5. Drop `ball7` using `drop(ball7, roomb, right)`.
+6. Repeat this cycle (pick two, move, drop two) until all balls are in `roomb`.
+
+[clarifying question from the worker taking over]
+Can you confirm the correct action syntax, as the task description examples (`pickup`, `stack`) differ from the note's proposed actions (`pick`, `move`, `drop` with location/hand arguments)?
+[answer from the note's author]
+Based on the successful actions taken in the previous turn, the correct syntax is `pick(<object>, <location>, <hand>)`, `drop(<object>, <location>, <hand>)`, and `move(<from>, <to>)`. For example, I successfully used `pick(ball4, rooma, left)` and `drop(ball4, roomb, left)`. The generic examples in the task description do not match the specific arguments required by this environment.
+

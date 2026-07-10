@@ -1,0 +1,43 @@
+===== edge 1 =====
+Current State:
+- Location: roomb
+- Holding: ball3 (right gripper)
+- Free: left gripper
+- Balls in roomb: ball1, ball2
+- Balls in rooma: ball4 through ball32
+- Goal: Move all 32 balls to roomb.
+
+Plan:
+1. Drop ball3 in roomb.
+2. Move to rooma.
+3. Pick up ball4 (left) and ball5 (right).
+4. Move to roomb.
+5. Drop ball4 and ball5.
+6. Repeat steps 2-5 for remaining balls (ball6-ball32).
+
+[clarifying question from the worker taking over]
+Does the plan account for the fact that ball6 through ball32 is an odd number (27 balls), meaning the final trip will only carry one ball instead of two?
+[answer from the note's author]
+Yes, the plan accounts for this. After dropping ball3, there are 29 balls remaining in rooma (ball4 through ball32). Since 29 is an odd number, the strategy of carrying two balls at a time will result in 14 trips carrying two balls each, and a final 15th trip carrying just the last ball. The general loop of picking up available balls, moving, and dropping handles this naturally.
+
+===== edge 2 =====
+Current State:
+- Location: rooma
+- Holding: nothing (both grippers free)
+- Balls in roomb: ball1, ball2, ball3, ball4, ball5
+- Balls in rooma: ball6 through ball32 (27 balls remaining)
+- Goal: Move all 32 balls to roomb.
+- Progress: 5/32 facts satisfied.
+
+Plan:
+Continue the established loop of picking up pairs of balls from rooma and transporting them to roomb.
+1. Pick up ball6 (left) and ball7 (right).
+2. Move to roomb.
+3. Drop ball6 and ball7.
+4. Return to rooma.
+5. Repeat for subsequent pairs (ball8/ball9, ball10/ball11, etc.).
+6. Since there are 27 balls remaining (an odd number), the final trip will involve picking up only the last ball (ball32) and moving it to roomb.
+
+Next Action:
+Execute `pick(ball6, rooma, left)` followed by `pick(ball7, rooma, right)`.
+

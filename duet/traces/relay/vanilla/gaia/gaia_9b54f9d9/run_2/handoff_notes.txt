@@ -1,0 +1,32 @@
+===== edge 1 =====
+I have successfully read the zip file containing `food_duplicates.xls` and `CATEGORIES.xml`. I have extracted all food values from the spreadsheet into a Python list/set.
+
+The task is to find the specific food in the spreadsheet that has a synonym defined in the XML, but that synonym does *not* also appear in the spreadsheet. For all other foods in the spreadsheet that have synonyms in the XML, both the name and the synonym appear in the spreadsheet.
+
+**Next Steps:**
+1.  Parse `CATEGORIES.xml` to extract the mapping of Food Names to their Synonyms (and the Category they belong to).
+2.  Compare this mapping against the set of values found in `food_duplicates.xls`.
+3.  Identify the single food item where one form (Name or Synonym) is in the spreadsheet, but the other form is not.
+4.  Identify the `CATEGORY` text element in the XML that contains this food.
+5.  Return the name of that category.
+
+I need to be careful with case-insensitivity and whitespace when comparing the spreadsheet values to the XML values.
+
+===== edge 2 =====
+Hand-off note:
+
+I have successfully extracted and inspected the contents of the zip file. Here is what I have established:
+
+1. **Spreadsheet Data (`food_duplicates.xls`)**: Contains 90 unique food strings. I have extracted them all into a normalized list (lowercase, stripped of whitespace). The full list is:
+`['agave', 'alligator pear', 'angel hair pasta', 'arugula', 'aubergine', 'avocado', 'bacon strip', 'beef', 'beet', 'beetroot', 'bell pepper', 'boba', 'bombay duck', 'bonbon', 'broccoli rabe', 'buffalo wings', 'calf meat', 'calf thymus', 'candy', 'candy floss', 'capellini', 'capsicum', 'chickpea', 'chips', 'cilantro', 'coffee', "confectioner's sugar", 'congee', 'coriander', 'cottage cheese', 'cotton candy', 'courgette', 'crawdad', 'cupcake', 'deer meat', 'eggplant', 'fairy cake', "farmer's cheese", 'fatty goose liver', 'flapjack', 'fleur de sel', 'fries', 'garbanzo bean', 'geoduck', 'goat meat', 'golden raisin', 'granola', 'hand pies', 'hot wings', 'icing sugar', 'jam doughnut', 'java', 'jelly donut', 'kraft dinner', 'lizardfish', 'mac and cheese', 'mudbug', 'mutton', 'nectar', 'oat cereal', 'pancake', 'pasties', 'peas', 'pickle', 'puffed rice', 'pumpkin', 'rapini', 'rasher', 'relish', 'rice krispies', 'rice porridge', 'rocket', 'salt', 'shish kebab', 'skewer', 'soda', 'soy curds', 'squab', 'squash', 'stomach', 'sugar snaps', 'sultana', 'sweetbread', 'tapioca', 'tofu', 'tripe', 'turtle soup', 'veal', 'venison', 'zucchini']`
+
+2. **XML Structure (`CATEGORIES.xml`)**: This is a WordprocessingML file. The structure consists of `<w:p>` (paragraph) elements. Each category name appears in its own paragraph, immediately followed by its synonym/alternative names in subsequent paragraphs. For example, the "Vegetable" category is followed by paragraphs containing "eggplant", "aubergine", "courgette", "zucchini", "capsicum", "bell pepper", "rocket", "arugula", "rapini", and "broccoli rabe".
+
+3. **Task Logic**: The spreadsheet contains pairs of synonyms for most foods. The task asks for the category that contains a food item which is *not* present in the spreadsheet list above. For all other categories, every listed food/synonym appears in the spreadsheet.
+
+**Next Steps**:
+- Parse the XML to group the `<w:t>` text elements into their respective categories.
+- Iterate through each category's food list and check for membership in the 90-item spreadsheet list.
+- Identify the single category where one food is missing from the spreadsheet.
+- Return the name of that category as the final answer.
+

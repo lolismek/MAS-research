@@ -14,7 +14,7 @@ is actually built and how to run it.
 | **P1** | **HUB** topology + FEVER-compound filter + FanOutQA loader | ✅ done (smoke: real 2-subq plans, conformant reports, correct merges on feverc + fanout) |
 | **P2** | `store.py` + the 6 real arms + prompt-diff audit | ✅ done (audit green; board/extract/down smoke-validated live) |
 | **P3** | metrics + process judges + challenge suite | ✅ machinery built; judges NOT yet validated on a hand-labeled slice; probes = starter set (12T+8S of ~40) |
-| P4 | full grid (handed to user to run) | ⬜ |
+| **P4** | full grid + six-arm GPQA + challenge probes | ✅ done 2026-07-10 (1,832 runs, $88.25, 0 failed) — see `sweeps/p4/RESULTS.md` |
 | **P5** | **DIALOGUE** topology + gradient cell | ✅ built, offline-tested; runs after the core grid |
 
 ## The agent primitive (`harness/agent.py`)
