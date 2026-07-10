@@ -1,0 +1,51 @@
+% MAS framework x baseline arm x benchmark coverage matrix
+% Requires: booktabs, xcolor (with [table]), and (optional) a math font for the glyphs.
+% Drop \begin{table}...\end{table} into a Beamer frame or a paper.
+\documentclass[border=8pt]{standalone}
+\usepackage{booktabs}
+\usepackage[table]{xcolor}
+\usepackage{amssymb}   % \CIRCLE-style glyphs via wasysym alt; here we use text words
+\usepackage{array}
+
+% status fill colors
+\definecolor{cFull}{HTML}{C8E6C9}   % full run w/ numbers
+\definecolor{cSlice}{HTML}{FFE0B2}  % ablation slice (traces, no aggregate)
+\definecolor{cSmoke}{HTML}{BBDEFB}  % built + smoke-validated
+\definecolor{cNone}{HTML}{F0F0F0}   % not built
+\definecolor{cOurs}{HTML}{FFF9C4}   % highlight for our method row label
+
+\newcommand{\Full}{\cellcolor{cFull}\textbf{full run}}
+\newcommand{\Slice}{\cellcolor{cSlice}slice}
+\newcommand{\Smoke}{\cellcolor{cSmoke}smoke}
+\newcommand{\None}{\cellcolor{cNone}\textcolor{gray}{--}}
+
+\begin{document}
+\renewcommand{\arraystretch}{1.35}
+\setlength{\tabcolsep}{9pt}
+\begin{tabular}{l ccc}
+\toprule
+ & \textbf{CAMEL} & \textbf{MacNet} & \textbf{DyLAN} \\
+ & \small 4-agent line & \small DAG & \small dynamic team \\
+\midrule
+\multicolumn{4}{l}{\footnotesize\itshape Benchmarks:\; CAMEL = GPQA-D / MATH-L5 / GAIA \quad\textbullet\quad MacNet, DyLAN = ALFWorld / FEVER / PDDL / SciWorld} \\
+\multicolumn{4}{l}{\footnotesize\itshape Model (all cells): Qwen3.6-35B-A3B via the Tinker proxy} \\
+\midrule
+\textbf{vanilla} \small(control)      & \Full  & \Smoke & \Smoke \\
+full\,/\,full\_memory                 & \Slice & \Smoke & \None  \\
+memorybank                            & \Slice & \Smoke & \None  \\
+generative                            & \Slice & \None  & \None  \\
+chatdev                               & \Slice & \None  & \None  \\
+metagpt                               & \Slice & \Smoke & \None  \\
+voyager                               & \Slice & \Smoke & \None  \\
+\rowcolor{cOurs}\textbf{belief board} \small(+inert) & \Slice & \Smoke & \None  \\
+\bottomrule
+\end{tabular}
+
+\vspace{6pt}
+{\footnotesize
+\colorbox{cFull}{\strut\ \textbf{full run} w/ numbers\ } \quad
+\colorbox{cSlice}{\strut\ slice = ablation traces, no aggregate\ } \quad
+\colorbox{cSmoke}{\strut\ smoke-validated only\ } \quad
+\colorbox{cNone}{\strut\ -- not built\ }
+}
+\end{document}
