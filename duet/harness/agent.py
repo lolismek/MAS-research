@@ -305,9 +305,11 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
     truncation/backstop. A forced/truncated stop leaves NO terminal answer — the caller
     decides the wrap-up (continue_agent) or substitutes a marker.
 
-    `budget_tool_names`: if None, every tool call counts toward `tool_budget`; else only
+    `budget_tool_names`: if None, every TASK tool call counts toward `tool_budget`; else only
     calls with those names count (PDDL bills 'pddl_step' env steps, not free observe/actions
-    lookups — PLAN relay mechanic 1). All calls are always metered in `n_tool_calls`.
+    lookups — PLAN relay mechanic 1). Addon-owned tools (store writes) never count: the
+    budget encodes information-access asymmetry and a write fetches nothing. All calls are
+    always metered in `n_tool_calls`.
 
     `resume`: a PERSISTENT message list from this agent's previous turns (dialogue
     topology) — used verbatim instead of building [system]+task_messages, so the agent
@@ -354,7 +356,11 @@ def run_agent(role, system_prompt, task_messages, tool_names, client, model,
             out = (addon.run_extra_tool(name, tc.function.arguments)
                    if name in addon_tools else run_tool(name, tc.function.arguments, env=env))
             n_tools += 1
-            if budget_tool_names is None or name in budget_tool_names:
+            # Addon-owned tools (board's add/revise_belief) are store writes, not lookups:
+            # the tool budget encodes INFORMATION-ACCESS asymmetry, so billing writes against
+            # it would hand arm agents fewer real lookups than vanilla (and at B=1 lock the
+            # write out entirely, or let it crowd out the only search round).
+            if name not in addon_tools and (budget_tool_names is None or name in budget_tool_names):
                 n_budget += 1
             cap = FILE_TOOL_CHARS if name in _FILE_TOOLS else MAX_TOOL_CHARS
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": _truncate(out, cap)})

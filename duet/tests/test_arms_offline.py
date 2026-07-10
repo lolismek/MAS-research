@@ -139,13 +139,19 @@ def test_down_challenge_consumer_decides():
 
 
 def test_board_tools_write_and_render():
+    # Store writes are FREE (never billed to the tool budget): the write round below must
+    # NOT end the shift — the run_python round is what spends B=1. Under the old
+    # write-is-billed semantics round 2 never executes and this script desyncs, so this
+    # doubles as the regression test for the B=1 lockout (write eats the only round).
     script = [
         tool_turn(("add_belief", {"object": "door", "belief": "north door is locked",
-                                  "confidence": 0.9})),        # shift 1, budgeted call 1
-        text_turn(NOTE),                                       # note (B=1 spent)
+                                  "confidence": 0.9})),        # round 1: free store write
+        tool_turn(("run_python", {"code": "print(1)"})),       # round 2: spends B=1
+        text_turn(NOTE),                                       # note (budget spent)
         text_turn("FINAL ANSWER: done"),                       # shift 2 early finish
     ]
     r, c, addon = _run("board", script)
+    assert r.shifts[0].n_tool_calls == 2       # both rounds ran; only run_python was billed
     assert addon.stats.get("beliefs_added") == 1
     entries = addon.store_json()
     assert entries[0]["object"] == "door" and entries[0]["author"] == "shift_1"
@@ -188,6 +194,7 @@ def test_board_revise_and_retract():
 def test_board_inert_never_renders():
     script = [
         tool_turn(("add_belief", {"object": "door", "belief": "locked", "confidence": 0.9})),
+        tool_turn(("run_python", {"code": "print(1)"})),   # spends B=1 (writes are free)
         text_turn(NOTE),
         text_turn("FINAL ANSWER: done"),
     ]
