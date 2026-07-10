@@ -38,6 +38,12 @@ def main():
     for root, _d, files in os.walk(TRACES):
         if "result.json" not in files:
             continue
+        # latest run per task only — earlier runs of a re-run probe are stale code
+        task_dir = os.path.dirname(root)
+        runs = [d for d in os.listdir(task_dir)
+                if d.startswith("run_") and d.split("_")[1].isdigit()]
+        if os.path.basename(root) != max(runs, key=lambda s: int(s.split("_")[1])):
+            continue
         r = json.load(open(os.path.join(root, "result.json")))
         probe = _PROBES.get(r["id"])
         if probe is None or not r["bench"].startswith("challenge_"):

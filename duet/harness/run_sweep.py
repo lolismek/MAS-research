@@ -56,6 +56,11 @@ def _task_ids(bench, limit=None):
     return ids[:limit] if limit else ids
 
 
+def _challenge_ids(fname):
+    path = os.path.join(ROOT, "challenge", fname)
+    return [json.loads(l)["id"] for l in open(path) if l.strip()]
+
+
 def build_phases():
     """[(phase_name, [job...])]; job = (topology, arm, tasks_spec, task_id, budget, env)."""
     fever = _task_ids("fever_compound")
@@ -74,9 +79,17 @@ def build_phases():
         ("P3-pddl", [("relay", a, "pddl", t, None, None)
                      for a in ARMS for t in pddl]),
         ("P4-gpqa-null", [("relay", a, "gpqa_diamond", t, None, None)
-                          for a in ("vanilla", "full", "board") for t in gpqa]),
+                          for a in ARMS for t in gpqa]),   # all 6: completeness pass
         ("P5-gaia", [("relay", a, "gaia", t, None, gaia_env)
                      for a in ARMS for t in gaia]),
+        # Post-audit addition (user-approved): synthetic probes, all 7 arms.
+        # Temporal at B=1 = the fever-relay regime (and successors can't fully
+        # re-verify the planted note); spatial keeps the hub worker default.
+        ("P6-challenges",
+         [("relay", a, "duet/challenge/temporal.jsonl", t, 1, None)
+          for a in ARMS_HEADLINE for t in _challenge_ids("temporal.jsonl")]
+         + [("hub", a, "duet/challenge/spatial.jsonl", t, None, None)
+            for a in ARMS_HEADLINE for t in _challenge_ids("spatial.jsonl")]),
     ]
 
 
