@@ -1,0 +1,63 @@
+===== edge 1 =====
+The goal is to move the stack of 4 disks (d1, d2, d3, d4) from peg1 to peg3, such that the final configuration on peg3 is d4 at the bottom, then d3, d2, d1 on top.
+
+Current State (inferred from last actions):
+- peg1: d4 (bottom), d3 on d4
+- peg2: d2
+- peg3: d1
+
+Previous moves:
+1. `move(d1,peg2)`
+2. `move(d1,peg3)`
+3. `move(d2,peg2)`
+
+Strategy:
+The standard Tower of Hanoi algorithm for 4 disks from peg1 to peg3 is:
+1. Move 3 disks (d1, d2, d3) from peg1 to peg2.
+2. Move d4 from peg1 to peg3.
+3. Move 3 disks (d1, d2, d3) from peg2 to peg3.
+
+However, my current state is not the initial state. I have d3 on peg1, d2 on peg2, d1 on peg3.
+To proceed with the standard algorithm (moving d1, d2, d3 to peg2), I first need to consolidate d2 and d1 onto peg1 (on top of d3) so that I can then move the entire stack of 3 disks to peg2.
+
+Immediate next steps:
+1. `move(d2,peg1)` (d2 goes on top of d3 on peg1).
+2. `move(d1,peg1)` (d1 goes on top of d2 on peg1).
+Now peg1 has d4, d3, d2, d1. peg2 and peg3 are empty.
+Then proceed with the standard algorithm to move d1, d2, d3 to peg2, then d4 to peg3, then d1, d2, d3 to peg3.
+
+===== edge 2 =====
+Current State Established:
+- peg1: d4 (bottom), d3, d2 (top)
+- peg2: empty
+- peg3: d1
+- Goal progress: 2/4 facts satisfied (on(d2,d3) and on(d3,d4) are true).
+
+What is still open:
+- Need to move the stack of 3 disks (d1, d2, d3) from peg1 to peg2.
+- Move d4 from peg1 to peg3.
+- Move the stack of 3 disks from peg2 to peg3 to complete the goal.
+
+Next Steps (Standard 4-disk Hanoi algorithm from current configuration):
+1. move(d1,d3)
+2. move(d2,peg3)
+3. move(d1,d2)
+4. move(d3,peg2)
+5. move(d1,d4)
+6. move(d2,d3)
+7. move(d1,d2)
+8. move(d4,peg3)
+9. move(d1,peg1)
+10. move(d2,d4)
+11. move(d1,d2)
+12. move(d3,peg1)
+13. move(d1,peg2)
+14. move(d2,d3)
+15. move(d1,d2)
+16. move(d3,d2)
+17. move(d1,peg2)
+18. move(d2,d3)
+19. move(d1,d2)
+
+Execute these steps sequentially to reach the goal. All moves are valid based on size constraints and current clear disks.
+

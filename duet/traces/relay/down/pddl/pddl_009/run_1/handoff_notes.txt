@@ -1,0 +1,30 @@
+===== edge 1 =====
+Current state: The robot is in `roomb`. Balls 1 and 2 are in `roomb`. Balls 3 through 20 are in `rooma`. Both grippers (left and right) are free.
+Goal: Move all 20 balls to `roomb`.
+Progress: 2/20 facts satisfied.
+
+Next steps:
+1. Move the robot back to `rooma` to pick up the next ball: `move(roomb, rooma)`.
+2. Pick up ball3: `pick(ball3, rooma, left)`.
+3. Move to `roomb`: `move(rooma, roomb)`.
+4. Drop ball3: `drop(ball3, roomb, left)`.
+5. Repeat this cycle for balls 4 through 20.
+
+[clarifying question from the worker taking over]
+Can you verify the exact action schema and predicates for this environment, as your proposed actions differ from the task examples, and is the reported current state confirmed?
+[answer from the note's author]
+Based on my successful interactions, the valid action schema includes `pick(ball, room, hand)`, `move(room1, room2)`, and `drop(ball, room, hand)`. I attempted `putdown` but it failed, whereas `drop` succeeded. The confirmed predicates are `at`, `at-robby`, `free`, `gripper`, `ball`, and `room`. The current state is confirmed: the robot is in `roomb`, balls 1 and 2 are in `roomb`, and balls 3 through 20 are in `rooma`. Both grippers are free.
+
+===== edge 2 =====
+Current state: Robot is in `roomb`. Balls 1, 2, 3, and 4 are in `roomb`. Balls 5 through 20 are in `rooma`. Both grippers are free.
+Goal: Move all 20 balls to `roomb`.
+Progress: 4/20 facts satisfied.
+Actions used so far: `move(roomb,rooma)`, `pick(ball3,rooma,left)`, `move(rooma,roomb)`, `drop(ball3,roomb,left)`, `move(roomb,rooma)`, `pick(ball4,rooma,left)`, `move(rooma,roomb)`, `drop(ball4,roomb,left)`.
+What is still open: Balls 5 through 20 need to be moved from `rooma` to `roomb`.
+What to try next: Continue the established cycle for the remaining balls. For each ball X from 5 to 20, execute:
+1. `move(roomb, rooma)`
+2. `pick(ballX, rooma, left)`
+3. `move(rooma, roomb)`
+4. `drop(ballX, roomb, left)`
+Immediate next action: `move(roomb, rooma)` to position the robot to pick up ball 5.
+

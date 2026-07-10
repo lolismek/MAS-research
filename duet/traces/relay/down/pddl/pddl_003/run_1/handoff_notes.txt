@@ -1,0 +1,61 @@
+===== edge 1 =====
+The current state is:
+- **Holding**: c
+- **On table**: a, b, e, f (all clear)
+- **Stacked**: d on e
+- **Goal**: Build a stack a on b on c on d on e on f.
+
+**Progress**:
+- `on(d,e)` is currently true.
+- `on(c,d)` was true but is temporarily broken because c is held.
+- `on(a,b)` and `on(b,c)` are broken (a and b are on the table).
+- `on(e,f)` is not yet true.
+
+**Plan**:
+1. `putdown(c)` to free the hand.
+2. `unstack(d)` to remove d from e.
+3. `putdown(d)` to place d on the table.
+4. `pickup(e)` to grab e.
+5. `stack(e,f)` to achieve `on(e,f)`.
+6. `pickup(d)` to grab d.
+7. `stack(d,e)` to achieve `on(d,e)`.
+8. `pickup(c)` to grab c.
+9. `stack(c,d)` to achieve `on(c,d)`.
+10. `pickup(b)` to grab b.
+11. `stack(b,c)` to achieve `on(b,c)`.
+12. `pickup(a)` to grab a.
+13. `stack(a,b)` to achieve `on(a,b)`.
+
+**Immediate Next Step**:
+Execute `putdown(c)` to place c on the table.
+
+[clarifying question from the worker taking over]
+Have you run pddl_observe to verify the current state, particularly confirming that on(d,e) is true and c is held?
+[answer from the note's author]
+Yes, I have been running `pddl_observe` after every step. The most recent observation was immediately after executing `unstack(c)`, and the returned state explicitly listed `holding(c)` and `on(d,e)` in the true facts, confirming that the robot is currently holding block c and that d is stacked on e.
+
+===== edge 2 =====
+The previous agent successfully built the bottom of the stack.
+Current State:
+- `on(d,e)` is true.
+- `on(e,f)` is true.
+- Blocks `a`, `b`, `c`, `f` are on the table.
+- `d` is clear.
+- Hand is empty.
+- Goal progress: 2/5 facts satisfied (`on(d,e)`, `on(e,f)`).
+
+Remaining Goal Facts:
+- `on(c,d)`
+- `on(b,c)`
+- `on(a,b)`
+
+Next Steps:
+1. `pickup(c)`
+2. `stack(c,d)`
+3. `pickup(b)`
+4. `stack(b,c)`
+5. `pickup(a)`
+6. `stack(a,b)`
+
+Execute `pickup(c)` to continue building the stack.
+

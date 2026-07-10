@@ -1,0 +1,52 @@
+===== edge 1 =====
+Current State (from last observation):
+- d1 is on d2 (which is on peg3)
+- d3 is on d4 (which is on peg1)
+- peg2 is clear
+- Goal is 2/4 satisfied: `on(d1,d2)` and `on(d3,d4)` are true.
+
+Remaining Goal Facts:
+- `on(d2,d3)`
+- `on(d4,peg3)`
+
+What is still open/uncertain:
+- d4 is currently blocked by d3 on peg1. We need to move d3 away to free d4.
+- We need to verify that `move(d4, peg3)` is accepted by the environment (standard ToH rules allow placing a disk on a peg regardless of other disks on it).
+
+Next Steps (Proposed Plan):
+1. `move(d3, peg2)` -> Clears d4 on peg1.
+2. `move(d4, peg3)` -> Moves the base of the target stack to peg3.
+3. `move(d3, d4)` -> Places d3 on top of d4 on peg3.
+4. `move(d2, d3)` -> Places d2 on top of d3.
+5. `move(d1, d2)` -> Places d1 on top of d2.
+
+This sequence should satisfy all remaining goal facts. Start with step 1.
+
+===== edge 2 =====
+Current State (verified):
+- `d1` is on `d2` (on peg3)
+- `d3` is on `peg2`
+- `d4` is on `peg1`
+- `peg3` is clear (top of stack is `d1`, but `d2` is not clear)
+- `peg1` is clear (top of stack is `d4`)
+- `peg2` is clear (top of stack is `d3`)
+
+Goal:
+- `on(d1, d2)`
+- `on(d2, d3)`
+- `on(d3, d4)`
+- `on(d4, peg3)`
+
+Previous Agent's Note:
+The previous agent attempted to move `d3` to `peg2` (which was already there) and then made an error by moving `d1` to `d4`. They then corrected this by moving `d1` back to `d2`. The current state is effectively the same as the state described in the previous agent's note, but with `d3` already on `peg2` (which was their step 1).
+
+Plan:
+1. `move(d1, d4)` -> Clears `d2`. `d1` is on `d4` on `peg1`.
+2. `move(d2, d3)` -> Moves `d2` to `d3` on `peg2`. `d2` is on `d3` on `peg2`.
+3. `move(d1, peg3)` -> Clears `d4`. `d1` is on `peg3`.
+4. `move(d3, d4)` -> Moves `d3` (with `d2`) to `d4` on `peg1`. `d3` is on `d4` on `peg1`.
+5. `move(d4, peg3)` -> Moves `d4` (with `d3`, `d2`) to `peg3`. `d4` is on `peg3`.
+6. `move(d1, d2)` -> Moves `d1` to `d2`. `d1` is on `d2` on `d3` on `d4` on `peg3`.
+
+This sequence satisfies all goal facts. Start with step 1.
+

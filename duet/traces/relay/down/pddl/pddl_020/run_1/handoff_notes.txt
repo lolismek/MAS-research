@@ -1,0 +1,58 @@
+===== edge 1 =====
+Current state:
+- d1 on peg2
+- d2 on peg3
+- d3 on d4 on peg1
+- clear(d1), clear(d2), clear(d3)
+
+Goal:
+- on(d1,d2)
+- on(d2,d3)
+- on(d3,d4)
+- on(d4,peg3)
+
+Size constraints: d4 < d3 < d2 < d1.
+Rule: Larger disks can be placed on smaller disks.
+
+Plan:
+1. move(d2, d3) - Move d2 from peg3 to d3 (on peg1).
+2. move(d4, peg3) - Move d4 from peg1 to peg3.
+3. move(d3, d4) - Move d3 from peg1 to d4 (on peg3).
+4. move(d2, d3) - Move d2 from peg1 to d3 (on peg3).
+5. move(d1, d2) - Move d1 from peg2 to d2 (on peg3).
+
+This sequence will stack all disks on peg3 in the correct order.
+
+[clarifying question from the worker taking over]
+Is the rule actually "smaller disks on larger disks" as in standard Hanoi, because the stated goal requires placing larger disks on smaller ones?
+[answer from the note's author]
+No, the rule is actually the reverse of standard Hanoi: larger disks are placed on smaller disks. The observed size facts show that d1 is the largest and d4 is the smallest (e.g., `smaller(d2,d1)` means d2 < d1). Both the initial state and the goal state consist of larger disks stacked on top of smaller ones (e.g., `on(d1,d2)` places the larger d1 on the smaller d2). The valid actions also confirm this, allowing moves like `move(d1,d2)` where a larger disk is placed onto a smaller one.
+
+===== edge 2 =====
+The current state is:
+- d1 on d2 on peg2
+- d3 on d4 on peg1
+- peg3 is clear
+- Goal: on(d1,d2), on(d2,d3), on(d3,d4), on(d4,peg3)
+- Progress: 2/4 facts satisfied (on(d1,d2) and on(d3,d4) are true).
+
+Analysis of valid moves from this state:
+- d1 is clear. The only clear target smaller than d1 is peg3. So move(d1, peg3) is the only valid move for d1.
+- d3 is clear. The only clear target smaller than d3 is peg3. So move(d3, peg3) is the only valid move for d3.
+- d2, d4, peg1, peg2 are not clear.
+
+Exploring move(d1, peg3):
+- State becomes: d1 on peg3, d2 on peg2, d3 on d4 on peg1.
+- From here, the only valid move is move(d1, d2), which returns to the current state. This is a loop.
+
+Exploring move(d3, peg3):
+- State becomes: d1 on d2 on peg2, d3 on peg3, d4 on peg1.
+- From here, d4 is clear but all targets (peg1, peg2, peg3) are occupied. So d4 cannot be moved.
+- The only valid move is move(d1, d3), leading to d1 on d3 on peg3, d2 on peg2, d4 on peg1.
+- From here, the only valid move is move(d1, d2), leading to d1 on d2 on peg2, d3 on peg3, d4 on peg1. This is a loop.
+
+Conclusion:
+All possible paths from the current state lead to loops or dead ends without achieving the remaining goal facts (on(d2,d3) and on(d4,peg3)). The goal is unreachable.
+
+FINAL ANSWER: UNKNOWN
+

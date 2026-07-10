@@ -1,0 +1,59 @@
+===== edge 1 =====
+Current State:
+- Ferry is at l0 and is full, carrying c1.
+- Locations of cars: c0@l2, c1@ferry, c2@l9, c3@l7, c4@l4, c5@l8, c6@l7, c7@l0.
+
+Goals Achieved (2/8):
+- at(c0, l2)
+- at(c5, l8)
+
+Remaining Goals:
+- at(c1, l5)
+- at(c2, l7)
+- at(c3, l8)
+- at(c4, l7)
+- at(c6, l4)
+- at(c7, l9)
+
+Next Steps:
+1. Sail to l5 (`sail(l5)`).
+2. Debark c1 (`debark(c1)`).
+3. From l5, consider sailing to l0 to pick up c7 (needs to go to l9) or l9 to pick up c2 (needs to go to l7), or l4 for c4, or l7 for c3/c6. A good strategy might be to pick up c7 at l0 and take it to l9, then pick up c2 at l9 and take it to l7, etc.
+
+[clarifying question from the worker taking over]
+Can you provide the exact output of `pddl_observe` to verify the current state, ferry capacity, and available actions?
+[answer from the note's author]
+Based on the last observed state after applying `board(c1)`:
+- Ferry is at `l0` and is `full-ferry(ferry)`.
+- Car `c1` is `on` the ferry.
+- Other cars are located at: `c0@l2`, `c2@l9`, `c3@l7`, `c4@l4`, `c5@l8`, `c6@l7`, `c7@l0`.
+- Goals achieved: `at(c0,l2)` and `at(c5,l8)` (2/8).
+- Remaining goals: `at(c1,l5)`, `at(c2,l7)`, `at(c3,l8)`, `at(c4,l7)`, `at(c6,l4)`, `at(c7,l9)`.
+- Next immediate action: `sail(l5)` to deliver `c1` to its destination.
+
+===== edge 2 =====
+Current State:
+- Ferry is at `l7` and is `full-ferry(ferry)`, carrying `c2`.
+- Goals Achieved (4/8): `at(c0, l2)`, `at(c1, l5)`, `at(c5, l8)`, `at(c7, l9)`.
+- Remaining Goals: `at(c2, l7)`, `at(c3, l8)`, `at(c4, l7)`, `at(c6, l4)`.
+- Car Locations: `c2` is on the ferry, `c3@l7`, `c4@l4`, `c6@l7`.
+
+Next Steps:
+1. Debark `c2` at `l7` (`debark(c2)`). This satisfies `at(c2, l7)`.
+2. Board `c3` at `l7` (`board(c3)`).
+3. Sail to `l8` (`sail(l8)`).
+4. Debark `c3` at `l8` (`debark(c3)`). This satisfies `at(c3, l8)`.
+5. Board `c6` at `l7` (`board(c6)`).
+6. Sail to `l4` (`sail(l4)`).
+7. Debark `c6` at `l4` (`debark(c6)`). This satisfies `at(c6, l4)`.
+8. Board `c4` at `l4` (`board(c4)`).
+9. Sail to `l7` (`sail(l7)`).
+10. Debark `c4` at `l7` (`debark(c4)`). This satisfies `at(c4, l7)`.
+
+After step 10, all 8 goals should be met.
+
+[clarifying question from the worker taking over]
+Your plan misses a sail(l7) step after step 4 to return to l7 before boarding c6; should I insert it?
+[answer from the note's author]
+Yes, you are correct. After debarking c3 at l8, the ferry is at l8, but c6 is located at l7. You must insert a `sail(l7)` step to return the ferry to l7 before you can board c6.
+
