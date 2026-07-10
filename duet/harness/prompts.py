@@ -299,10 +299,15 @@ SOP_REPORT_REQUEST = (
 )
 
 # --- `down` arm: a bounded challenge the CONSUMER decides to raise ---------------
-# At every edge the incoming worker is shown the payload and freely decides whether to
+# At every edge the incoming consumer is shown the payload and freely decides whether to
 # raise ONE question (no confidence threshold — it fires on judgment, so it actually
 # fires); if it does, the producer answers ONCE (both bounded, tool-less, on-meter) and
 # the Q/A is appended to the payload before it crosses.
+#
+# The wording is EDGE-AWARE: a relay handoff really has a "worker taking over", but a
+# hub report's consumer is the merge coordinator — one shared template made the merge
+# read relay vocabulary about a role its topology doesn't have. Same mechanism, same
+# shape, per-kind words. down-arm-only text (the vanilla prompt-diff audit is untouched).
 
 # How the challenger sees the payload it is about to inherit (rule 4: delimited, attributed).
 CHALLENGE_NOTE_PREAMBLE = (
@@ -315,6 +320,12 @@ DOWN_EXCHANGE_TEMPLATE = (
     "{note}\n\n"
     "[clarifying question from the worker taking over]\n{question}\n"
     "[answer from the note's author]\n{answer}"
+)
+
+DOWN_EXCHANGE_REPORT_TEMPLATE = (
+    "{note}\n\n"
+    "[pre-merge clarifying question about this report]\n{question}\n"
+    "[answer from the report's author]\n{answer}"
 )
 
 # The consumer's single bounded challenge (asked of a FRESH agent holding only the task
@@ -331,9 +342,28 @@ CHALLENGE_ASK_SYS = (
     "QUESTION: none"
 )
 
+CHALLENGE_ASK_REPORT_SYS = (
+    "You must decide the task given below from workers' reports; one of those reports "
+    "follows. Before you rely on it, you may ask its author ONE question. If anything in "
+    "it is unclear, looks unverified, or you are not sure you can rely on it, ask the "
+    "single question that would most help you trust or correct it — do not hold back. "
+    "Output one line in exactly this form and nothing else:\n"
+    "QUESTION: <your one question>\n"
+    "If the report is clear and you genuinely have nothing to ask, output exactly:\n"
+    "QUESTION: none"
+)
+
 # The producer's single bounded answer (its full working memory is intact).
 CHALLENGE_ANSWER_REQUEST = (
     "The worker taking over asked you one question about your note:\n"
+    "{question}\n"
+    "Answer it in a short plain-text paragraph from what you actually observed — no "
+    "tools are available and there is no time to investigate further. If you do not "
+    "know, say so plainly."
+)
+
+CHALLENGE_ANSWER_REPORT_REQUEST = (
+    "Before your report is relied on, one question came back about it:\n"
     "{question}\n"
     "Answer it in a short plain-text paragraph from what you actually observed — no "
     "tools are available and there is no time to investigate further. If you do not "

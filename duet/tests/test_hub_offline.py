@@ -121,6 +121,44 @@ def test_no_followup_channel_in_base_hub():
     print("ok  test_no_followup_channel_in_base_hub")
 
 
+def test_down_report_edge_speaks_merge_vocabulary():
+    """hub + down: the challenge on a report edge must use the report wording end to
+    end — the merge inherits '[pre-merge clarifying question about this report]', never
+    the relay's '[clarifying question from the worker taking over]' (there is no worker
+    taking over in a hub)."""
+    script = [
+        text_turn("SUBQ: is A true?"),                           # decompose (degenerate ok)
+        tool_turn(("run_python", {"code": "print(1)"})),         # worker_1
+        text_turn(REPORT_1),                                     # worker_1 report
+        text_turn("QUESTION: which source exactly?"),            # challenger fires
+        text_turn("The 1999 archive page, section 3."),          # producer answers
+        text_turn("FINAL ANSWER: yes"),                          # merge
+    ]
+    c = FakeClient(script)
+    addon = get_addon("down")
+    addon.bind(c, "m", None)
+    addon.begin_task("claim: A")
+    r = run_hub("claim: A", PY, c, "m", addon, worker_budget=1, usd_budget=budget())
+    assert addon.stats.get("down_challenges") == 1, addon.stats
+    # the challenger and the producer's answer request both got the report wording
+    ask_sys = [m["content"] for kw in c.calls for m in kw["messages"]
+               if m["role"] == "system" and (m.get("content") or "").startswith(
+                   prompts.CHALLENGE_ASK_REPORT_SYS[:40])]
+    assert ask_sys, "report-edge challenger did not use CHALLENGE_ASK_REPORT_SYS"
+    users = [m.get("content") or "" for kw in c.calls for m in kw["messages"]
+             if m["role"] == "user"]
+    assert any("Before your report is relied on" in u for u in users)
+    # the merge inherits the exchange in report vocabulary, relay vocabulary nowhere
+    m_user = "".join(m.get("content") or "" for m in r.orch[1].transcript
+                     if m["role"] == "user")
+    assert "[pre-merge clarifying question about this report]" in m_user, m_user[-400:]
+    assert "[answer from the report's author]" in m_user
+    all_text = "".join(u for u in users)
+    assert "worker taking over" not in all_text, "relay vocabulary leaked into the hub"
+    assert r.final == "FINAL ANSWER: yes" and r.committed
+    print("ok  test_down_report_edge_speaks_merge_vocabulary")
+
+
 def test_unusable_report_becomes_marker():
     """A worker whose report stays truncated across every retry crosses the REPORT
     MARKER, not the partial text (rule 6)."""

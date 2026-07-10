@@ -246,20 +246,21 @@ class DownAddOn(AddOn):
         if producer_result is None:
             self.asks.append("SKIPPED — no producer left to answer (injected payload)")
             return default
-        question, why_not = self._ask_question(default)
+        question, why_not = self._ask_question(kind, default)
         if not question:
             self.stats["down_declines"] = self.stats.get("down_declines", 0) + 1
             self.asks.append(f"DECLINED — {why_not}")
             return default
-        answer = self._answer(producer_result, question)
+        answer = self._answer(kind, producer_result, question)
         if not answer:
             self.asks.append(f"QUESTION: {question}\nANSWER: (none survived — "
                              "producer reply empty or truncated)")
             return default
         self.stats["down_challenges"] = self.stats.get("down_challenges", 0) + 1
         self.asks.append(f"QUESTION: {question}\nANSWER: {answer}")
-        return prompts.DOWN_EXCHANGE_TEMPLATE.format(note=default, question=question,
-                                                     answer=answer)
+        tmpl = (prompts.DOWN_EXCHANGE_REPORT_TEMPLATE if kind == "report"
+                else prompts.DOWN_EXCHANGE_TEMPLATE)
+        return tmpl.format(note=default, question=question, answer=answer)
 
     def extra_artifacts(self):
         if not self.asks:
@@ -267,12 +268,15 @@ class DownAddOn(AddOn):
         body = "\n\n".join(f"===== ask {j} =====\n{a}" for j, a in enumerate(self.asks, 1))
         return {"challenges.txt": body + "\n"}
 
-    def _ask_question(self, payload):
-        """-> (question, None) or (None, why-it-did-not-fire)."""
+    def _ask_question(self, kind, payload):
+        """-> (question, None) or (None, why-it-did-not-fire). Edge-aware wording: the
+        report edge's consumer is the merge coordinator, not a worker taking over."""
         from agent import run_agent
+        sys_p = (prompts.CHALLENGE_ASK_REPORT_SYS if kind == "report"
+                 else prompts.CHALLENGE_ASK_SYS)
         ctx = [{"role": "user", "content": prompts.TASK_TEMPLATE.format(task=self._task or "")},
                {"role": "user", "content": prompts.CHALLENGE_NOTE_PREAMBLE.format(note=payload)}]
-        res = run_agent("challenger", prompts.CHALLENGE_ASK_SYS, ctx, [], self.client,
+        res = run_agent("challenger", sys_p, ctx, [], self.client,
                         self.model, _NOOP, usd_budget=self.usd_budget)
         m = _QUESTION_LINE.search(res.final or "")
         if not m or res.truncated:
@@ -282,10 +286,11 @@ class DownAddOn(AddOn):
             return None, f"consumer chose not to ask (said {q!r})"
         return q, None
 
-    def _answer(self, producer_result, question):
+    def _answer(self, kind, producer_result, question):
         from agent import continue_agent
-        res = continue_agent(producer_result,
-                             prompts.CHALLENGE_ANSWER_REQUEST.format(question=question),
+        req = (prompts.CHALLENGE_ANSWER_REPORT_REQUEST if kind == "report"
+               else prompts.CHALLENGE_ANSWER_REQUEST)
+        res = continue_agent(producer_result, req.format(question=question),
                              self.client, self.model, _NOOP, usd_budget=self.usd_budget)
         return res.final if res.final and not res.truncated else None
 

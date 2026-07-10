@@ -327,7 +327,7 @@ function hl(s){
   h = h.replace(/^FINAL ANSWER:.*$/gm, m=>`<mark class="final">${m}</mark>`);
   h = h.replace(SENT, m=>`<mark>${m}</mark>`);
   h = h.replace(/&lt;(\/?)(task|assignment|shared_record)&gt;/g, (m)=>`<mark class="inject">${m}</mark>`);
-  h = h.replace(/\[(clarifying question from the worker taking over|answer from the note's author)\]/g,
+  h = h.replace(/\[(clarifying question from the worker taking over|answer from the note's author|pre-merge clarifying question about this report|answer from the report's author)\]/g,
                 m=>`<mark class="inject">${m}</mark>`);
   h = h.replace(/^(DECLINED|SKIPPED)( — .*)$/gm, m=>`<mark class="trunc">${m}</mark>`);
   h = h.replace(/\[(the model could not finish[^\]]*|truncated[^\]]*|note truncated[^\]]*|no note survived[^\]]*)\]/g,

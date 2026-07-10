@@ -263,7 +263,8 @@ def _split_solver_calls(wire):
     solver, machinery = [], []
     for sysc, rest, tools in wire:
         if sysc.startswith(prompts.OBSERVER_SYS[:40]) or sysc.startswith(
-                prompts.CHALLENGE_ASK_SYS[:40]):
+                prompts.CHALLENGE_ASK_SYS[:40]) or sysc.startswith(
+                prompts.CHALLENGE_ASK_REPORT_SYS[:40]):
             machinery.append((sysc, rest, tools))
         else:
             solver.append((sysc, rest, tools))
