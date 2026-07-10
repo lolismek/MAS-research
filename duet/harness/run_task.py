@@ -209,9 +209,11 @@ def run_one(task, topology="relay", arm="vanilla", k=None, tool_budget=None,
     if topology == "relay":
         result.update(shifts_used=res.shifts_used)
     elif topology == "hub":
-        result.update(n_subqs=len(res.plan) - (1 if res.followup else 0),
-                      degenerate_plan=res.degenerate_plan,
-                      followup_used=bool(res.followup))
+        # followup_used is a guaranteed-zero sanity column: the base hub has no
+        # follow-up channel (challenge family lives only in the down arm); kept so
+        # the result schema is stable across pre-removal traces.
+        result.update(n_subqs=len(res.plan), degenerate_plan=res.degenerate_plan,
+                      followup_used=False)
     elif topology == "dialogue":
         result.update(turns_used=res.turns_used, proposals=res.proposals,
                       contests=res.contests, ratified=res.ratified)
@@ -240,8 +242,6 @@ def run_one(task, topology="relay", arm="vanilla", k=None, tool_budget=None,
         with open(os.path.join(rundir, "plan.txt"), "w") as f:
             for j, q in enumerate(res.plan, 1):
                 f.write(f"SUBQ {j}: {q}\n")
-            if res.followup:
-                f.write(f"FOLLOWUP: {res.followup}\n")
     store = addon.store_json()
     if store is not None:                          # the shared store's final contents
         with open(os.path.join(rundir, "store.json"), "w") as f:

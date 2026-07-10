@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import prompts
 from agent import Budget
-from hub import run_hub, parse_subqs, parse_followup
+from hub import run_hub, parse_subqs
 from arms import get_addon
 from _fakes import FakeClient, tool_turn, text_turn
 
@@ -31,9 +31,6 @@ def test_parse_subqs():
     t = "Here is my plan:\nSUBQ: who wrote A?\n- SUBQ: when was B founded?\nSUBQ: who wrote A?\n"
     assert parse_subqs(t) == ["who wrote A?", "when was B founded?"], parse_subqs(t)
     assert parse_subqs("no lines here") == []
-    # FINAL ANSWER present -> not a follow-up request
-    assert parse_followup("FOLLOWUP: x?\nFINAL ANSWER: y") is None
-    assert parse_followup("FOLLOWUP: check the date") == "check the date"
     print("ok  test_parse_subqs")
 
 
@@ -56,7 +53,7 @@ def test_hub_happy_path():
     assert r.plan == ["is A true?", "is B true?"], r.plan
     assert r.reports == [REPORT_1, REPORT_2], r.reports
     assert r.final.endswith("FINAL ANSWER: SUPPORTED")
-    assert r.committed and not r.degenerate_plan and r.followup is None
+    assert r.committed and not r.degenerate_plan
     assert len(r.workers) == 2 and len(r.orch) == 2
     # blindness: worker_2's context contains its assignment but NOT worker_1's report/work
     w2_user = "".join(m.get("content") or "" for m in r.workers[1].transcript
@@ -96,33 +93,32 @@ def test_decompose_retry_then_degenerate():
     print("ok  test_decompose_retry_then_degenerate")
 
 
-def test_followup_once_then_forced_final():
-    """Merge asks FOLLOWUP -> one fresh worker runs -> second merge must finalize
-    (and a format slip there is recovered by NO_FINAL_RETRY)."""
+def test_no_followup_channel_in_base_hub():
+    """The base topology has NO follow-up: a merge reply that tries to emit a
+    FOLLOWUP: line dispatches NO extra worker (the challenge family lives only in
+    the down arm) — it is just a missing final answer, recovered by NO_FINAL_RETRY.
+    Also: the merge prompt itself must not offer a follow-up."""
     script = [
         text_turn("SUBQ: q1?\nSUBQ: q2?"),                       # decompose
         tool_turn(("run_python", {"code": "print(1)"})),         # worker_1
         text_turn(REPORT_1),
         tool_turn(("run_python", {"code": "print(2)"})),         # worker_2
         text_turn(REPORT_2),
-        text_turn("FOLLOWUP: what year exactly?"),               # merge 1: follow-up
-        tool_turn(("run_python", {"code": "print(3)"})),         # follow-up worker_3
-        text_turn("FINDINGS: 1999\nVERDICT: 1999\nCONFIDENCE: 0.7\nEVIDENCE: site Z"),
-        text_turn("hmm the year was 1999"),                      # merge 2: format slip
+        text_turn("FOLLOWUP: what year exactly?"),               # merge tries a follow-up
         text_turn("FINAL ANSWER: 1999"),                         # NO_FINAL_RETRY recovers
     ]
     c = FakeClient(script)
     r = run_hub("claim", PY, c, "m", get_addon("vanilla"), worker_budget=1,
                 usd_budget=budget())
-    assert r.followup == "what year exactly?"
-    assert len(r.workers) == 3 and len(r.plan) == 3 and len(r.reports) == 3
-    assert len(r.orch) == 3                                      # decompose + 2 merges
+    assert len(r.workers) == 2 and len(r.plan) == 2 and len(r.reports) == 2
+    assert len(r.orch) == 2                                      # decompose + ONE merge
     assert r.final == "FINAL ANSWER: 1999" and r.committed
-    # the second merge saw the follow-up report too
-    m2_user = "".join(m.get("content") or "" for m in r.orch[2].transcript
-                      if m["role"] == "user")
-    assert "worker_3" in m2_user and "1999" in m2_user
-    print("ok  test_followup_once_then_forced_final")
+    # no system prompt anywhere offers a FOLLOWUP channel
+    for kw in c.calls:
+        for m in kw["messages"]:
+            if m["role"] == "system":
+                assert "FOLLOWUP" not in (m.get("content") or ""), m["content"][:120]
+    print("ok  test_no_followup_channel_in_base_hub")
 
 
 def test_unusable_report_becomes_marker():

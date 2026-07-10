@@ -2,8 +2,8 @@
 
 An orchestrator decomposes the task into 2–4 sub-questions; workers investigate them
 BLIND to each other (fresh contexts, sequentially interleaved — informationally
-identical to parallel); the orchestrator merges the reports, with at most ONE bounded
-follow-up worker, then must finalize. The asymmetry is the workers' hidden work
+identical to parallel); the orchestrator merges the reports and must finalize.
+The asymmetry is the workers' hidden work
 products: evidence found, entity disambiguations, dead ends. The IRL analogue is an
 editor assigning fact-checks to reporters (PLAN, Topology 2).
 
@@ -18,8 +18,9 @@ Mechanics (PLAN):
      sentinel lines) produced by a single wrap-up continuation — same seam as the
      relay's hand-off note.
   4. Round 3 — merge: the orchestrator gets task + all attributed reports (+ store
-     render). It may issue at most one FOLLOWUP: sub-question (a fresh worker), then
-     must finalize with FINAL ANSWER: <answer|UNKNOWN>.
+     render) and must finalize with FINAL ANSWER: <answer|UNKNOWN>. There is NO
+     follow-up channel in the base topology: backward/clarifying queries are an ARM
+     mechanism (down), so the challenge family never leaks into vanilla.
   5. Sequential-blind execution lets each arm define exactly what leaks laterally:
      vanilla = nothing, `full` = prior workers' transcripts, board arms = the ledger.
 
@@ -37,7 +38,6 @@ DEFAULT_WORKER_BUDGET = 8
 MAX_SUBQS = 4
 
 _SUBQ_RE = re.compile(r"^\s*(?:[-*\d.)\s]*)SUBQ\s*:\s*(.+?)\s*$", re.M)
-_FOLLOWUP_RE = re.compile(r"^\s*FOLLOWUP\s*:\s*(.+?)\s*$", re.M)
 _CONF_RE = re.compile(r"^\s*CONFIDENCE\s*:\s*([0-9.]+)", re.M)
 
 
@@ -50,15 +50,6 @@ def parse_subqs(text, cap=MAX_SUBQS):
             seen.add(k)
             out.append(q)
     return out[:cap]
-
-
-def parse_followup(text):
-    """The merge's single allowed follow-up sub-question, or None. A reply that also
-    carries a FINAL ANSWER line is a decision, not a follow-up request."""
-    if "FINAL ANSWER:" in (text or ""):
-        return None
-    m = _FOLLOWUP_RE.search(text or "")
-    return m.group(1) if m else None
 
 
 def report_confidence(text):
@@ -85,8 +76,7 @@ class HubResult:
     plan: list = field(default_factory=list)      # the assignment payloads that crossed
     reports: list = field(default_factory=list)   # the report payloads that crossed
     workers: list = field(default_factory=list)   # AgentResult per worker (report call)
-    orch: list = field(default_factory=list)      # decompose, merge (, final merge)
-    followup: str = None                          # the follow-up sub-question, if used
+    orch: list = field(default_factory=list)      # decompose, merge
     committed: bool = True
     budget_exceeded: bool = False
     degenerate_plan: bool = False                 # <2 sub-questions survived parsing
@@ -194,32 +184,13 @@ def run_hub(task_prompt, tool_names, client, model, addon, *,
     if usd_budget is not None and usd_budget.exceeded:
         return _unknown(None, shape=out)
 
-    # --- Round 3: merge (+ at most one follow-up) -------------------------------
+    # --- Round 3: merge (must finalize; no follow-up channel) -------------------
     mctx = [_task_layer(task_prompt), _reports_layer(out.plan, out.reports)]
     mer = run_agent("orchestrator", prompts.ORCH_MERGE_SYS, mctx, [], client, model,
                     addon, usd_budget=usd_budget)
     out.orch.append(mer)
     if usd_budget is not None and usd_budget.exceeded:
         return _unknown(None, shape=out)
-
-    followup = parse_followup(mer.final)
-    if followup:
-        out.followup = followup
-        assignment = addon.edge_payload("assignment", mer, followup)
-        out.plan.append(assignment)
-        rep, payload = _run_worker(f"worker_{len(subqs) + 1}", task_prompt, assignment,
-                                   tool_names, client, model, addon, worker_budget,
-                                   budget_tool_names, usd_budget, env)
-        out.workers.append(rep)
-        out.reports.append(payload)
-        if usd_budget is not None and usd_budget.exceeded:
-            return _unknown(None, shape=out)
-        mctx = [_task_layer(task_prompt), _reports_layer(out.plan, out.reports)]
-        mer = run_agent("orchestrator", prompts.ORCH_MERGE_FINAL_SYS, mctx, [], client,
-                        model, addon, usd_budget=usd_budget)
-        out.orch.append(mer)
-        if usd_budget is not None and usd_budget.exceeded:
-            return _unknown(None, shape=out)
 
     # Format slip OR a think-rabbit-hole (finish=='length' stores only the tiny
     # placeholder, so the retry context is clean) -> ONE constrained retry. Skipping

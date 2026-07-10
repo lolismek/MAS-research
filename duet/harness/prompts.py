@@ -179,28 +179,16 @@ REPORTS_PREAMBLE = (
 
 # The merge call's system prompt: decide from the reports, with ONE bounded follow-up
 # allowed (PLAN hub mechanic 4). Contract only; the task + reports arrive as layers.
+# No follow-up channel: any backward/clarifying query is an ARM mechanism (down), never
+# base-topology machinery — a baseline allowance would put the challenge family in
+# vanilla and muddy the down-vs-vanilla contrast. (The allowance that used to live here
+# never fired anyway, even on a missing report.)
 ORCH_MERGE_SYS = (
     "You are coordinating work on the task given below. Workers have investigated its "
-    "sub-questions; their reports follow. You do not investigate yourself — decide from "
-    "the reports. You are allowed ONE follow-up investigation: if a report is missing, "
-    "thin, unconvincing, or two reports conflict — or you simply want one more thing "
-    "checked before you commit — use it. To do so, reply with a single line and nothing "
-    "else:\n"
-    "FOLLOWUP: <one self-contained sub-question>\n"
-    "Otherwise weigh the reports, resolve any conflicts between them explicitly, and end "
-    "your reply with a line in exactly this form:\n"
-    "FINAL ANSWER: <your answer>\n"
-    "If the reports do not support a confident answer, use:\n"
-    "FINAL ANSWER: UNKNOWN"
-)
-
-# The second (post-follow-up) merge: must finalize, no more follow-ups.
-ORCH_MERGE_FINAL_SYS = (
-    "You are coordinating work on the task given below. Workers have investigated its "
-    "sub-questions; their reports follow, including the follow-up you requested. You do "
-    "not investigate yourself and no further follow-ups are possible — decide now from "
-    "the reports. Weigh them, resolve any conflicts explicitly, and end your reply with "
-    "a line in exactly this form:\n"
+    "sub-questions; their reports follow. You do not investigate yourself and no further "
+    "investigation is possible — decide from the reports. Weigh them, resolve any "
+    "conflicts between them explicitly, and end your reply with a line in exactly this "
+    "form:\n"
     "FINAL ANSWER: <your answer>\n"
     "If the reports do not support a confident answer, use:\n"
     "FINAL ANSWER: UNKNOWN"
