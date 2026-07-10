@@ -10,6 +10,7 @@ Run:  python duet/viewer/build.py        ->  duet/viewer/index.html
 import json
 import os
 import re
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -187,11 +188,16 @@ def collect():
                       for a in agents if isinstance(a, dict)
                       for m in a.get("transcript", []) if isinstance(m, dict))
         checks = invariants(r, agents, art)
+        mtime = os.path.getmtime(os.path.join(root, "result.json"))
         runs.append(dict(
             dir=os.path.relpath(root, TRACES), result=r, agents=agents,
             artifacts=art, has_cot=has_cot, checks=checks,
             n_fail=sum(1 for c in checks if c["status"] == "fail"),
-            mtime=os.path.getmtime(os.path.join(root, "result.json"))))
+            mtime=mtime,
+            # batch = the run's calendar day (from result.json mtime). The list view
+            # splits the NEWEST batch into its own region so a fresh sweep is
+            # reviewable in isolation; self-maintaining across rebuilds.
+            batch=time.strftime("%Y-%m-%d", time.localtime(mtime))))
     runs.sort(key=lambda x: (x["result"].get("topology") or "", x["result"].get("arm") or "",
                              x["result"].get("bench") or "", x["result"].get("id") or "",
                              x["dir"]))
@@ -213,6 +219,8 @@ body{margin:0;font:13px/1.5 -apple-system,"SF Mono",Menlo,monospace;background:v
 #side select,#side input{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font:inherit;margin:0 4px 4px 0}
 #runs{flex:1;overflow-y:auto}
 .grp{padding:6px 12px 2px;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em;position:sticky;top:0;background:var(--bg)}
+.region{position:static;margin-top:6px;padding:7px 12px 5px;font-weight:700;color:var(--fg);background:var(--panel);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.region.new{color:var(--think);border-top-color:var(--think)}
 .run{padding:5px 12px;cursor:pointer;display:flex;gap:8px;align-items:center;border-left:3px solid transparent}
 .run:hover{background:var(--panel)} .run.sel{background:var(--panel2);border-left-color:var(--usr)}
 .dot{width:9px;height:9px;border-radius:50%;flex:none}
@@ -283,6 +291,7 @@ mark.trunc{background:rgba(224,108,117,.3)}
    <select id="f_out"><option value="">outcome</option></select>
    <label class="pill"><input type="checkbox" id="f_cot"> 💭 thinking</label>
    <label class="pill"><input type="checkbox" id="f_fail"> ✗ failing check</label>
+   <label class="pill"><input type="checkbox" id="f_new"> 🆕 new batch only</label>
   </div>
   <input id="f_q" placeholder="filter by task id…" style="width:97%">
  </header>
@@ -311,29 +320,44 @@ for (const [id,k] of [['#f_topo','topology'],['#f_arm','arm'],['#f_bench','bench
   uniq(k).forEach(v=>{const o=document.createElement('option');o.value=o.textContent=v;$(id).appendChild(o);});
 
 let sel = null;
+const NEWEST = RUNS.reduce((m,r)=>r.batch>m?r.batch:m,'');
 function renderList(){
   const t=$('#f_topo').value, a=$('#f_arm').value, b=$('#f_bench').value,
-        o=$('#f_out').value, q=$('#f_q').value.toLowerCase(), c=$('#f_cot').checked, fl=$('#f_fail').checked;
+        o=$('#f_out').value, q=$('#f_q').value.toLowerCase(), c=$('#f_cot').checked,
+        fl=$('#f_fail').checked, nw=$('#f_new').checked;
   const box=$('#runs'); box.innerHTML='';
-  let last='', n=0;
-  RUNS.forEach((r,i)=>{
+  const keep = r => {
     const R=r.result;
-    if((t&&R.topology!==t)||(a&&R.arm!==a)||(b&&R.bench!==b)||(o&&R.outcome!==o)) return;
-    if(q&&!R.id.toLowerCase().includes(q)) return;
-    if(c&&!r.has_cot) return;
-    if(fl&&!r.n_fail) return;
-    n++;
-    const g=`${R.topology} · ${R.arm}`;
-    if(g!==last){const d=document.createElement('div');d.className='grp';d.textContent=g;box.appendChild(d);last=g;}
-    const d=document.createElement('div');
-    d.className='run'+(i===sel?' sel':''); d.dataset.i=i;
-    d.innerHTML=`<span class="dot ${R.outcome}"></span><span class="id">${esc(R.id)}<span class="pill"> ${esc(r.dir.split('/').pop())}</span></span>`+
-      (r.n_fail?`<span class="fail">✗${r.n_fail}</span>`:'')+
-      (r.has_cot?'<span class="cot">💭</span>':'')+
-      `<span class="meta">$${(R.cost_usd||0).toFixed(3)}</span>`;
-    d.onclick=()=>{sel=i;renderList();renderRun(r);};
-    box.appendChild(d);
-  });
+    if((t&&R.topology!==t)||(a&&R.arm!==a)||(b&&R.bench!==b)||(o&&R.outcome!==o)) return false;
+    if(q&&!R.id.toLowerCase().includes(q)) return false;
+    if(c&&!r.has_cot) return false;
+    if(fl&&!r.n_fail) return false;
+    return true;
+  };
+  const region = (rows, label, cls) => {           // rows = [origIndex, run]
+    if(!rows.length) return;
+    const h=document.createElement('div'); h.className='grp region'+(cls?' '+cls:'');
+    h.textContent=label; box.appendChild(h);
+    let last='';
+    for(const [i,r] of rows){
+      const R=r.result, g=`${R.topology} · ${R.arm}`;
+      if(g!==last){const d=document.createElement('div');d.className='grp';d.textContent=g;box.appendChild(d);last=g;}
+      const d=document.createElement('div');
+      d.className='run'+(i===sel?' sel':''); d.dataset.i=i;
+      d.innerHTML=`<span class="dot ${R.outcome}"></span><span class="id">${esc(R.id)}<span class="pill"> ${esc(r.dir.split('/').pop())}</span></span>`+
+        (r.n_fail?`<span class="fail">✗${r.n_fail}</span>`:'')+
+        (r.has_cot?'<span class="cot">💭</span>':'')+
+        `<span class="meta">$${(R.cost_usd||0).toFixed(3)}</span>`;
+      d.onclick=()=>{sel=i;renderList();renderRun(r);};
+      box.appendChild(d);
+    }
+  };
+  const kept = RUNS.map((r,i)=>[i,r]).filter(([,r])=>keep(r));
+  const fresh = kept.filter(([,r])=>r.batch===NEWEST);
+  const older = kept.filter(([,r])=>r.batch!==NEWEST);
+  region(fresh, `🆕 newest batch — ${NEWEST} (${fresh.length})`, 'new');
+  if(!nw) region(older, `earlier runs (${older.length})`);
+  const n = fresh.length + (nw?0:older.length);
   $('#count').textContent = `${n}/${RUNS.length}`;
 }
 function kv(rows){
@@ -412,6 +436,7 @@ function renderRun(r){
 }
 ['#f_topo','#f_arm','#f_bench','#f_out'].forEach(s=>$(s).onchange=renderList);
 $('#f_q').oninput=renderList; $('#f_cot').onchange=renderList; $('#f_fail').onchange=renderList;
+$('#f_new').onchange=renderList;
 renderList();
 </script></body></html>"""
 
