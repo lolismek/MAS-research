@@ -18,6 +18,7 @@ Usage (repo root):
   python duet/harness/run_sweep.py --dry          # print the job plan + meter self-test
   python duet/harness/run_sweep.py                # run (resumes if state exists)
 """
+import glob
 import json
 import os
 import signal
@@ -156,6 +157,12 @@ def _write_state(t0, spent, aborted):
 # ---------------------------------------------------------------- job execution
 def newest_outcome(topology, arm, spec, tid):
     d = os.path.join(TRACES, topology, arm, spec, tid)
+    if not os.path.isdir(d):
+        # spec may be a task-file path (challenge suites) whose bench name differs;
+        # the task id is unique, so find its dir under any bench.
+        hits = glob.glob(os.path.join(TRACES, topology, arm, "*", tid))
+        if hits:
+            d = hits[0]
     try:
         runs = sorted((r for r in os.listdir(d) if r.startswith("run_")),
                       key=lambda r: int(r.split("_")[1]))

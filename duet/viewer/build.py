@@ -220,6 +220,63 @@ def collect():
     return runs
 
 
+# --- SOTA edge: per grid column, which arm won and which tasks ONLY it solved ----
+# A "column" is one benchmark cell of the P4 grid (topology × bench, fixed budget).
+# SOTA = the arm with the most correct latest-runs; ties break toward the State
+# family (board/extract), then Protocol, then Context — board_inert is a control
+# and never SOTA, but it does count as an "other" when testing exclusivity.
+_ARMS = ["vanilla", "full", "sop", "down", "board", "extract"]
+_HEADLINE = _ARMS + ["board_inert"]
+_FAMILY = {"vanilla": 2, "full": 2, "sop": 1, "down": 1, "board": 0, "extract": 0}
+_COLUMNS = [  # (topology, bench, arms, required tool_budget or None)
+    ("relay", "fever_compound", _HEADLINE, 1),
+    ("relay", "pddl", _ARMS, None),
+    ("relay", "gpqa_diamond", _ARMS, None),
+    ("relay", "gaia", _ARMS, None),
+    ("hub", "fever_compound", _HEADLINE, None),
+    ("hub", "fanoutqa", _ARMS, None),
+]
+
+
+def sota_edge(runs):
+    """Mark exclusive-win runs with r['edge'] and return the per-column summary."""
+    latest = {}  # (topo, arm, bench, task) -> run dict of the newest run_N
+    for r in runs:
+        parts = r["dir"].split("/")
+        if len(parts) != 5:
+            continue
+        topo, arm, bench, task, rd = parts
+        key = (topo, arm, bench, task)
+        n = int(rd.split("_")[1])
+        if key not in latest or n > int(latest[key]["dir"].split("_")[-1]):
+            latest[key] = r
+    cols = []
+    for topo, bench, arms, budget in _COLUMNS:
+        correct, seen = {a: set() for a in arms}, {a: set() for a in arms}
+        for a in arms:
+            for (t, ar, b, task), r in latest.items():
+                if (t, ar, b) != (topo, a, bench):
+                    continue
+                if budget is not None and r["result"].get("tool_budget") != budget:
+                    continue
+                seen[a].add(task)
+                if r["result"].get("outcome") == "correct":
+                    correct[a].add(task)
+        if not any(seen.values()):
+            continue
+        best = max(len(correct[a]) for a in arms if a != "board_inert")
+        ties = [a for a in arms if a != "board_inert" and len(correct[a]) == best]
+        sota = min(ties, key=lambda a: (_FAMILY[a], a))
+        excl = correct[sota] - set().union(*(correct[o] for o in arms if o != sota))
+        col_id = f"{topo}/{bench}"
+        for task in excl:
+            latest[(topo, sota, bench, task)]["edge"] = col_id
+        cols.append(dict(col=col_id, sota=sota, n=len(seen[sota]),
+                         correct=len(correct[sota]), ties=ties,
+                         exclusive=sorted(excl)))
+    return cols
+
+
 TEMPLATE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -293,6 +350,14 @@ mark.trunc{background:rgba(224,108,117,.3)}
 .chk .nm{font-weight:600;flex:none} .chk .dt{color:var(--dim)}
 .chk.fail .nm{color:var(--bad)} .chk.warn .nm{color:var(--warn)}
 .run .fail{color:var(--bad);font-weight:700;font-size:11px;flex:none}
+.run .star{color:var(--think);font-size:11px;flex:none}
+#edge{margin-top:6px;border-top:1px solid var(--line);padding-top:5px}
+#edge .ehd{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
+.ecol{padding:2px 4px;border-radius:4px;cursor:pointer;font-size:12px;display:flex;gap:6px;align-items:baseline}
+.ecol:hover{background:var(--panel)} .ecol.sel{background:var(--panel2);outline:1px solid var(--think)}
+.ecol .sota{color:var(--think);font-weight:700;text-transform:uppercase;font-size:11px}
+.ecol .cnt{color:var(--dim);font-size:11px;margin-left:auto}
+.ecol.none{cursor:default;opacity:.55}
 #empty{color:var(--dim);margin-top:40vh;text-align:center}
 </style></head><body>
 <div id="side">
@@ -310,13 +375,16 @@ mark.trunc{background:rgba(224,108,117,.3)}
    <label class="pill"><input type="checkbox" id="f_new"> 🆕 new batch only</label>
   </div>
   <input id="f_q" placeholder="filter by task id…" style="width:97%">
+  <div id="edge"></div>
  </header>
  <div id="runs"></div>
 </div>
 <div id="main"><div id="empty">select a run</div></div>
 <script id="data" type="application/json">__DATA__</script>
+<script id="edgedata" type="application/json">__EDGE__</script>
 <script>
 const RUNS = JSON.parse(document.getElementById('data').textContent);
+const EDGE = JSON.parse(document.getElementById('edgedata').textContent);
 const $ = s => document.querySelector(s);
 const esc = s => (s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
@@ -338,8 +406,25 @@ const uniq = k => [...new Set(RUNS.map(r=>r.result[k]).filter(Boolean))].sort();
 for (const [id,k] of [['#f_topo','topology'],['#f_arm','arm'],['#f_bench','bench'],['#f_out','outcome']])
   uniq(k).forEach(v=>{const o=document.createElement('option');o.value=o.textContent=v;$(id).appendChild(o);});
 
-let sel = null;
+let sel = null, edgeSel = null;
 const NEWEST = RUNS.reduce((m,r)=>r.batch>m?r.batch:m,'');
+// SOTA-edge panel: one line per grid column; click filters the list down to the
+// traces only the column's best arm solved.
+function renderEdge(){
+  const box=$('#edge');
+  let h='<div class="ehd">⭐ sota edge — tasks only the column winner solved</div>';
+  for(const c of EDGE){
+    const none=!c.exclusive.length;
+    h+=`<div class="ecol${edgeSel===c.col?' sel':''}${none?' none':''}" data-col="${c.col}" data-none="${none?1:''}">
+      <span>${esc(c.col)}</span><span class="sota">${esc(c.sota)}</span>
+      <span class="cnt">${c.correct}/${c.n}${c.ties.length>1?' (tie)':''} · ${c.exclusive.length}★</span></div>`;
+  }
+  box.innerHTML=h;
+  box.querySelectorAll('.ecol').forEach(el=>{
+    if(el.dataset.none) return;
+    el.onclick=()=>{edgeSel = edgeSel===el.dataset.col ? null : el.dataset.col; renderEdge(); renderList();};
+  });
+}
 function renderList(){
   const t=$('#f_topo').value, a=$('#f_arm').value, b=$('#f_bench').value,
         o=$('#f_out').value, q=$('#f_q').value.toLowerCase(), c=$('#f_cot').checked,
@@ -347,6 +432,7 @@ function renderList(){
   const box=$('#runs'); box.innerHTML='';
   const keep = r => {
     const R=r.result;
+    if(edgeSel && r.edge!==edgeSel) return false;
     if((t&&R.topology!==t)||(a&&R.arm!==a)||(b&&R.bench!==b)||(o&&R.outcome!==o)) return false;
     if(q&&!R.id.toLowerCase().includes(q)) return false;
     if(c&&!r.has_cot) return false;
@@ -364,6 +450,7 @@ function renderList(){
       const d=document.createElement('div');
       d.className='run'+(i===sel?' sel':''); d.dataset.i=i;
       d.innerHTML=`<span class="dot ${R.outcome}"></span><span class="id">${esc(R.id)}<span class="pill"> ${esc(r.dir.split('/').pop())}</span></span>`+
+        (r.edge?'<span class="star" title="sota exclusive win">⭐</span>':'')+
         (r.n_fail?`<span class="fail">✗${r.n_fail}</span>`:'')+
         (r.has_cot?'<span class="cot">💭</span>':'')+
         `<span class="meta">$${(R.cost_usd||0).toFixed(3)}</span>`;
@@ -416,6 +503,7 @@ function renderRun(r){
   let h = `<h2><span class="badge ${R.outcome}">${R.outcome}</span>
     <span class="badge">${R.topology}</span><span class="badge">${R.arm}</span>
     <span class="badge">${R.bench}</span> ${esc(R.id)} <span class="pill">${esc(r.dir)}</span></h2>`;
+  if(r.edge) h += `<div class="answer" style="border-color:var(--think)">⭐ <b>sota exclusive:</b> on the ${esc(r.edge)} column, ${esc(R.arm)} is the top arm and is the ONLY arm that solved this task.</div>`;
   h += `<div class="answer"><b>final:</b> ${hl(R.final_answer||'—')}\n<b>expected:</b> ${esc(String(R.expected_answer))}</div>`;
   if((r.checks||[]).length){
     const nf=r.n_fail, np=r.checks.filter(c=>c.status==='pass').length,
@@ -457,14 +545,21 @@ function renderRun(r){
 ['#f_topo','#f_arm','#f_bench','#f_out'].forEach(s=>$(s).onchange=renderList);
 $('#f_q').oninput=renderList; $('#f_cot').onchange=renderList; $('#f_fail').onchange=renderList;
 $('#f_new').onchange=renderList;
+renderEdge();
 renderList();
 </script></body></html>"""
 
 
 def main():
     runs = collect()
+    cols = sota_edge(runs)
+    for c in cols:
+        tie = f" (tie of {'/'.join(c['ties'])}, State-family bias)" if len(c["ties"]) > 1 else ""
+        print(f"  edge {c['col']}: sota={c['sota']} {c['correct']}/{c['n']}{tie}"
+              f" -> {len(c['exclusive'])} exclusive: {', '.join(c['exclusive']) or '—'}")
     data = json.dumps(runs, ensure_ascii=False).replace("</", "<\\/")
-    out = TEMPLATE.replace("__DATA__", data)
+    edata = json.dumps(cols, ensure_ascii=False).replace("</", "<\\/")
+    out = TEMPLATE.replace("__DATA__", data).replace("__EDGE__", edata)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write(out)
     n_cot = sum(1 for r in runs if r["has_cot"])
