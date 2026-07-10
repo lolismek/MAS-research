@@ -134,6 +134,22 @@ def invariants(result, agents, artifacts):
         if stats.get("transcripts_stored", 0):
             add("full arm renders prior transcript", "pass" if any_store else "fail",
                 "<shared_record> " + ("shown downstream" if any_store else "missing despite stored transcript"))
+    elif arm == "down":
+        asks = stats.get("down_edges", 0)
+        fired = stats.get("down_challenges", 0)
+        declined = stats.get("down_declines")
+        if not asks:
+            add("down consumer challenge", "na", "no eligible edges this run")
+        elif fired:
+            add("down consumer challenge", "pass",
+                f"{fired} challenge(s) fired on {asks} ask(s)"
+                + (f", {declined} declined" if declined else "")
+                + " — Q/A visible in the edge payloads")
+        else:
+            add("down consumer challenge", "na",
+                f"0 challenges on {asks} ask(s) — consumer declined every time"
+                + (" (see challenges.txt)" if declined is not None else
+                   " (pre-instrumentation run: declines not logged)"))
 
     if topo == "dialogue":
         peers = [a for a in agents if str(a.get("role", "")).startswith("peer_")]
@@ -147,7 +163,7 @@ def invariants(result, agents, artifacts):
 
 _ARTIFACTS = {
     "notes": "handoff_notes.txt", "reports": "reports.txt", "plan": "plan.txt",
-    "messages": "messages.txt", "prompt": "prompt.txt",
+    "messages": "messages.txt", "challenges": "challenges.txt", "prompt": "prompt.txt",
 }
 _JSON_ARTIFACTS = {"store": "store.json", "judge": "judge.json"}
 
@@ -311,6 +327,9 @@ function hl(s){
   h = h.replace(/^FINAL ANSWER:.*$/gm, m=>`<mark class="final">${m}</mark>`);
   h = h.replace(SENT, m=>`<mark>${m}</mark>`);
   h = h.replace(/&lt;(\/?)(task|assignment|shared_record)&gt;/g, (m)=>`<mark class="inject">${m}</mark>`);
+  h = h.replace(/\[(clarifying question from the worker taking over|answer from the note's author)\]/g,
+                m=>`<mark class="inject">${m}</mark>`);
+  h = h.replace(/^(DECLINED|SKIPPED)( — .*)$/gm, m=>`<mark class="trunc">${m}</mark>`);
   h = h.replace(/\[(the model could not finish[^\]]*|truncated[^\]]*|note truncated[^\]]*|no note survived[^\]]*)\]/g,
                 m=>`<mark class="trunc">${m}</mark>`);
   return h;
@@ -416,11 +435,12 @@ function renderRun(r){
      ['tokens',`${R.prompt_tokens} in / ${R.completion_tokens} out`],
      ['cost',`$${(R.cost_usd||0).toFixed(4)}`],['seconds',R.seconds],['proxy errors',R.proxy_errors]]);
   const A={notes:'hand-off notes (edge payloads)',plan:'orchestrator plan',reports:'worker reports (edge payloads)',
-           messages:'peer messages (edge payloads)',store:'shared store (belief ledger)',judge:'process judge',prompt:'task prompt'};
+           messages:'peer messages (edge payloads)',challenges:'down ask outcomes (one per eligible edge)',
+           store:'shared store (belief ledger)',judge:'process judge',prompt:'task prompt'};
   const artKeys=Object.keys(A).filter(k=>r.artifacts[k]);
   if(artKeys.length){
     h+='<h3>edge artifacts & shared state</h3>';
-    for(const k of artKeys) h+=det(A[k], hl(r.artifacts[k]), '', k==='notes'||k==='reports'||k==='messages');
+    for(const k of artKeys) h+=det(A[k], hl(r.artifacts[k]), '', k==='notes'||k==='reports'||k==='messages'||k==='challenges');
   }
   h+=`<h3>agent transcripts (${r.agents.length})</h3>`;
   r.agents.forEach((a,i)=>{

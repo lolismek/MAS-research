@@ -107,6 +107,10 @@ def test_down_challenge_consumer_decides():
     ]
     r, c, addon = _run("down", script)
     assert addon.stats.get("down_challenges") == 1, addon.stats
+    # the fired ask is logged for the trace (challenges.txt)
+    arts = addon.extra_artifacts()
+    assert "QUESTION: which source says A holds?" in arts.get("challenges.txt", "")
+    assert "ANSWER: The 1999 archive page" in arts["challenges.txt"]
     payload = r.notes[0]
     assert "which source says A holds?" in payload and "1999 archive page" in payload
     assert payload.startswith(note[:20])                      # original note kept
@@ -127,6 +131,10 @@ def test_down_challenge_consumer_decides():
     r2, c2, addon2 = _run("down", script2)
     assert addon2.stats.get("down_challenges") is None and addon2.stats.get("down_edges") == 1
     assert r2.notes[0] == clear
+    # the decline is counted AND logged — a quiet run stays auditable
+    assert addon2.stats.get("down_declines") == 1, addon2.stats
+    arts2 = addon2.extra_artifacts()
+    assert "DECLINED" in arts2.get("challenges.txt", "") and "'none'" in arts2["challenges.txt"]
     print("ok  test_down_challenge_consumer_decides")
 
 

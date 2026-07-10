@@ -84,6 +84,12 @@ class AddOn:
         """The store's persistable contents (for traces); None when there is none."""
         return None
 
+    def extra_artifacts(self):
+        """Arm-owned trace files beyond the store: {filename: text}. run_task writes
+        each into the run dir. Instrumentation only — never read back into a context
+        (down's ask log lives here so declines are observable in the trace)."""
+        return {}
+
 
 # One shared no-op instance for arm-internal machinery calls (observer/challenger):
 # they must not re-enter the arm's own hooks (no store render inside the observer,
@@ -223,9 +229,14 @@ class DownAddOn(AddOn):
     judgment, with NO confidence threshold (the old θ-gate never fired: the model always
     self-reported high confidence). If it raises one, the producer answers ONCE (its
     working memory intact), and the Q/A is appended to the payload before it crosses.
-    Both calls are tool-less and on-meter. No store, no persistence."""
+    Both calls are tool-less and on-meter. No store; every ask OUTCOME (fired or
+    declined) is persisted as challenges.txt so a quiet run is auditable."""
 
     name = "down"
+
+    def __init__(self):
+        super().__init__()
+        self.asks = []                       # one entry per eligible edge, in order
 
     def edge_payload(self, kind, producer_result, default):
         if kind not in ("handoff", "report") or default in (
@@ -233,18 +244,31 @@ class DownAddOn(AddOn):
             return default
         self.stats["down_edges"] = self.stats.get("down_edges", 0) + 1
         if producer_result is None:
+            self.asks.append("SKIPPED — no producer left to answer (injected payload)")
             return default
-        question = self._ask_question(default)
+        question, why_not = self._ask_question(default)
         if not question:
+            self.stats["down_declines"] = self.stats.get("down_declines", 0) + 1
+            self.asks.append(f"DECLINED — {why_not}")
             return default
         answer = self._answer(producer_result, question)
         if not answer:
+            self.asks.append(f"QUESTION: {question}\nANSWER: (none survived — "
+                             "producer reply empty or truncated)")
             return default
         self.stats["down_challenges"] = self.stats.get("down_challenges", 0) + 1
+        self.asks.append(f"QUESTION: {question}\nANSWER: {answer}")
         return prompts.DOWN_EXCHANGE_TEMPLATE.format(note=default, question=question,
                                                      answer=answer)
 
+    def extra_artifacts(self):
+        if not self.asks:
+            return {}
+        body = "\n\n".join(f"===== ask {j} =====\n{a}" for j, a in enumerate(self.asks, 1))
+        return {"challenges.txt": body + "\n"}
+
     def _ask_question(self, payload):
+        """-> (question, None) or (None, why-it-did-not-fire)."""
         from agent import run_agent
         ctx = [{"role": "user", "content": prompts.TASK_TEMPLATE.format(task=self._task or "")},
                {"role": "user", "content": prompts.CHALLENGE_NOTE_PREAMBLE.format(note=payload)}]
@@ -252,9 +276,11 @@ class DownAddOn(AddOn):
                         self.model, _NOOP, usd_budget=self.usd_budget)
         m = _QUESTION_LINE.search(res.final or "")
         if not m or res.truncated:
-            return None
+            return None, "consumer output truncated or carried no QUESTION line"
         q = m.group(1).strip()
-        return None if q.lower() in _DECLINE else q
+        if q.lower() in _DECLINE:
+            return None, f"consumer chose not to ask (said {q!r})"
+        return q, None
 
     def _answer(self, producer_result, question):
         from agent import continue_agent

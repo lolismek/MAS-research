@@ -246,6 +246,9 @@ def run_one(task, topology="relay", arm="vanilla", k=None, tool_budget=None,
     if store is not None:                          # the shared store's final contents
         with open(os.path.join(rundir, "store.json"), "w") as f:
             json.dump(store, f, indent=1)
+    for fname, text in addon.extra_artifacts().items():   # arm instrumentation logs
+        with open(os.path.join(rundir, fname), "w") as f:
+            f.write(text)
 
     env_flag = f" goal={'✓' if env and env.goal_reached() else '✗'}" if env else ""
     print(f"[{topology}/{arm}/{tid}] {dur:.0f}s "
