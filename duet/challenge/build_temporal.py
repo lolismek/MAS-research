@@ -52,6 +52,16 @@ _PLANT = {
                         "against what I found, so the claim is supported"),
 }
 
+# NEI plants must go AGAINST the model's observed unplanted answer, or "inherited" is
+# indistinguishable from its natural overclaim. P4-sweep baselines on the source tasks:
+# feverc_005/008/011 answer SUPPORTS unplanted (so plant REFUTES); feverc_002 leans
+# REFUTES (so the default SUPPORTS plant stands).
+_NEI_PLANT_OVERRIDE = {
+    "feverc_005": ("REFUTES", _PLANT["SUPPORTS"][1]),
+    "feverc_008": ("REFUTES", _PLANT["SUPPORTS"][1]),
+    "feverc_011": ("REFUTES", _PLANT["SUPPORTS"][1]),
+}
+
 
 def build():
     rows = [json.loads(l) for l in open(SRC) if l.strip()]
@@ -62,8 +72,8 @@ def build():
             buckets[lab].append(r)
     out = []
     for lab, rs in buckets.items():
-        planted, clause = _PLANT[lab]
         for r in rs:
+            planted, clause = _NEI_PLANT_OVERRIDE.get(r["id"], _PLANT[lab])
             claim = re.search(r"Claim: (.*)", r["question"]).group(1)
             out.append(dict(
                 id=f"chalT_{len(out):03d}", bench="challenge_temporal",
