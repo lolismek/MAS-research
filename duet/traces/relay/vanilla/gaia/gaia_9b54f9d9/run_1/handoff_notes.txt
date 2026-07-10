@@ -1,0 +1,41 @@
+===== edge 1 =====
+[the previous worker did not leave a usable hand-off note]
+
+===== edge 2 =====
+I have successfully extracted the zip file to `/tmp/extracted_zip/`. It contains two files: `food_duplicates.xls` and `CATEGORIES.xml`.
+
+I printed the contents of `food_duplicates.xls` using pandas. It is a 10x9 grid containing various food names and their synonyms (e.g., `zucchini`/`courgette`, `cilantro`/`coriander`, `aubergine`/`eggplant`, `garbanzo bean`/`chickpea`, etc.).
+
+**What is still open:**
+1. I haven't parsed `CATEGORIES.xml` yet to see the available categories.
+2. I haven't programmatically identified the exact singleton food (the one that appears only once in the spreadsheet).
+3. I haven't matched that singleton to the correct category in the XML.
+
+**Next steps / Suggested script for the next worker:**
+Run the following Python script to find the answer:
+```python
+import pandas as pd
+import xml.etree.ElementTree as ET
+
+# 1. Read the spreadsheet and flatten all food names
+df = pd.read_excel('/tmp/extracted_zip/food_duplicates.xls', engine='xlrd')
+all_foods = [str(val).strip() for col in df.columns for val in df[col] if pd.notna(val)]
+
+# 2. Find the food that appears exactly once
+from collections import Counter
+counts = Counter(all_foods)
+singleton = [food for food, count in counts.items() if count == 1]
+print(f"Singleton food(s): {singleton}")
+
+# 3. Parse the XML and find which category contains the singleton
+tree = ET.parse('/tmp/extracted_zip/CATEGORIES.xml')
+root = tree.getroot()
+
+for category in root.findall('.//category'): # Adjust tag name if different, e.g., 'CATEGORIES' or 'category'
+    # Check if the singleton is in the text of the category element
+    if singleton[0] in category.text or any(singleton[0] in child.text for child in category if child.text):
+        print(f"Found in category: {category.text}")
+        # If the structure is <CATEGORIES><category>...</category></CATEGORIES>, iterate accordingly
+```
+*(Note: The exact tag names in `CATEGORIES.xml` may vary slightly, so the next worker should inspect the XML structure first if the script throws an error.)*
+
