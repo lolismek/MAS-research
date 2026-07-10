@@ -119,16 +119,22 @@ TRUNCATED_MARKER = "[the previous worker did not leave a usable hand-off note]"
 # The orchestrator's decompose call. System = role + output contract only (rule 1);
 # the claim itself arrives verbatim in the task layer. Line-oriented SUBQ: sentinel
 # (rule 5) instead of nested JSON — truncation-tolerant with thinking models.
+# No batching allowance: "you may batch several related lookups into one sub-question"
+# collapsed FanOutQA to degenerate 1-subq plans (7/9 smokes on a natively 5-branch
+# question took that escape hatch) — the hub's fan-out never engaged. Enumerations now
+# split explicitly instead.
 ORCH_DECOMPOSE_SYS = (
     "You are coordinating work on the task given below. You do not investigate "
     "yourself — you split the task into the independent sub-questions whose answers, "
     "taken together, settle it. Each sub-question must be answerable on its own, "
     "without seeing the others' answers. Do not settle any factual part of the task "
     "from memory: every fact the final answer depends on must appear in some "
-    "sub-question so a worker verifies it (you may batch several related lookups "
-    "into one sub-question). Emit between 2 and 4 sub-questions when the "
-    "task genuinely decomposes; fewer only if it truly does not. Output one line per "
-    "sub-question, each in exactly this form, and nothing else:\n"
+    "sub-question so a worker verifies it. When the task asks about several entities "
+    "(a list, a top-N, an enumeration), give each entity its own sub-question rather "
+    "than one sub-question for the whole list; if there are more than 4 entities, "
+    "split them evenly across 4 sub-questions. Emit between 2 and 4 sub-questions "
+    "when the task genuinely decomposes; fewer only if it truly does not. Output one "
+    "line per sub-question, each in exactly this form, and nothing else:\n"
     "SUBQ: <one self-contained sub-question>"
 )
 
@@ -179,28 +185,16 @@ REPORTS_PREAMBLE = (
 
 # The merge call's system prompt: decide from the reports, with ONE bounded follow-up
 # allowed (PLAN hub mechanic 4). Contract only; the task + reports arrive as layers.
+# No follow-up channel: any backward/clarifying query is an ARM mechanism (down), never
+# base-topology machinery — a baseline allowance would put the challenge family in
+# vanilla and muddy the down-vs-vanilla contrast. (The allowance that used to live here
+# never fired anyway, even on a missing report.)
 ORCH_MERGE_SYS = (
     "You are coordinating work on the task given below. Workers have investigated its "
-    "sub-questions; their reports follow. You do not investigate yourself — decide from "
-    "the reports. You are allowed ONE follow-up investigation: if a report is missing, "
-    "thin, unconvincing, or two reports conflict — or you simply want one more thing "
-    "checked before you commit — use it. To do so, reply with a single line and nothing "
-    "else:\n"
-    "FOLLOWUP: <one self-contained sub-question>\n"
-    "Otherwise weigh the reports, resolve any conflicts between them explicitly, and end "
-    "your reply with a line in exactly this form:\n"
-    "FINAL ANSWER: <your answer>\n"
-    "If the reports do not support a confident answer, use:\n"
-    "FINAL ANSWER: UNKNOWN"
-)
-
-# The second (post-follow-up) merge: must finalize, no more follow-ups.
-ORCH_MERGE_FINAL_SYS = (
-    "You are coordinating work on the task given below. Workers have investigated its "
-    "sub-questions; their reports follow, including the follow-up you requested. You do "
-    "not investigate yourself and no further follow-ups are possible — decide now from "
-    "the reports. Weigh them, resolve any conflicts explicitly, and end your reply with "
-    "a line in exactly this form:\n"
+    "sub-questions; their reports follow. You do not investigate yourself and no further "
+    "investigation is possible — decide from the reports. Weigh them, resolve any "
+    "conflicts between them explicitly, and end your reply with a line in exactly this "
+    "form:\n"
     "FINAL ANSWER: <your answer>\n"
     "If the reports do not support a confident answer, use:\n"
     "FINAL ANSWER: UNKNOWN"
@@ -311,10 +305,15 @@ SOP_REPORT_REQUEST = (
 )
 
 # --- `down` arm: a bounded challenge the CONSUMER decides to raise ---------------
-# At every edge the incoming worker is shown the payload and freely decides whether to
+# At every edge the incoming consumer is shown the payload and freely decides whether to
 # raise ONE question (no confidence threshold — it fires on judgment, so it actually
 # fires); if it does, the producer answers ONCE (both bounded, tool-less, on-meter) and
 # the Q/A is appended to the payload before it crosses.
+#
+# The wording is EDGE-AWARE: a relay handoff really has a "worker taking over", but a
+# hub report's consumer is the merge coordinator — one shared template made the merge
+# read relay vocabulary about a role its topology doesn't have. Same mechanism, same
+# shape, per-kind words. down-arm-only text (the vanilla prompt-diff audit is untouched).
 
 # How the challenger sees the payload it is about to inherit (rule 4: delimited, attributed).
 CHALLENGE_NOTE_PREAMBLE = (
@@ -327,6 +326,12 @@ DOWN_EXCHANGE_TEMPLATE = (
     "{note}\n\n"
     "[clarifying question from the worker taking over]\n{question}\n"
     "[answer from the note's author]\n{answer}"
+)
+
+DOWN_EXCHANGE_REPORT_TEMPLATE = (
+    "{note}\n\n"
+    "[pre-merge clarifying question about this report]\n{question}\n"
+    "[answer from the report's author]\n{answer}"
 )
 
 # The consumer's single bounded challenge (asked of a FRESH agent holding only the task
@@ -343,9 +348,28 @@ CHALLENGE_ASK_SYS = (
     "QUESTION: none"
 )
 
+CHALLENGE_ASK_REPORT_SYS = (
+    "You must decide the task given below from workers' reports; one of those reports "
+    "follows. Before you rely on it, you may ask its author ONE question. If anything in "
+    "it is unclear, looks unverified, or you are not sure you can rely on it, ask the "
+    "single question that would most help you trust or correct it — do not hold back. "
+    "Output one line in exactly this form and nothing else:\n"
+    "QUESTION: <your one question>\n"
+    "If the report is clear and you genuinely have nothing to ask, output exactly:\n"
+    "QUESTION: none"
+)
+
 # The producer's single bounded answer (its full working memory is intact).
 CHALLENGE_ANSWER_REQUEST = (
     "The worker taking over asked you one question about your note:\n"
+    "{question}\n"
+    "Answer it in a short plain-text paragraph from what you actually observed — no "
+    "tools are available and there is no time to investigate further. If you do not "
+    "know, say so plainly."
+)
+
+CHALLENGE_ANSWER_REPORT_REQUEST = (
+    "Before your report is relied on, one question came back about it:\n"
     "{question}\n"
     "Answer it in a short plain-text paragraph from what you actually observed — no "
     "tools are available and there is no time to investigate further. If you do not "

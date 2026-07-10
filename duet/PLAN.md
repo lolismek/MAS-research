@@ -139,7 +139,8 @@ workstreams to ICs who don't attend each other's standups.
 vanilla hub *recover* information by re-asking — protocol substituting for shared state
 at token cost. Secondary experiment after the core grid: `R=1` vs `R=2` on
 vanilla vs board, efficiency axis as the headline. The core grid keeps the fixed
-decompose → workers → merge (+1 bounded follow-up) shape so arms stay comparable and the
+decompose → workers → merge shape (no follow-up channel: backward queries are the down
+ARM's mechanism, never base topology) so arms stay comparable and the
 geometry stays pure (multi-round hubs leak temporal asymmetry back in).
 
 **Null anchor:** GPQA-Diamond subset (~50) × relay × {vanilla, full, board} — closed book,

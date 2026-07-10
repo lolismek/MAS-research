@@ -34,6 +34,19 @@ def test_list_compound_gold_item():
     print("ok  test_list_compound_gold_item")
 
 
+def test_list_factored_surname():
+    """Live regression (hub/vanilla fanout_002 run_3): 'Anthony and Joe Russo' — the
+    factored surname, correct English — scored wrong_confident against gold 'Anthony
+    Russo and Joe Russo'. A compound item now hits when all its content tokens land in
+    ONE list segment; the same tokens scattered across different items still fail."""
+    ans = "James Cameron, Anthony and Joe Russo, James Cameron, James Cameron, J.J. Abrams"
+    assert match(ans, _FANOUT_GOLD, "list")
+    scattered = ("James Cameron, Joe Russo, Anthony Curtis, James Cameron, "
+                 "James Cameron, J. J. Abrams")
+    assert not match(scattered, _FANOUT_GOLD, "list")
+    print("ok  test_list_factored_surname")
+
+
 def test_list_wrong_answer_still_fails():
     """The pre-pin live answer (today's box office, Ne Zha 2 / no Abrams) must not match."""
     ans = "James Cameron, Anthony Russo, Joe Russo, James Cameron, James Cameron, Jiaozi"
