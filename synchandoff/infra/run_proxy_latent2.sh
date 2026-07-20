@@ -5,7 +5,12 @@
 # Tunnel: ssh -i /tmp/aij2115/tunnel_key -o BatchMode=yes \
 #   -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes -N -f \
 #   -L 8803:localhost:8803 aij2115@tigerfish.cs.columbia.edu
-export TINKER_BASE=http://localhost:8803/v1
+# LATENT2_UPSTREAM: 8803 when a second server runs on GPU 0; 8802 when
+# consolidated on one GPU (GPU 0 hosts recurring non-aij2115 jobs that OOM
+# any 24G resident server — observed twice on 2026-07-20, so 8802 is the
+# default; both lanes then queue on the one server, which is safe: a request
+# allocates its cache only inside the GPU lock).
+export TINKER_BASE=http://localhost:${LATENT2_UPSTREAM:-8802}/v1
 export TINKER_API_KEY=none
 export TINKER_MODEL=latent-qwen
 export TINKER_MAX_TOKENS=8000
