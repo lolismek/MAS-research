@@ -239,6 +239,36 @@ infra/proxy_server.py -> piranha:/tmp/aij2115/px/latent/server.py.
 - [ ] lkv_state (linear-state handover) — flag exists server-side
       (include_linear_state), no arm wired yet
 
+## 2026-07-20 afternoon — evaluation-wave orchestration (new mandate)
+
+Decisions in effect:
+- **A-unsolved first**: 14/30 pilot instances have post_A_solved falsy at
+  plain_k12 (16 A-solved deferred — they saturate SR). Slice files:
+  piranha:/tmp/aij2115/{aunsolved,asolved}.json, lanes lat_lane_[0-3].json.
+- **Routing**: lkv/lkv_notekv/lkv_rand/lthought/lthought_rand/lthought_pool
+  B-episodes run on the HF latent server(s); **lprobe/lprobe_shuffled are
+  TEXT artifacts within W and run through the fast vLLM :8744 stack at high
+  parallelism — licensed by the byte-identical greedy parity result**
+  (tools-case 245/245 chars HF-vs-vLLM; see parity section above): the
+  B-side model behavior is the same on either stack, so only the arms that
+  need latent INJECTION pay the slow HF path.
+- **Arm priority** (driver_latent_waves.sh, arm-major, chained, no idle
+  gaps): lkv, lkv_notekv, lthought_pool, lthought_rand, lthought, lkv_rand.
+  n-sweep points (lkv_n75/lkv_n19) stay deferred.
+- **GPU-0 incident**: a recurring non-aij2115 job (15-16 GB, seen twice
+  today) OOMed the second server instance mid-build. Second instance
+  STOPPED; consolidated single-server ops on GPU 1 (:8802); proxy :8746
+  repointed to :8802 (LATENT2_UPSTREAM knob) so both lane pairs still work.
+  2-concurrent-request safety probe on :8802 passed (24.8/40 GB, no OOM;
+  caches allocate only inside the GPU lock) -> 4 lanes on one server = safe
+  queueing that overlaps GPU time with udocker test time.
+- **Chains running on piranha**: build halves (all 30 instances x 6 HF arms,
+  A-unsolved first; build_h{1,2}.log) -> driver_latent_waves.sh (gated on
+  artifact presence) ; train wave -> driver_probe_chain.sh (capture -> probe
+  training; then orchestrator builds lprobe artifacts + launches vLLM waves).
+- **Aggregation**: latent/aggregate_progress.py -> results/latent_progress.txt
+  (pilot_report tables + per-arm episode timing), committed as arms complete.
+
 ## Live state at handoff (2026-07-20 ~13:30 ET)
 - tigerfish: latent servers on GPU 1 (:8802) and GPU 0 (:8803), current code,
   idle after the e2e smokes. GPUs 2,3 = text-arm vLLM, untouched throughout.
