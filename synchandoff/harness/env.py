@@ -157,6 +157,8 @@ class UdockerEnv(InstanceEnv):
     fixpacks/): gitpack.tar, libpack.tar, solist.txt, mtls_client.pem.
     """
 
+    EMPTY_CGROUP = "/tmp/.synchandoff_empty_cgroup"
+
     def __init__(self, instance, platform=None):
         super().__init__(instance, platform="")
         prefix = instance["instance_id"].split("__")[0]
@@ -208,15 +210,12 @@ class UdockerEnv(InstanceEnv):
                 subprocess.run(["tar", "-C", self._root, "-xf",
                                 os.path.join(self.fixpacks, "libpack.tar"), *members],
                                check=True)
-        # The images ship a STALE /sys snapshot (cgroup v1 files with
-        # cpu.shares=1024, quota -1). Under PRoot nothing mounts over it, so
-        # cgroup-sniffing code (pylint's _query_cpu) computes "1 CPU" and its
+        # PRoot binds the HOST /sys into the container, and on cgroup-v1
+        # hosts (piranha) /sys/fs/cgroup/cpu/cpu.shares=1024 makes
+        # cgroup-sniffing code (pylint's _query_cpu) compute "1 CPU" → its
         # parallel tests silently SKIP. Real Docker on cgroup-v2 hosts shows
-        # none of these files — deleting the snapshot reproduces that.
-        cg = os.path.join(self._root, "sys/fs/cgroup")
-        if os.path.isdir(cg):
-            shutil.rmtree(cg, ignore_errors=True)
-            os.makedirs(cg, exist_ok=True)
+        # no such file. exec() masks the whole tree with an empty bind.
+        os.makedirs(self.EMPTY_CGROUP, exist_ok=True)
         if self._is_requests:
             cert = os.path.join(self.fixpacks, "mtls_client.pem")
             dst = os.path.join(self._root,
@@ -230,10 +229,11 @@ class UdockerEnv(InstanceEnv):
     def exec(self, cmd, timeout=TEST_TIMEOUT, workdir=I.WORKDIR):
         try:
             # /dev/shm bind: PRoot rootfs has no tmpfs there, so POSIX
-            # semaphores (multiprocessing) die without it — pylint's parallel
-            # tests SKIP silently. Real Docker mounts it automatically.
+            # semaphores (multiprocessing) die without it. Empty bind over
+            # /sys/fs/cgroup: see _apply_fixpacks. Real Docker does both.
             r = subprocess.run(
                 ["udocker", "run", "--nobanner", "-v", "/dev/shm:/dev/shm",
+                 "-v", f"{self.EMPTY_CGROUP}:/sys/fs/cgroup",
                  f"--workdir={workdir}", self.name, "bash", "-c", cmd],
                 capture_output=True, text=True, timeout=timeout)
             out = (r.stdout or "") + (("\n" + r.stderr) if r.stderr else "")
