@@ -68,15 +68,21 @@ class InstanceEnv:
 
     # ---------------------------------------------------------------- task state
     def setup_out_of_sync(self):
-        """Write the stale pyfile and commit the state as the git baseline."""
+        """Editable-install, write the stale pyfile, commit a fresh git baseline."""
         from .splice import align_agent_context
-        # Some images ship the package as a non-editable site-packages COPY
-        # (e.g. flask), so repo edits would never load; SyncMind reinstalled
-        # editable before every test run. Once per container is enough. Best
-        # effort: some venvs lack the build backend offline (fastapi/pdm) but
-        # are already editable — the out-of-sync tests failing as recorded
-        # (checked in the G1 env smoke, and again by run_tests during scoring)
-        # is the real correctness gate.
+        # Upstream xuehang images ship /usr/bin/git as an EMPTY executable
+        # (anti-cheat), which bash silently "runs" as a no-op script — so a
+        # bare exit-code check passes while git does nothing. Require real git
+        # (the :3.11-git images).
+        code, out = self.exec("git --version", timeout=30)
+        assert code == 0 and "git version" in out, f"no working git in image: {out}"
+        # Editable install FIRST, while the image's original .git still exists:
+        # setuptools-scm/hatch-vcs resolve the package version from it. Some
+        # images ship the package as a non-editable site-packages COPY (flask,
+        # black), so repo edits would never load; SyncMind reinstalled editable
+        # before every test run. Once per container is enough. Best effort:
+        # some venvs lack the build backend offline (fastapi/pdm) but are
+        # already editable — the audit (audit_envs.py) is the real gate.
         code, out = self.exec(
             f"{I.VENV}/bin/pip install -e . --no-deps --no-build-isolation -q",
             timeout=300)
@@ -87,9 +93,13 @@ class InstanceEnv:
         stale = align_agent_context(self.instance["original_code"],
                                     self.instance["new_complete_context"])
         assert self.write_file(self.pyfile, stale), "failed to write stale pyfile"
+        # Wipe the shipped history and re-init: the image's .git holds the
+        # up-to-date (gold) state, so with real git an agent could read the
+        # fix straight out of `git log -p`. Baseline = one orphan commit.
         code, out = self.exec(
-            "git config user.email sh@local && git config user.name synchandoff "
-            "&& git add -A && git commit -qm out-of-sync-baseline", timeout=60)
+            "rm -rf .git && git init -q && git config user.email sh@local "
+            "&& git config user.name synchandoff && git add -A "
+            "&& git commit -qm out-of-sync-baseline", timeout=300)
         assert code == 0, f"baseline commit failed: {out}"
 
     def restore_gold(self):

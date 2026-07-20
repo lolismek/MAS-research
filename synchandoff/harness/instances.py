@@ -40,10 +40,14 @@ def repo_meta(instance):
 
 
 def image_for(instance):
-    """xuehang/<instance_id prefix>:3.11 — verified present on Docker Hub for
-    all 42 (repo x callee/caller) prefixes in syncbench_300."""
+    """Local `:3.11-git` build of xuehang/<instance_id prefix>:3.11 (Docker Hub,
+    all 42 repo x callee/caller prefixes exist). The upstream images ship
+    /usr/bin/git as an EMPTY executable (SyncMind's anti-cheat: agents can't
+    read the fix out of history) which breaks editable installs (setuptools-scm
+    /hatch-vcs), sphinx's import-time git call, and our diff bookkeeping — the
+    fixed tags reinstall real git; smoke/build_images.sh rebuilds them."""
     prefix = instance["instance_id"].split("__")[0]
-    return f"xuehang/{prefix}:3.11"
+    return f"xuehang/{prefix}:3.11-git"
 
 
 def container_pyfile_path(instance):
