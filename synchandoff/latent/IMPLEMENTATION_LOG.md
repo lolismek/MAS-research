@@ -219,7 +219,15 @@ infra/proxy_server.py -> piranha:/tmp/aij2115/px/latent/server.py.
       offline tests 21/21 green (tests/test_latent_offline.py)
 - [x] L-PROBE code (capture/labels/train/annex) + training wave RUNNING on
       piranha (51 instances, 7 disjoint repos, 4 shards)
-- [ ] end-to-end single-instance phase-2 smoke (lkv, lthought) — in progress
+- [x] end-to-end single-instance phase-2 smoke: **lkv PASSED** on
+      9_sympy...second_moment_of_area (SR=True la_file=True la_func=True,
+      7 tool calls; full chain harness→:8745→tunnel→KV-injected HF B →
+      udocker tests; runs/<iid>/lkv_k12_m8/ on piranha). lthought episode
+      completing at time of writing (chain identical; artifact differs only
+      in kind).
+- [x] artifact build over a real frozen trajectory: all 8 latent arms
+      built=8 skipped=0 missing_frozen=0 (~9k-token prefill, session reuse,
+      notekv, coconut m=32, rand/pool controls)
 - [ ] probe capture + training (needs the wave to finish)
 - [ ] kv_attn (attention-scored selection) — deferred (v1 = last-n + rand
       controls; the chosen keep-original-positions scheme supports
