@@ -4,9 +4,10 @@
 
 A lab benchmark for the isolated **agent A → agent B handoff edge**, built by splitting
 SyncMind/SyncBench out-of-sync-recovery episodes at a communication point. The purpose is to
-measure how well different **handoff protocols** (the duet arms: vanilla, SOP, DOWN, belief
-board, etc., and later latent variants) transmit A's partial belief state to B — and whether
-B inherits or recovers from A's *wrong* beliefs.
+measure how much of A's *useful work* — facts, verified findings, ruled-out branches,
+calibrated uncertainty — different **handoff protocols** (the duet arms: vanilla, SOP, DOWN,
+belief board, etc., and later latent variants) get across the channel, as measured by B's
+downstream success.
 
 ---
 
@@ -42,10 +43,11 @@ A's full transcript), **oracle** (B gets a ground-truth note built from the gold
 each arm in between. Headline: fraction of the ceiling−floor gap each arm recovers, per unit
 of handoff budget.
 
-**The ToM claim.** Instances where A's Phase-1 hypothesis was *wrong* (e.g., mislocalization)
-form natural **false-belief bins**: does B inherit A's error or recover? This tests whether a
-protocol transmits the fact/belief distinction — with false beliefs that occurred naturally,
-not synthetically injected.
+**The primary claim.** Handoff protocols that carry epistemic structure (typed findings,
+confidence, belief ledgers) recover more of the ceiling−floor gap than a plain note at the
+same budget — i.e., more of A's *useful work* survives the channel. Secondary, post-hoc:
+instances where A's hypothesis was *wrong* form natural false-belief bins (does B inherit or
+recover?) — kept as a robustness/diagnostic cut, not a headline (§5.3).
 
 **Decision rule (go/no-go).** A ~30-instance pilot runs the three brackets on our backend
 (Qwen3.6-35B-A3B via Tinker). If ceiling − floor spread on {SR, localization, turns} is
@@ -174,6 +176,10 @@ scope for v0 but the interface (artifact = opaque blob + loader) is designed for
 
 ### 5.1 Functional (headline, judge-free)
 
+Primary hypothesis, stated once: **GR(sop / down / board / extract) > GR(vanilla) at equal
+budget W**, with the oracle bracket bounding how much of any shortfall is B-side utilization
+rather than channel loss.
+
 - **SR** — unit tests pass (SyncMind's own success criterion).
 - **LA_file / LA_func** — B localizes the correct file / function (partial credit; much higher
   statistical resolution than SR at low base rates → co-headline).
@@ -201,25 +207,21 @@ These never headline (judge-based) but explain *why* an arm won or lost: e.g., l
 raise fidelity without raising SR (utilization bottleneck), or raise SR precisely on instances
 where fidelity improved (the mechanism story).
 
-### 5.3 False-belief bins (the ToM measurement)
+### 5.3 Belief-state bins (secondary, post-hoc robustness cut)
 
-Post-hoc, label each frozen Phase-1 trajectory (LLM labeler + hand-check of a slice):
+Not a headline — a diagnostic slicing of the primary results. Label each frozen Phase-1
+trajectory (LLM labeler + hand-check of a slice):
 
 - **Bin T** — A's final working hypothesis was correct (right localization/diagnosis).
 - **Bin F** — A held a wrong hypothesis at turn k (mislocalized, wrong diagnosis).
 - **Bin ∅** — A had no committed hypothesis.
 
-Per-bin outcomes for each arm, specifically in **Bin F**:
-
-- **Inheritance rate** — B commits to A's wrong hypothesis (first-localization matches A's error).
-- **Recovery rate** — B overcomes it (SR / LA despite the wrong handoff content).
-
-The thesis prediction: epistemic-status-carrying arms (`down`, `board`) reduce inheritance in
-Bin F relative to `vanilla`/`sop` at equal Bin-T performance — because they transmit *that a
-claim was a guess*, not just the claim. This is the headline ToM result if it holds.
-
-Bin sizes are not controllable at generation time → generate Phase-1 over a surplus of
-instances and *select* the frozen working set to fill bins (§6).
+Primary analysis runs on the full set; Bin T (and ∅) is where most data lives and where the
+GR hypothesis is tested. Bin F is reported as a robustness cut: per-arm **inheritance rate**
+(B commits to A's wrong hypothesis) and **recovery rate**. Interesting if epistemic-status
+arms (`down`, `board`) cut inheritance — they transmit *that a claim was a guess* — but the
+bin is small and uncontrolled, so treat any effect as exploratory, to be confirmed separately
+if it looks dramatic. No selection engineering is done to inflate Bin F (§6).
 
 ---
 
@@ -235,8 +237,10 @@ instances and *select* the frozen working set to fill bins (§6).
    where A has *engaged but usually not solved*: target ≈ 60–80% of trajectories with
    non-trivial findings and < 30% already-solved. Verify post-hoc from the frozen trajectories.
 4. **Working set**: generate Phase-1 on ~300 candidate instances at the chosen k; label bins;
-   select **~120–150 frozen instances** balancing Bin T / Bin F (target ≥ 30 Bin-F instances)
-   and repo diversity. Freeze forever (`phase1_frozen/` + manifest with hashes).
+   select **~120–150 frozen instances** for repo diversity and a spread of trajectory quality
+   (A found much / some / little — the primary GR analysis needs variance in what there is to
+   transmit). Bins are recorded, not engineered: whatever Bin F falls out is reported as-is.
+   Freeze forever (`phase1_frozen/` + manifest with hashes).
 
 ---
 
@@ -277,7 +281,7 @@ the user**.
 |---|---|---|---|
 | **G1 — plumbing** | 2 instances end-to-end: env builds, Qwen acts in OpenHands, tests execute, trajectory serializes | all mechanical steps work | fix or swap agent scaffold (e.g., minimal custom loop instead of CodeActAgent) |
 | **G2 — headroom** | ~30 easy-skewed instances × {floor, ceiling, oracle} at chosen k, m | ceiling and oracle beat floor by a material margin on SR or LA (target: ≥ 15 points on LA_func or ≥ 10 on SR) | try easier subsample / larger m / stronger model for B once; else **fallback to FANToM** (§11) |
-| **G3 — k calibration** | A-trajectory audit at candidate k values | 60–80% partial, < 30% solved, Bin F non-empty (≥ 15% of trajectories) | adjust k; if Bin F stays empty, ToM claim weakens to fidelity-only (still publishable, note it) |
+| **G3 — k calibration** | A-trajectory audit at candidate k values | 60–80% of trajectories with non-trivial findings, < 30% already solved | adjust k (this gate is about the primary GR analysis having something to transmit; bin composition is recorded, not gated on) |
 | **G4 — arm sanity** | vanilla + one ledger arm on the G2 set | vanilla lands between floor and ceiling; arms produce well-formed artifacts | debug arms before full sweep |
 
 Gates G1–G4 are cheap (≈ 30 instances × ≤ 6 conditions × ~10–15 turns). Only after G4 does
