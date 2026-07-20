@@ -21,7 +21,7 @@ def health():
 
 def prefill_capture(messages=None, raw_text=None, tools=None,
                     add_generation_prompt=False, capture_layers=None,
-                    return_hidden=None, session_id=None):
+                    return_hidden=None, session_id=None, return_entropy=False):
     body = {"add_generation_prompt": add_generation_prompt}
     if messages is not None:
         body["messages"] = messages
@@ -35,7 +35,23 @@ def prefill_capture(messages=None, raw_text=None, tools=None,
         body["return_hidden"] = return_hidden
     if session_id:
         body["session_id"] = session_id
+    if return_entropy:
+        body["return_entropy"] = True
     return _post("/prefill_capture", body)
+
+
+def probe_score(session_id, layer, probe, n_peaks=6, min_sep=300, window=150,
+                positions=None, return_curve=False):
+    """probe: dict with coef/mu/sd/intercept (from probes.json)."""
+    body = {"session_id": session_id, "layer": layer,
+            "coef": probe["coef"], "mu": probe["mu"], "sd": probe["sd"],
+            "intercept": probe["intercept"], "n_peaks": n_peaks,
+            "min_sep": min_sep, "window": window}
+    if positions is not None:
+        body["positions"] = positions
+    if return_curve:
+        body["return_curve"] = True
+    return _post("/probe_score", body)
 
 
 def make_artifact(arm, session_id=None, params=None, artifact_id=None):

@@ -1,15 +1,14 @@
 #!/bin/bash
-# Arm-major latent phase-2 driver over the A-UNSOLVED pilot slice (14
-# instances; only that slice discriminates — A-solved saturates SR).
-# Per arm (coordinator's priority order): wait until every A-unsolved
-# instance has the arm's artifact (built concurrently by build_artifacts
-# against the two latent servers), then run 4 lanes — lanes 0,1 -> proxy
-# :8745 (server :8802/GPU1), lanes 2,3 -> :8746 (:8803/GPU0). Two lanes per
-# server is safe: the server frees each request's cache before returning and
-# GPU_LOCK serializes compute, so lanes overlap GPU time with the (dominant)
-# udocker test time instead of OOMing. Chains arms with no idle gaps.
+# v2 arm-major latent phase-2 driver over the A-UNSOLVED pilot slice (only
+# that slice discriminates — A-solved saturates SR). Per arm (priority
+# order: primaries first), wait until every A-unsolved instance has the
+# arm's artifact (built concurrently by build_artifacts against the latent
+# servers), then run 4 lanes — lanes 0,1 -> proxy :8745 (server :8802/GPU1),
+# lanes 2,3 -> :8746 (:8803/GPU2). Two lanes per server is safe: requests
+# free their cache before returning and GPU_LOCK serializes compute, so
+# lanes overlap GPU time with udocker test time. Chains arms, no idle gaps.
 # Usage: driver_latent_waves.sh   (lane files /tmp/aij2115/lat_lane_[0-3].json)
-ARMS="lkv lkv_notekv lthought_pool lthought_rand lthought lkv_rand"
+ARMS=${ARMS:-"lkv_attn lkv_last lkv_notekv lthought_soft lthought_pool lthought_rand lthought_align lkv_rand"}
 cd /tmp/aij2115/synchandoff
 export PATH=$HOME/miniforge3/bin:$PATH
 export UDOCKER_DIR=/tmp/aij2115/udocker SYNCHANDOFF_ENV=udocker

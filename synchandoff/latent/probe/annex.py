@@ -1,79 +1,116 @@
-"""L-PROBE artifact builder: vanilla note + probe-decoded epistemic annex.
+"""L-PROBE v2 artifact builder: belief-strength peaks -> windows -> summary.
 
-The annex is text INSIDE the W budget (capacity-fair by construction): probe
-probabilities read from A's residual stream at the end of A's final turn.
-lprobe_shuffled uses the shuffled-coefficient twin probes (label-destroying
-control at identical prompt shape).
+Per PLAN_V2: score every position of A's frozen trace with the task-agnostic
+belief-strength probe -> peak-pick (NMS, min separation) top-P peaks ->
+±window-token excerpts -> ONE vLLM summarizer call ("these are the moments
+the agent held strong beliefs; summarize what it believed") -> W-budget note
+= the artifact. Controls:
+  lprobe_randsel   same NUMBER of windows at random positions (same min-sep),
+                   same summarizer — isolates the probe's SELECTION value
+  lprobe_shuffled  shuffled probe weights end-to-end (selection AND scores)
 
-Needs: latent/probe/probes.json (train.py) + the latent server (activation
-capture at build time).
+Needs: latent/probe/probes.json (train.py) + the latent server (trace
+capture at build time) + the vLLM proxy for the summarizer call.
 """
+import hashlib
 import json
-import math
 import os
-
-import numpy as np
+import random
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROBES_F = os.path.join(HERE, "probes.json")
 
-DESCR = {
-    "located_file": "predecessor had found the defective file",
-    "seen_func": "predecessor had seen the defective function",
-    "solved": "repository was already fixed by the predecessor",
-}
+N_PEAKS = 6
+MIN_SEP = 300
+WINDOW = 150
 
-ANNEX_HEADER = (
-    "PROBE ANNEX — read-outs decoded directly from your predecessor's "
-    "internal state (calibrated on held-out tasks; independent of the note "
-    "above):")
+SUMMARIZER_PROMPT = (
+    "A predecessor agent worked on a software task and ran out of time. "
+    "Below are short excerpts from the exact moments in its work session "
+    "where it held its strongest beliefs about what was happening (excerpts "
+    "are raw transcript fragments and may start/end mid-line).\n\n{windows}\n\n"
+    "Summarize, as a plain-text handoff note of at most {soft} tokens for the "
+    "worker taking over, what the predecessor believed at these moments: what "
+    "it thought the problem was, where, and what it was about to do. Report "
+    "beliefs faithfully even if they might be wrong. Do not invent details "
+    "that are not supported by the excerpts.")
+
+_SESS = {}       # (iid, k) -> (session_id, n_tokens); server keeps 2 sessions
 
 
-def _score(probe, h):
-    x = (np.asarray(h) - np.asarray(probe["mu"])) / np.asarray(probe["sd"])
-    z = float(np.dot(x, np.asarray(probe["coef"])) + probe["intercept"])
-    return 1.0 / (1.0 + math.exp(-z))
+def _get_session(frozen, iid, k, layer):
+    from handoff.arms import events_to_messages
+    from harness.agent import TOOL_SPECS
+    from latent import client
+    key = (iid, k)
+    if key in _SESS:
+        return _SESS[key]
+    r = client.prefill_capture(messages=events_to_messages(frozen["events"]),
+                               tools=TOOL_SPECS, capture_layers=[layer])
+    _SESS[key] = (r["session_id"], r["n_tokens"])
+    return _SESS[key]
+
+
+def _rand_positions(iid, n_tokens, n, min_sep, seed_tag=""):
+    rng = random.Random(int(hashlib.sha1(
+        (iid + seed_tag).encode()).hexdigest()[:8], 16))
+    picks = []
+    for _ in range(4000):
+        if len(picks) >= n:
+            break
+        p = rng.randrange(0, n_tokens)
+        if all(abs(p - q) >= min_sep for q in picks):
+            picks.append(p)
+    return sorted(picks)
 
 
 def build_lprobe(arm, frozen, instance):
-    from handoff.arms import events_to_messages, truncate_to_budget, W_HARD_CHARS
-    from harness.agent import TOOL_SPECS
-    from handoff.latent_arms import _load_note
+    from handoff.arms import truncate_to_budget, W_SOFT_TOKENS
+    from harness import llm
     from latent import client
 
     if not os.path.exists(PROBES_F):
         raise RuntimeError("latent/probe/probes.json missing — run the "
-                           "capture + train pipeline first (see probe/README)")
+                           "gen_data/capture_synth/train pipeline first")
     with open(PROBES_F) as f:
         allp = json.load(f)
-    probes = allp["shuffled"] if arm == "lprobe_shuffled" else allp["probes"]
+    probe = allp["shuffled"] if arm == "lprobe_shuffled" else allp["belief_strength"]
+    layer = probe["layer"]
 
     iid = instance["instance_id"]
     k = frozen["meta"]["k"]
-    layers = sorted({p["layer"] for p in probes.values()})
-    r = client.prefill_capture(
-        messages=events_to_messages(frozen["events"]), tools=TOOL_SPECS,
-        capture_layers=layers,
-        return_hidden={"positions": "turn_ends:assistant", "layers": layers})
-    client.session_free(r["session_id"])
-    hid = r.get("hidden") or {}
+    sid, n_tokens = _get_session(frozen, iid, k, layer)
 
-    lines = [ANNEX_HEADER]
-    aux = {"arm": arm, "k": k, "scores": {}, "probe_cv": {}}
-    for label, p in probes.items():
-        states = hid["layers"].get(str(p["layer"]))
-        if not states:
-            continue
-        s = _score(p, states[-1])
-        aux["scores"][label] = round(s, 3)
-        aux["probe_cv"][label] = {"cv_acc": p.get("cv_acc"),
-                                  "cv_auc": p.get("cv_auc")}
-        lines.append(f"- P({DESCR.get(label, label)}) = {s:.2f}")
-    annex = "\n".join(lines)
+    positions = None
+    if arm == "lprobe_randsel":
+        positions = _rand_positions(iid, n_tokens, N_PEAKS, MIN_SEP)
+    try:
+        r = client.probe_score(sid, layer, probe, n_peaks=N_PEAKS,
+                               min_sep=MIN_SEP, window=WINDOW,
+                               positions=positions)
+    except Exception:
+        # evicted session: rebuild once
+        _SESS.pop((iid, k), None)
+        sid, n_tokens = _get_session(frozen, iid, k, layer)
+        if arm == "lprobe_randsel":
+            positions = _rand_positions(iid, n_tokens, N_PEAKS, MIN_SEP)
+        r = client.probe_score(sid, layer, probe, n_peaks=N_PEAKS,
+                               min_sep=MIN_SEP, window=WINDOW,
+                               positions=positions)
 
-    note = _load_note(iid, k)
-    # annex is part of the W budget: budget the note to leave room for it
-    room = max(200, W_HARD_CHARS - len(annex) - 2)
-    body = truncate_to_budget(note, hard_chars=room) + "\n\n" + annex
-    aux["slot_unit"] = "text_token_within_W"
-    return truncate_to_budget(body), aux
+    wtexts = "\n\n".join(
+        f"--- excerpt {i+1} (belief strength {w['score']:.2f}) ---\n{w['text']}"
+        for i, w in enumerate(r["windows"]))
+    msg = llm.chat([{"role": "user", "content": SUMMARIZER_PROMPT.format(
+        windows=wtexts, soft=W_SOFT_TOKENS)}], max_tokens=1200,
+        tag=f"lprobe_sum:{arm}:{iid}")
+    note = truncate_to_budget((msg.get("content") or "").strip())
+
+    aux = {"arm": arm, "k": k, "layer": layer, "n_tokens": n_tokens,
+           "selection": "random" if arm == "lprobe_randsel" else "probe_nms",
+           "peaks": r["peaks"], "curve_mean": r.get("curve_mean"),
+           "curve_std": r.get("curve_std"), "curve_q90": r.get("curve_q90"),
+           "probe_val_acc": probe.get("val_acc"),
+           "slot_unit": "text_token_within_W",
+           "summarizer_usage": msg.get("_usage")}
+    return note, aux

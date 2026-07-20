@@ -49,9 +49,9 @@ BOARD_FAMILY = {"board", "board_inert"}
 # Latent conditions (handoff/latent_arms.py; need the latent server + tunnel,
 # so they are NOT in ARMS — build_artifacts only builds them when asked
 # explicitly via --arms). All use the plain phase-1 family.
-LATENT_ARMS = ["lkv", "lkv_n75", "lkv_n19", "lkv_rand", "lkv_notekv",
-               "lthought", "lthought_rand", "lthought_pool",
-               "lprobe", "lprobe_shuffled"]
+LATENT_ARMS = ["lkv_attn", "lkv_last", "lkv_rand", "lkv_notekv",
+               "lthought_soft", "lthought_align", "lthought_rand",
+               "lthought_pool", "lprobe", "lprobe_randsel", "lprobe_shuffled"]
 
 # --- prompts (duet's, lightly adapted to the single-handoff setting) ----------
 HANDOFF_REQUEST = (
