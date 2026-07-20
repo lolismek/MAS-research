@@ -172,6 +172,30 @@ discarded (capture_synth re-runs on 14B). All smokes re-run on 14B.
 - 14B phase-1 k=12 wave (10 lanes) + probe chain (capture on :8807, layers
   14/20/26) launched 14:0x ET.
 
+## DEVIATION (13:0x EDT): thinking re-enabled + YaRN x2 (65536), vLLM TP2
+14B no-think wave read the same as 8B: 15 frozen, solved 0, touched 1;
+trajectory audit shows the characteristic no-think degeneration — EMPTY
+assistant turns (no plan text at all), the same file range re-read 3-4x,
+budget burned, no summary. The no-think template (PLAN_V2 locked decision,
+made alongside the 8B pick for speed) is the binding failure for BOTH
+models; every calibrated run of this harness (v1 35B, duet) had thinking ON
+with the proxy's think-strip. G3's own fallback ladder ends at 14B, so the
+minimal validity-restoring change is taken and flagged as a deviation:
+- thinking ON (stock template; proxy think-strip path as in v1);
+- YaRN x2, Qwen official recipe (original 32768 -> 65536 window) on BOTH
+  stacks (vLLM --hf-overrides rope_parameters / HF LATENT_YARN=2 config
+  patch) — room for 34k prompts + think budget (TINKER_MAX_TOKENS back to
+  8000) and for KV-offset B positions (~45k) without extrapolation;
+- vLLM moved to TP2 on GPUs 0+3 (one 40G GPU fits 14B weights but not the
+  65536 KV pool: 10 GiB needed vs 6.4 free); latent servers consolidated to
+  :8802 (GPU 1) + :8803 (GPU 2), capture rides :8803.
+- transformers 5.x note: rope config lives in `rope_parameters` and MUST
+  carry rope_theta (a bare rope_scaling dict crashes YaRN init with
+  base=None); vLLM 0.25.1 takes it via --hf-overrides (no --rope-scaling).
+No-think 14B traces archived as phase1_frozen_14b_nothink (15 instances).
+All smokes (parity, planted-fact) re-run on the thinking+YaRN stack before
+the wave relaunch.
+
 ## Next
 - Decommission 35B (workers on GPUs 2,3 + :8744 proxy + :8801 tunnel),
   relaunch text proxy on :8744 -> :8804, start second HF worker on a freed
