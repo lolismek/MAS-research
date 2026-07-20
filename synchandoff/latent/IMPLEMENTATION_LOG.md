@@ -124,6 +124,18 @@ predecessor was doing":
 ~104–119 (vs emb-norm rescale applied at injection), consecutive cos-sim
 0.32–0.66 (a collapsed loop would be ~1.0). Received coherently by B.
 
+**L-THOUGHT primary designation (decision, per LITREVIEW's contingency):**
+after fixing the injection-scale bug (artifacts now store the RESCALED
+vectors), the training-free coconut loop at m=8 still transmits no explicit
+facts in the planted-fact probe (fluent reception, non-degenerate vectors,
+zero hits; retest_thought.py, 8.6 tok/s post-einsum-path), while
+**lthought_pool (mean-pooled note embeddings) DID transmit** a planted fact.
+LITREVIEW anticipated exactly this (Coconut needs training; training-free is
+the risk). Decision: **lthought_pool is the PRIMARY L-THOUGHT arm**; coconut
+lthought stays as the secondary/exploratory arm; lthought_rand controls both.
+Note the smoke probe only tests EXPLICIT recall — the full phase-2 runs still
+measure functional (SR/LA) effects for all three.
+
 **Behavioral caveat (log this in the report):** in the smoke, B's think trace
 shows it RETRIEVING planted facts from the KV prefix and then actively
 DISTRUSTING them as potential hallucinations ("I must not invent a test like
