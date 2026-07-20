@@ -220,9 +220,12 @@ class UdockerEnv(InstanceEnv):
 
     def exec(self, cmd, timeout=TEST_TIMEOUT, workdir=I.WORKDIR):
         try:
+            # /dev/shm bind: PRoot rootfs has no tmpfs there, so POSIX
+            # semaphores (multiprocessing) die without it — pylint's parallel
+            # tests SKIP silently. Real Docker mounts it automatically.
             r = subprocess.run(
-                ["udocker", "run", "--nobanner", f"--workdir={workdir}",
-                 self.name, "bash", "-c", cmd],
+                ["udocker", "run", "--nobanner", "-v", "/dev/shm:/dev/shm",
+                 f"--workdir={workdir}", self.name, "bash", "-c", cmd],
                 capture_output=True, text=True, timeout=timeout)
             out = (r.stdout or "") + (("\n" + r.stderr) if r.stderr else "")
             return r.returncode, out
