@@ -177,6 +177,55 @@ REVISE_BELIEF_SPEC = dict(type="function", function=dict(
     ), required=["belief_id"])))
 
 
+BOARD_WRAPUP_REQUEST = (
+    "Your shift has ended — no more investigation is possible and the repository tools "
+    "are gone. Before you leave, bring the shared belief board up to date for your "
+    "successor: call add_belief for each concrete thing you now believe that is not yet "
+    "on the board (facts you established, the cause as far as you understand it, "
+    "hypotheses you ruled out, what you would try next), and revise_belief for any "
+    "recorded belief you no longer hold. Only the board reaches your successor. Do not "
+    "write prose — only tool calls."
+)
+
+
+def board_wrapup(events, ledger, iid, rounds=2):
+    """One (or two) final board-only calls after the budget cut: the ledger
+    write-window at shift end. Deviation from duet noted in the module doc:
+    with k this small, in-loop adoption alone leaves empty boards (duet/camel
+    both observed low write adoption on short stretches), which would test
+    'do agents write unprompted' instead of 'does a revisable ledger
+    transmit'. In-loop writing (and revision) is still live during the shift."""
+    specs, handler = make_board_tools(ledger)
+    messages = events_to_messages(events) + [
+        {"role": "user", "content": BOARD_WRAPUP_REQUEST}]
+    nudged = False
+    for r in range(rounds + 1):
+        msg = llm.chat(messages, tools=specs, tag=f"arm:board:wrapup{r}:{iid}")
+        tcs = msg.get("tool_calls") or []
+        if not tcs:
+            if nudged or ledger.entries:
+                break
+            # prose/think instead of tool calls — insist once (think-leak guard)
+            nudged = True
+            messages += [{"role": "assistant", "content": msg.get("content") or ""},
+                         {"role": "user", "content":
+                          "You wrote prose, but only the board reaches your successor. "
+                          "Respond ONLY with add_belief tool calls recording your "
+                          "current beliefs — no text."}]
+            continue
+        amsg = {"role": "assistant", "content": msg.get("content") or None,
+                "tool_calls": tcs}
+        messages.append(amsg)
+        for tc in tcs:
+            try:
+                args = json.loads(tc["function"]["arguments"] or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            messages.append({"role": "tool", "tool_call_id": tc["id"],
+                             "content": handler(tc["function"]["name"], args)})
+    return ledger
+
+
 def make_board_tools(ledger, author="predecessor"):
     """(specs, handler) for run_agent's extra_tools — the board family's A-side."""
     def handler(name, a):
@@ -268,11 +317,15 @@ def continue_transcript(events, request, tag):
     messages = events_to_messages(events) + [{"role": "user", "content": request}]
     msg = llm.chat(messages, tools=None, tag=tag)
     text = (msg.get("content") or "").strip()
-    if not text or text == llm.PROXY_TRUNCATION_SENTINEL:
+    # retry once on: empty reply, the proxy's think-truncation sentinel, or a
+    # length-cut fragment (the camel/duet think-leak family of failures)
+    if not text or text == llm.PROXY_TRUNCATION_SENTINEL or msg.get("_finish") == "length":
         messages += [{"role": "assistant", "content": msg.get("content") or ""},
                      {"role": "user", "content": WRAPUP_NUDGE}]
         msg = llm.chat(messages, tools=None, tag=tag + ":nudge")
-        text = (msg.get("content") or "").strip()
+        retry = (msg.get("content") or "").strip()
+        if retry and retry != llm.PROXY_TRUNCATION_SENTINEL:
+            text = retry
     return text
 
 
@@ -339,6 +392,9 @@ def _down(events, instance, task_block, iid):
         events, CHALLENGE_ANSWER_REQUEST.format(question=question), f"arm:down:answer:{iid}")
     if not answer:
         return note, {"question": question, "answer": None}
+    # "short plain-text paragraph" is requested; enforce it so the Q/A rider
+    # cannot smuggle a second, oversized channel past the W budget
+    answer = truncate_to_budget(answer, hard_chars=1200)
     return (DOWN_EXCHANGE_TEMPLATE.format(note=note, question=question, answer=answer),
             {"question": question, "answer": answer})
 
@@ -380,7 +436,10 @@ def build_artifact(arm, frozen, instance, task_block=""):
         return _extract(events, iid), {}
     if arm == "board":
         ledger = BeliefLedger.from_json(frozen["meta"].get("ledger", []))
-        return truncate_to_budget(ledger.render()), {"n_beliefs": len(ledger.entries)}
+        n_inloop = len(ledger.entries)
+        board_wrapup(events, ledger, iid)   # end-of-shift write-window, offline
+        return (truncate_to_budget(ledger.render()),
+                {"n_beliefs": len(ledger.entries), "n_inloop": n_inloop})
     if arm == "board_inert":
         return _vanilla_note(events, iid, "arm:board_inert"), {}
     raise KeyError(f"unknown arm {arm!r}; have {ARMS}")

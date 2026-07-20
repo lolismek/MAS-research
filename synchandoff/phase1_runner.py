@@ -56,6 +56,9 @@ def run_one(inst, k, family="plain"):
             system += BOARD_WRITE_INCENTIVE
         result = run_agent(env, system, user, tool_budget=k, tag=f"p1:{family}:k{k}:{iid}",
                            extra_tools=extra_tools)
+        # NOTE: the board arm's end-of-shift write-window (arms.board_wrapup)
+        # runs OFFLINE in build_artifacts, not here — the frozen meta stores
+        # only what A wrote in-loop.
 
         summary, _ = env.run_tests()
         diff = env.agent_diff()
