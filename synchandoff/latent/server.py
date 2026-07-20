@@ -51,7 +51,7 @@ MODEL_DIR = os.environ.get(
     "/tmp/aij2115/cache/hf/hub/models--Qwen--Qwen3-8B/snapshots/"
     "b968826d9c46dd6066d109eabc6255188de91218")
 ART_DIR = os.environ.get("LATENT_ART_DIR", "/tmp/aij2115/latent_artifacts")
-MAX_SESSIONS = 2
+MAX_SESSIONS = int(os.environ.get("LATENT_MAX_SESSIONS", "2"))
 PREFILL_CHUNK = 8192
 QTAIL = 64                       # tail queries captured for kv_attn scoring
 MAX_NEW_DEFAULT = 8000           # no-think: match the 8B text proxy cap
@@ -442,8 +442,13 @@ def _latent_thought_loop(sess, m, mode, top_p=0.95, entropy_stop=1.0,
     mixture of INPUT embeddings under the (top-p truncated) next-token
     distribution; entropy cold-stop after min_steps. mode='align':
     LatentMAS-style — full-softmax expected embedding, fixed m, no stop.
-    mode='coconut': v1 raw-hidden recycling (kept for reference)."""
-    cache = copy.deepcopy(sess["cache"])
+    mode='coconut': v1 raw-hidden recycling (kept for reference).
+
+    Memory note: rolls the SESSION's live cache forward and crops it back to
+    the original length afterwards (a deepcopy would put a second full-length
+    cache on the GPU — 6-7 GB for a 40k session on a 14B model)."""
+    cache = sess["cache"]
+    orig_len = sess["n_tokens"]
     h = sess["last_hidden"].clone()
     emb_norm = sess["emb_norm"]
     emb_w = txt.embed_tokens.weight                          # [V, d]
@@ -493,7 +498,15 @@ def _latent_thought_loop(sess, m, mode, top_p=0.95, entropy_stop=1.0,
                   past_key_values=cache, use_cache=True)
         cache = out.past_key_values
         h = out.last_hidden_state[0, -1].clone()
-    del cache
+    # restore the session cache to its pre-loop length
+    try:
+        cache.crop(orig_len)
+    except Exception:
+        for lay in cache.layers:
+            if getattr(lay, "keys", None) is not None:
+                lay.keys = lay.keys[:, :, :orig_len, :]
+                lay.values = lay.values[:, :, :orig_len, :]
+    sess["cache"] = cache
     torch.cuda.empty_cache()
     return (torch.stack(vecs) if vecs else torch.zeros(0, TEXT_CFG.hidden_size)), \
         norms, sims, ents, stop_reason

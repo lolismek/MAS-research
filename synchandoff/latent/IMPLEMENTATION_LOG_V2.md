@@ -126,6 +126,23 @@ v1; magnitude small; affected arms all share it (paired comparison intact).
   peaks, decoded windows, entropy all good.
 - 21/21 offline tests green after v2 arm renames.
 
+## G3 gate on 8B — FAILED; k=16 try + 14B fallback staged in parallel
+Wave 2 (harness fixed, 12:44-13:0x ET): n=25 frozen (3 aborted on ctx-400s
+even at max_tokens 2000 — read-heavy prompts pass 39k; 2 more never froze).
+G3: solved_by_A 0%, touched_repo 12%, budget_stop 36% — far below the
+15-60% / >=50% band. Failure texture: 64% of trajectories end
+"model_stopped" (A voluntarily summarizes instead of editing) — capability,
+not budget. Actions per PLAN_V2's escape clause, run in PARALLEL:
+- k=16 try on 8B (run_wave.sh 16 10) — early read: 6 frozen, 0 solved,
+  0 touched.
+- Qwen/Qwen3-14B download staged on tigerfish (fallback stack ready to
+  swap: infra/serve_14b.sh, same :8804 port/proxies; proxy TINKER_MODEL
+  env-tunable; latent server gains LATENT_MAX_SESSIONS knob and a
+  crop-instead-of-deepcopy thought loop so a 14B + 40k-session fits 40G).
+- Root-cause mitigation for the ctx overflows regardless of model:
+  MAX_FILE_CHARS 20000 -> 8000 (env-tunable SYNCHANDOFF_MAX_FILE_CHARS) —
+  ~2k tokens per read keeps worst-case k=16 prompts ~32k.
+
 ## Next
 - Decommission 35B (workers on GPUs 2,3 + :8744 proxy + :8801 tunnel),
   relaunch text proxy on :8744 -> :8804, start second HF worker on a freed

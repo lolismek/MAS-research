@@ -10,7 +10,7 @@
 #     -L 8804:localhost:8804 aij2115@tigerfish.cs.columbia.edu
 export TINKER_BASE=http://localhost:8804/v1
 export TINKER_API_KEY=none
-export TINKER_MODEL=Qwen/Qwen3-8B
+export TINKER_MODEL=${SYNCHANDOFF_MODEL:-Qwen/Qwen3-8B}
 # 2000, not 8000: Qwen3-8B's max_position_embeddings is 40960 and phase-1
 # prompts reach ~34k tokens — prompt + max_tokens must fit or vLLM 400s.
 # No-think agent replies measure ~60-200 tokens; handoff notes <=500.

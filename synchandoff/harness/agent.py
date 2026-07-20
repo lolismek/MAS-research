@@ -12,13 +12,18 @@ Tools are deliberately minimal and identical across phases/arms so protocol
 arms differ ONLY in the handoff artifact: bash, read_file, write_file.
 """
 import json
+import os
 
 from . import llm
 
 MAX_INNER_STEPS = 40      # runaway backstop; the budget stops healthy runs first
 REPEAT_LIMIT = 3          # identical (tool,args) in a row -> thrashing; stop
 MAX_TOOL_CHARS = 6000     # generic tool-output cap (duet's value)
-MAX_FILE_CHARS = 20000    # read_file cap
+# v2 (2026-07-20): 20000 -> 8000. Qwen3's native window is 40960 (the v1 35B
+# served 65536): read-heavy k=12 trajectories at 5k tokens/read overflowed
+# the window and 3-5/30 instances died on 400s. ~2k tokens/read keeps worst
+# case ~32k. Uniform across arms/phases (paired design unaffected).
+MAX_FILE_CHARS = int(os.environ.get("SYNCHANDOFF_MAX_FILE_CHARS", "8000"))
 
 TOOL_SPECS = [
     {"type": "function", "function": {
