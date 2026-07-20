@@ -20,8 +20,9 @@ sys.path.insert(0, ROOT)
 
 import pilot_report as PR  # noqa: E402
 
-LATENT_CONDS = ["lkv", "lkv_notekv", "lkv_rand", "lthought", "lthought_rand",
-                "lthought_pool", "lprobe", "lprobe_shuffled"]
+LATENT_CONDS = ["lkv_attn", "lkv_last", "lkv_rand", "lkv_notekv",
+                "lthought_soft", "lthought_align", "lthought_rand",
+                "lthought_pool", "lprobe", "lprobe_randsel", "lprobe_shuffled"]
 LANES = 4
 
 

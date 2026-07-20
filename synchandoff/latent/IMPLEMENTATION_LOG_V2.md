@@ -109,7 +109,22 @@ touched 0% — too clean a zero for capability. Trajectory audit found:
    40960 (v1's 35B served 65536). FIX: TINKER_MAX_TOKENS=2000 (no-think
    replies measure ~60-200 tok; handoff notes <=500), leaving ~39k for
    prompts vs ~34k worst case observed.
-phase1_frozen wiped; wave relaunched 12:44 ET with both fixes.
+phase1_frozen wiped; wave relaunched 12:44 ET with both fixes. Verified in
+the rerun: read_file 72 ok / 6 err (missing files) — fix effective.
+
+Caveat (logged, accepted): KV-injection B episodes keep original positions,
+so B's tokens sit at positions T..T+prompt+gen (T = A's context length, up
+to ~40k). Qwen3-8B's native rope window is 40960 — late B positions
+extrapolate slightly (v1's 35B had 65k headroom). Same position scheme as
+v1; magnitude small; affected arms all share it (paired comparison intact).
+
+## Probe chain
+- gen_data DONE: 2,398 snippets, 10 domains x 5 cells balanced (~240/domain);
+  vLLM direct :8804, temp 0.9. capture_synth running on :8803 (3 layers
+  12/18/24, tail offsets -1/-4/-7, entropy at last) — ~2.4k prefills.
+- /probe_score endpoint smoke-tested on a synthetic session: curve, NMS
+  peaks, decoded windows, entropy all good.
+- 21/21 offline tests green after v2 arm renames.
 
 ## Next
 - Decommission 35B (workers on GPUs 2,3 + :8744 proxy + :8801 tunnel),
