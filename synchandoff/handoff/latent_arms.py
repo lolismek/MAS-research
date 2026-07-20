@@ -1,33 +1,39 @@
-"""Latent handoff arms (L-KV, L-THOUGHT + controls) — piranha-side builders.
+"""Latent handoff arms v2 (L-KV, L-THOUGHT, L-PROBE + controls).
 
-Each builder returns (artifact_text, aux) like the text arms, but the
-artifact TEXT is only a carrier: a `[[LATENT:<kind>:<artifact_id>]]` marker
-plus one fixed sentence (identical across all latent arms and controls, so
-the text channel is prompt-confound-free). The actual payload lives on the
-latent server (tigerfish, /tmp/aij2115/latent_artifacts) and is injected into
-B's forward pass when the marker reaches the server through the latent proxy
-chain (see infra/README.md).
+v2 (2026-07-20, PLAN_V2.md): model = dense Qwen3-8B, every layer carries KV.
+Arm set redesigned; the v1 arm set (lkv last-n primary, coconut lthought,
+content lprobes) is in git history.
 
-| condition     | latent payload                                              |
-|---------------|-------------------------------------------------------------|
-| lkv           | KV of the LAST n=300 positions of A's re-prefilled context  |
-| lkv_n75       | same, n=75  (capacity sweep W/4)                            |
-| lkv_n19       | same, n=19  (capacity sweep W/16)                           |
-| lkv_rand      | KV of n=300 RANDOM positions (position-selection control)   |
-| lkv_notekv    | KV of the vanilla NOTE's text (channel control: mechanically |
-|               | identical injection, text-limited content)                  |
-| lthought      | m=32 training-free Coconut/LatentMAS latent thoughts        |
-| lthought_rand | m=32 random vectors, per-vector norm matched to lthought    |
-| lthought_pool | m=32 mean-pooled token embeddings of the vanilla note       |
-|               | (content-matched, mechanism-latent control; the designated  |
-|               | fallback primary if coconut thoughts collapse)              |
+Each builder returns (artifact_text, aux) like the text arms. For injection
+arms the artifact TEXT is only a carrier: a `[[LATENT:<kind>:<artifact_id>]]`
+marker plus one fixed sentence (identical across all latent arms/controls).
+The payload lives on the latent server (tigerfish, /tmp/aij2115/
+latent_artifacts) and is injected into B's forward pass when the marker
+reaches the server through the latent proxy chain. lprobe-family artifacts
+are ordinary TEXT within W and run on the fast vLLM stack.
 
-Slot/bit capacity ledgers are recorded by the server into each artifact's
-aux (returned here and saved as <arm>.json by build_artifacts).
+| condition       | latent payload                                            |
+|-----------------|-----------------------------------------------------------|
+| lkv_attn        | KV of the n=300 positions with highest attention mass     |
+|                 | from the tail of A's context (primary, KVComm-style)      |
+| lkv_last        | KV of the LAST n=300 positions (v1 primary, now control)  |
+| lkv_rand        | KV of n=300 RANDOM positions (position-selection control) |
+| lkv_notekv      | KV of the vanilla NOTE's text (channel control)           |
+| lthought_soft   | Soft-Thinking soft tokens: expected input-embedding under |
+|                 | the top-p next-token distribution, entropy cold-stop,     |
+|                 | cap m=32 (primary)                                        |
+| lthought_align  | LatentMAS-style: full-softmax expected embedding of the   |
+|                 | last hidden state, fixed m=32 (secondary)                 |
+| lthought_rand   | matched-norm random vectors (ref = lthought_soft)         |
+| lthought_pool   | mean-pooled token embeddings of the vanilla note          |
+|                 | (content-matched, mechanism-latent control)               |
+| lprobe          | belief-strength probe peaks -> windows -> vLLM summary    |
+| lprobe_randsel  | same count of RANDOM windows -> same summarizer           |
+| lprobe_shuffled | shuffled probe weights end-to-end                         |
 
 Build-order dependencies (within an instance): `vanilla` must exist before
-lkv_notekv / lthought_pool (they read its note); lthought_rand builds (or
-reuses) lthought's artifact as its norm reference.
+lkv_notekv / lthought_pool; lthought_rand builds (or reuses) lthought_soft's
+artifact as its norm reference.
 """
 import hashlib
 import os
@@ -35,10 +41,10 @@ import os
 from latent import client
 
 W_SLOTS = 300                    # slot parity with the W_SOFT text budget
-KV_SWEEP = {"lkv": W_SLOTS, "lkv_n75": 75, "lkv_n19": 19}
-LATENT_ARMS = ["lkv", "lkv_n75", "lkv_n19", "lkv_rand", "lkv_notekv",
-               "lthought", "lthought_rand", "lthought_pool",
-               "lprobe", "lprobe_shuffled"]
+KV_ARMS = {"lkv_attn": "kv_attn", "lkv_last": "kv_last", "lkv_rand": "kv_rand"}
+LATENT_ARMS = ["lkv_attn", "lkv_last", "lkv_rand", "lkv_notekv",
+               "lthought_soft", "lthought_align", "lthought_rand",
+               "lthought_pool", "lprobe", "lprobe_randsel", "lprobe_shuffled"]
 THOUGHT_M = 32
 
 CARRIER_TEXT = (
@@ -78,7 +84,6 @@ def _load_note(iid, k):
 
 
 def _messages_and_tools(events):
-    # late import: harness.agent pulls no heavy deps, but keep the seam thin
     from handoff.arms import events_to_messages
     from harness.agent import TOOL_SPECS
     return events_to_messages(events), TOOL_SPECS
@@ -86,7 +91,7 @@ def _messages_and_tools(events):
 
 def _get_session(events, iid, k, kind):
     """kind: 'traj' (A's transcript as-is) | 'thought' (transcript + summary
-    request + generation prompt) | note sessions are built inline."""
+    request + generation prompt)."""
     key = (iid, k, kind)
     if key in _SESS:
         return _SESS[key]
@@ -117,10 +122,11 @@ def _aid(arm, iid, k):
     return f"{arm}__{iid[:80]}__k{k}"
 
 
-def _build_lthought(events, iid, k):
-    aid = _aid("lthought", iid, k)
-    aux = _make_with_session(events, iid, k, "thought", "thought_coconut",
-                             {"m": THOUGHT_M, "rescale": True}, aid)
+def _build_lthought_soft(events, iid, k):
+    aid = _aid("lthought_soft", iid, k)
+    aux = _make_with_session(events, iid, k, "thought", "thought_soft",
+                             {"m": THOUGHT_M, "top_p": 0.95,
+                              "entropy_stop": 1.0, "min_steps": 4}, aid)
     return aid, aux
 
 
@@ -131,13 +137,12 @@ def build(arm, frozen, instance):
     k = frozen["meta"]["k"]
     aid = _aid(arm, iid, k)
 
-    if arm in KV_SWEEP:
-        aux = _make_with_session(events, iid, k, "traj", "kv_last",
-                                 {"n": KV_SWEEP[arm]}, aid)
-        return _artifact_text("kv", aid), aux
-    if arm == "lkv_rand":
-        aux = _make_with_session(events, iid, k, "traj", "kv_rand",
-                                 {"n": W_SLOTS, "seed": _seed(iid)}, aid)
+    if arm in KV_ARMS:
+        params = {"n": W_SLOTS}
+        if arm == "lkv_rand":
+            params["seed"] = _seed(iid)
+        aux = _make_with_session(events, iid, k, "traj", KV_ARMS[arm],
+                                 params, aid)
         return _artifact_text("kv", aid), aux
     if arm == "lkv_notekv":
         note = _load_note(iid, k)
@@ -146,11 +151,15 @@ def build(arm, frozen, instance):
                                    {"n": r["n_tokens"]}, artifact_id=aid)
         client.session_free(r["session_id"])
         return _artifact_text("kv", aid), aux
-    if arm == "lthought":
-        _, aux = _build_lthought(events, iid, k)
+    if arm == "lthought_soft":
+        _, aux = _build_lthought_soft(events, iid, k)
+        return _artifact_text("embeds", aid), aux
+    if arm == "lthought_align":
+        aux = _make_with_session(events, iid, k, "thought", "thought_align",
+                                 {"m": THOUGHT_M}, aid)
         return _artifact_text("embeds", aid), aux
     if arm == "lthought_rand":
-        ref_aid, _ = _build_lthought(events, iid, k)
+        ref_aid, _ = _build_lthought_soft(events, iid, k)
         aux = client.make_artifact("thought_rand", None,
                                    {"ref_artifact_id": ref_aid,
                                     "seed": _seed(iid)}, artifact_id=aid)
@@ -161,7 +170,7 @@ def build(arm, frozen, instance):
                                    {"m": THOUGHT_M, "text": note},
                                    artifact_id=aid)
         return _artifact_text("embeds", aid), aux
-    if arm in ("lprobe", "lprobe_shuffled"):
+    if arm in ("lprobe", "lprobe_randsel", "lprobe_shuffled"):
         from latent.probe import annex
         return annex.build_lprobe(arm, frozen, instance)
     raise KeyError(f"unknown latent arm {arm!r}; have {LATENT_ARMS}")

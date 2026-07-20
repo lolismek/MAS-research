@@ -242,6 +242,14 @@ class UdockerEnv(InstanceEnv):
             return 124, f"[timed out after {timeout}s]"
 
     def _host_path(self, path):
+        # Relative paths are relative to the exec() workdir (the repo root),
+        # exactly as the agent experiences them through the bash tool. Without
+        # this, read_file/write_file with relative paths silently resolved
+        # against the rootfs TOP — surfaced 2026-07-20 by Qwen3-8B, which
+        # (unlike the 35B) habitually passes relative paths: every such read
+        # failed and writes landed outside the repo (G3 touched=0%).
+        if not path.startswith("/"):
+            path = os.path.join(I.WORKDIR, path)
         return os.path.join(self._root, path.lstrip("/"))
 
     def write_file(self, path, content):

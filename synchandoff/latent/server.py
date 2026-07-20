@@ -1,48 +1,39 @@
-"""Latent handoff server — tigerfish side (one GPU, plain HF transformers).
+"""Latent handoff server v2 — tigerfish side (one GPU, plain HF transformers).
 
-Loads the AWQ Qwen3.6-35B-A3B checkpoint (qwen3_5_moe hybrid: 10 full-attention
-layers with positional KV + 30 GatedDeltaNet linear-attention layers with a
-fixed-size recurrent state) and exposes:
+v2 (2026-07-20): model = Qwen/Qwen3-8B, dense bf16, STOCK from_pretrained (no
+AWQ loader — awq_moe.py is the archived v1 path for the hybrid 35B). Every
+layer is full-attention GQA+RoPE, so KV arms cover all 36 layers. Thinking is
+disabled at the template (enable_thinking=False), matching the vLLM stack's
+baked no-think template for byte parity.
 
-  POST /prefill_capture   deterministic prefill of a message list; caches the
-                          live cache + optional residual-stream hidden states
-                          server-side under a session id.
-  POST /make_artifact     builds a latent artifact from a session:
-                          kv_last / kv_positions / kv_rand / kv_attn (L-KV),
-                          thought_coconut / thought_pool / thought_rand
-                          (L-THOUGHT). Persists to LATENT_ART_DIR as .pt+.json
-                          (slot + bit capacity ledgers in the .json).
+Endpoints:
+  POST /prefill_capture   deterministic prefill of a message list / raw text;
+                          caches the live cache + optional residual-stream
+                          hidden states server-side under a session id. Also
+                          always captures the q-projection of the last QTAIL
+                          positions per layer (cheap; powers kv_attn).
+  POST /make_artifact     kv_last / kv_positions / kv_rand / kv_attn (L-KV),
+                          thought_soft / thought_align / thought_coconut /
+                          thought_pool / thought_rand (L-THOUGHT).
+                          Persists to LATENT_ART_DIR as .pt+.json.
+  POST /probe_score       score every position of a captured layer with a
+                          linear probe (coef/mu/sd/intercept in the request),
+                          NMS peak-pick, return peaks + decoded text windows.
+                          Powers the L-PROBE v2 belief-strength pipeline.
   POST /generate          (also /v1/chat/completions) OpenAI-style chat
-  POST /v1/chat/completions  completion with optional latent injection: KV
-                          artifacts become a KV prefix (original RoPE rotations
-                          kept, B's positions offset past A's context);
-                          embedding artifacts are spliced at the marker
-                          position via inputs_embeds. Plain text-only requests
-                          work too (used for the HF-vs-vLLM parity check).
+                          completion with optional latent injection.
   POST /session_free      drop a session (GPU memory).
   GET  /health
 
-The handoff artifact reference travels IN-BAND: a marker
-    [[LATENT:kv:<artifact_id>]]  or  [[LATENT:embeds:<artifact_id>]]
-anywhere in the request messages. The server strips it (whole line) and
-injects the artifact. This lets the unmodified piranha proxy (think-strip +
-XML tool-call parsing) sit in front, exactly as for the text arms.
-
-Positions/RoPE (design note): sliced keys keep their ORIGINAL rotations and
-absolute positions from A's prefill; B's tokens get position_ids starting at
-A's total length T. RoPE is relative, so B sees correct distances to the
-prefix and to itself, and non-contiguous selections need no re-rotation.
-Linear-attention layers get NO prefix (fresh recurrent state) unless the
-artifact was built with include_linear_state=True.
-
-Run (tigerfish):
-  CUDA_VISIBLE_DEVICES=1 HOME=/tmp/aij2115/fakehome \
-  setsid nohup /tmp/aij2115/latentenv/bin/python -u server.py --port 8802 \
-      > /tmp/aij2115/latent/server_8802.log 2>&1 < /dev/null &
+Marker protocol, RoPE/positions scheme (keys keep their ORIGINAL rotations
+and absolute positions; B starts at T; non-contiguous selections need no
+re-rotation) are unchanged from v1 — see git history of this file for the
+hybrid-35B version and its design notes.
 """
 import argparse
 import copy
 import json
+import math
 import os
 import re
 import threading
@@ -52,14 +43,19 @@ import uuid
 import torch
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.cache_utils import DynamicCache
 
-MODEL_DIR = os.environ.get("LATENT_MODEL_DIR", "/tmp/aij2115/models/qwen36-awq")
+MODEL_DIR = os.environ.get(
+    "LATENT_MODEL_DIR",
+    "/tmp/aij2115/cache/hf/hub/models--Qwen--Qwen3-8B/snapshots/"
+    "b968826d9c46dd6066d109eabc6255188de91218")
 ART_DIR = os.environ.get("LATENT_ART_DIR", "/tmp/aij2115/latent_artifacts")
-MAX_SESSIONS = 2
+MAX_SESSIONS = int(os.environ.get("LATENT_MAX_SESSIONS", "2"))
 PREFILL_CHUNK = 8192
-MAX_NEW_DEFAULT = 28000          # match the text-arm proxy's TINKER_MAX_TOKENS
+QTAIL = 64                       # tail queries captured for kv_attn scoring
+MAX_NEW_DEFAULT = 8000           # no-think: match the 8B text proxy cap
+DTYPE = torch.bfloat16
 MARKER_RE = re.compile(r"\[\[LATENT:(kv|embeds):([A-Za-z0-9_\-\.]+)\]\]")
 
 app = FastAPI()
@@ -67,9 +63,9 @@ GPU_LOCK = threading.Lock()      # one request touches the GPU at a time
 
 tok = None
 model = None
-txt = None                       # the text decoder (Qwen3_5MoeTextModel)
+txt = None                       # the decoder stack (model.model)
 lm_head = None
-FULL_LAYERS = []                 # indices of full_attention layers
+FULL_LAYERS = []
 TEXT_CFG = None
 
 
@@ -78,16 +74,20 @@ def load_model():
     global tok, model, txt, lm_head, FULL_LAYERS, TEXT_CFG
     t0 = time.time()
     tok = AutoTokenizer.from_pretrained(MODEL_DIR)
-    from awq_moe import load_model as awq_load
-    model = awq_load(MODEL_DIR, device="cuda:0")
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_DIR, dtype=DTYPE, device_map="cuda:0")
+    model.eval()
     txt = model.model
     lm_head = model.lm_head
     TEXT_CFG = txt.config
-    FULL_LAYERS = [i for i, t in enumerate(TEXT_CFG.layer_types)
-                   if t == "full_attention"]
+    lt = getattr(TEXT_CFG, "layer_types", None)
+    if lt:
+        FULL_LAYERS = [i for i, t in enumerate(lt) if t == "full_attention"]
+    else:
+        FULL_LAYERS = list(range(TEXT_CFG.num_hidden_layers))
     os.makedirs(ART_DIR, exist_ok=True)
-    print(f"model loaded in {time.time()-t0:.0f}s; full-attn layers: {FULL_LAYERS}",
-          flush=True)
+    print(f"model loaded in {time.time()-t0:.0f}s; {len(FULL_LAYERS)} "
+          f"full-attn layers; dtype={DTYPE}", flush=True)
 
 
 # --------------------------------------------------------- message plumbing ----
@@ -119,9 +119,6 @@ def normalize_messages(messages):
 
 
 def find_marker(messages):
-    """Return (arm_kind, artifact_id) of the first [[LATENT:...]] marker, or
-    (None, None). The marker is NOT stripped here — stripping happens on the
-    templated string so the embeds splice point is known."""
     for msg in messages:
         c = msg.get("content")
         if isinstance(c, str):
@@ -134,22 +131,22 @@ def find_marker(messages):
 def template_text(messages, tools=None, add_generation_prompt=True):
     return tok.apply_chat_template(
         normalize_messages(messages), tools=tools or None, tokenize=False,
-        add_generation_prompt=add_generation_prompt)
+        add_generation_prompt=add_generation_prompt, enable_thinking=False)
 
 
 def message_boundaries(messages, tools=None):
-    """Token index of the END of each message in the templated sequence,
-    via incremental prefix templating (Qwen's template is prefix-stable for
-    plain turns). Returns list of {'index','role','token_end'} or None."""
+    """Token index of the END of each message in the templated sequence."""
     try:
         norm = normalize_messages(messages)
         full = tok.apply_chat_template(norm, tools=tools or None, tokenize=False,
-                                       add_generation_prompt=False)
+                                       add_generation_prompt=False,
+                                       enable_thinking=False)
         out = []
         for i in range(1, len(norm) + 1):
             pref = tok.apply_chat_template(norm[:i], tools=tools or None,
                                            tokenize=False,
-                                           add_generation_prompt=False)
+                                           add_generation_prompt=False,
+                                           enable_thinking=False)
             if not full.startswith(pref):
                 return None
             n = len(tok(pref, add_special_tokens=False).input_ids)
@@ -166,7 +163,6 @@ def new_cache():
 
 
 def cache_kv(cache):
-    """{layer_idx: (K,V)} of the full-attention layers, tensors as stored."""
     out = {}
     for i in FULL_LAYERS:
         lay = cache.layers[i]
@@ -177,39 +173,10 @@ def cache_kv(cache):
     return out
 
 
-def cache_linear_states(cache):
-    """{layer_idx: (conv_state, recurrent_state)} of linear-attention layers.
-    Containers are dicts keyed by state_idx (transformers 5.x
-    LinearAttentionCacheLayerMixin); we use state 0."""
-    out = {}
-    for i, t in enumerate(TEXT_CFG.layer_types):
-        if t != "linear_attention":
-            continue
-        lay = cache.layers[i]
-        cs = getattr(lay, "conv_states", None)
-        rs = getattr(lay, "recurrent_states", None)
-        if not cs or not rs or cs.get(0) is None or rs.get(0) is None:
-            continue
-        out[i] = (cs[0], rs[0])
-    return out
-
-
 def seed_cache_kv(cache, kv_dict, linear_dict=None):
-    """Seed a fresh cache with a KV prefix (and optionally linear states)."""
     for i, (k, v) in kv_dict.items():
-        cache.layers[i].update(k.to("cuda:0"), v.to("cuda:0"))
-    if linear_dict:
-        for i, (cs, rs) in linear_dict.items():
-            lay = cache.layers[i]
-            dev_cs = cs.to("cuda:0")
-            dev_rs = rs.to("cuda:0")
-            lay.conv_states[0] = dev_cs
-            lay.recurrent_states[0] = dev_rs
-            lay.is_conv_states_initialized[0] = True
-            lay.is_recurrent_states_initialized[0] = True
-            lay.has_previous_state[0] = True
-            lay.conv_kernel_size[0] = dev_cs.shape[-1]
-            lay.device, lay.dtype = dev_cs.device, dev_cs.dtype
+        cache.layers[i].update(k.to("cuda:0", DTYPE), v.to("cuda:0", DTYPE))
+    # linear_dict: v1 hybrid-only, ignored on the dense model
 
 
 class HiddenTap:
@@ -236,12 +203,40 @@ class HiddenTap:
                 if chunks}
 
 
+class QTailTap:
+    """Hooks on every layer's q_proj keeping the LAST `tail` rows seen —
+    the pre-norm pre-RoPE queries of the final positions, for kv_attn."""
+
+    def __init__(self, tail=QTAIL):
+        self.tail = tail
+        self.data = {}
+        self.handles = []
+        for i in FULL_LAYERS:
+            self.handles.append(
+                txt.layers[i].self_attn.q_proj.register_forward_hook(
+                    self._make_hook(i)))
+
+    def _make_hook(self, i):
+        def hook(_mod, _inp, out):
+            q = out.detach()[0].to("cpu")          # [chunk, n_heads*hd]
+            prev = self.data.get(i)
+            q = q if prev is None else torch.cat([prev, q], dim=0)
+            self.data[i] = q[-self.tail:]
+        return hook
+
+    def close(self):
+        for h in self.handles:
+            h.remove()
+        return self.data
+
+
 @torch.inference_mode()
 def chunked_prefill(input_ids, capture_layers=None):
     """Prefill input_ids [1,T] in chunks with a live cache. Returns
-    (cache, hidden_dict, last_hidden_vec)."""
+    (cache, hidden_dict, last_hidden_vec, qtail_dict)."""
     cache = new_cache()
     tap = HiddenTap(capture_layers) if capture_layers else None
+    qtap = QTailTap()
     T = input_ids.shape[1]
     last_hidden = None
     for s in range(0, T, PREFILL_CHUNK):
@@ -250,7 +245,8 @@ def chunked_prefill(input_ids, capture_layers=None):
         cache = out.past_key_values
         last_hidden = out.last_hidden_state[0, -1].clone()
     hidden = tap.close() if tap else {}
-    return cache, hidden, last_hidden
+    qtail = qtap.close()
+    return cache, hidden, last_hidden, qtail
 
 
 # ------------------------------------------------------------ session store ----
@@ -264,10 +260,17 @@ def evict_sessions():
     torch.cuda.empty_cache()
 
 
+@torch.inference_mode()
+def _entropy_of(h):
+    logits = lm_head(h.to("cuda:0", DTYPE)).float()
+    p = torch.softmax(logits, dim=-1)
+    return float(-(p * torch.log(p + 1e-12)).sum())
+
+
 @app.post("/prefill_capture")
 def prefill_capture(body: dict):
     """body: messages | raw_text, tools?, add_generation_prompt (default
-    False), capture_layers [ints], session_id?, return_hidden?
+    False), capture_layers [ints], session_id?, return_entropy?, return_hidden?
     {positions: [ints] | 'turn_ends:<role>' | 'last', layers: [ints]}"""
     with GPU_LOCK:
         t0 = time.time()
@@ -283,16 +286,18 @@ def prefill_capture(body: dict):
             boundaries = message_boundaries(messages, body.get("tools"))
         ids = tok(text, return_tensors="pt", add_special_tokens=False).input_ids
         T = ids.shape[1]
-        cache, hidden, last_hidden = chunked_prefill(ids, capture_layers)
+        cache, hidden, last_hidden, qtail = chunked_prefill(ids, capture_layers)
         emb = txt.embed_tokens(ids[:, -256:].to("cuda:0"))
         emb_norm = float(emb[0].norm(dim=-1).mean())
         SESSIONS[sid] = {"cache": cache, "n_tokens": T, "ids": ids,
                          "hidden": hidden, "last_hidden": last_hidden,
-                         "boundaries": boundaries, "emb_norm": emb_norm,
-                         "created": time.time()}
+                         "qtail": qtail, "boundaries": boundaries,
+                         "emb_norm": emb_norm, "created": time.time()}
         evict_sessions()
         resp = {"session_id": sid, "n_tokens": T, "boundaries": boundaries,
                 "emb_norm": emb_norm, "dur_s": round(time.time() - t0, 1)}
+        if body.get("return_entropy"):
+            resp["last_entropy"] = round(_entropy_of(last_hidden), 4)
         rh = body.get("return_hidden")
         if rh:
             resp["hidden"] = _hidden_slice(SESSIONS[sid], rh)
@@ -301,7 +306,8 @@ def prefill_capture(body: dict):
 
 def _resolve_positions(sess, spec):
     if isinstance(spec, list):
-        return [p for p in spec if 0 <= p < sess["n_tokens"]]
+        return [p if p >= 0 else sess["n_tokens"] + p
+                for p in spec if -sess["n_tokens"] <= p < sess["n_tokens"]]
     if spec == "last":
         return [sess["n_tokens"] - 1]
     if isinstance(spec, str) and spec.startswith("turn_ends"):
@@ -334,15 +340,11 @@ def session_free(body: dict):
 
 
 # ------------------------------------------------------------ artifacts ----
-def _bit_ledger_kv(n, linear_dict=None):
+def _bit_ledger_kv(n):
     kv_heads = TEXT_CFG.num_key_value_heads
-    hd = TEXT_CFG.head_dim
+    hd = getattr(TEXT_CFG, "head_dim", TEXT_CFG.hidden_size // TEXT_CFG.num_attention_heads)
     b = n * len(FULL_LAYERS) * 2 * kv_heads * hd * 2
-    lin = 0
-    if linear_dict:
-        for cs, rs in linear_dict.values():
-            lin += (cs.numel() + rs.numel()) * 2
-    return {"kv_bytes": b, "linear_state_bytes": lin, "total_bytes": b + lin}
+    return {"kv_bytes": b, "linear_state_bytes": 0, "total_bytes": b}
 
 
 def _save_artifact(aid, kind, tensors, aux):
@@ -358,54 +360,156 @@ def _load_artifact(aid):
                       map_location="cpu", weights_only=False)
 
 
-def _kv_artifact(sess, positions, aid, include_linear_state=False, note=""):
+def _kv_artifact(sess, positions, aid, note="", extra_aux=None):
     cache = sess["cache"]
     T = sess["n_tokens"]
-    pos = torch.tensor(sorted(positions), dtype=torch.long)
+    pos = torch.tensor(sorted(set(int(p) for p in positions)), dtype=torch.long)
     kv = {}
     for i, (k, v) in cache_kv(cache).items():
-        kv[i] = (k[:, :, pos, :].to("cpu", torch.float16).clone(),
-                 v[:, :, pos, :].to("cpu", torch.float16).clone())
-    lin = None
-    if include_linear_state:
-        lin = {i: (cs.to("cpu").clone(), rs.to("cpu").clone())
-               for i, (cs, rs) in cache_linear_states(cache).items()}
-    tensors = {"kv": kv, "linear": lin, "positions": pos, "orig_len": T}
+        kv[i] = (k[:, :, pos, :].to("cpu", DTYPE).clone(),
+                 v[:, :, pos, :].to("cpu", DTYPE).clone())
+    tensors = {"kv": kv, "linear": None, "positions": pos, "orig_len": T}
     aux = {"n_slots": len(pos), "slot_unit": "kv_position",
            "orig_ctx_len": T, "positions_head": pos[:8].tolist(),
            "contiguous": bool((pos[1:] - pos[:-1] == 1).all()) if len(pos) > 1 else True,
-           "include_linear_state": include_linear_state,
-           "bit_ledger": _bit_ledger_kv(len(pos), lin), "note": note}
+           "bit_ledger": _bit_ledger_kv(len(pos)), "note": note}
+    if extra_aux:
+        aux.update(extra_aux)
     return _save_artifact(aid, "kv", tensors, aux)
 
 
+# ---- kv_attn: attention-mass position scoring (training-free, KVComm-ish) ----
+def _rotate_half(x):
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2:]
+    return torch.cat((-x2, x1), dim=-1)
+
+
 @torch.inference_mode()
-def _coconut_thoughts(sess, m, rescale=True):
-    """Training-free Coconut/LatentMAS loop: last-layer (post-norm) hidden ->
-    next input embedding, m steps, continuing from the session's live cache
-    (on a COPY so the session stays reusable)."""
-    cache = copy.deepcopy(sess["cache"])
+def attn_scores(sess):
+    """Score every position of the session by accumulated attention mass from
+    the last QTAIL queries, averaged over layers and heads. Returns a float32
+    CPU tensor [T]. Queries are rebuilt from the captured q_proj outputs
+    (q_norm + RoPE applied here, matching Qwen3Attention)."""
+    T = sess["n_tokens"]
+    qtail = sess["qtail"]
+    cache = sess["cache"]
+    n_heads = TEXT_CFG.num_attention_heads
+    kv_heads = TEXT_CFG.num_key_value_heads
+    hd = getattr(TEXT_CFG, "head_dim", TEXT_CFG.hidden_size // n_heads)
+    rep = n_heads // kv_heads
+    any_q = next(iter(qtail.values()))
+    t_tail = any_q.shape[0]
+    pos_ids = torch.arange(T - t_tail, T, device="cuda:0")[None]
+    # rotary_emb signature: (x, position_ids) -> cos, sin  [1, t, hd]
+    dummy = torch.zeros(1, t_tail, hd, device="cuda:0", dtype=DTYPE)
+    cos, sin = txt.rotary_emb(dummy, pos_ids)
+    cos = cos[0].float()                                    # [t, hd]
+    sin = sin[0].float()
+    # causal mask: query row j has absolute position T - t_tail + j
+    qpos = torch.arange(T - t_tail, T, device="cuda:0")
+    kpos = torch.arange(T, device="cuda:0")
+    causal = (kpos[None, :] <= qpos[:, None])               # [t, T]
+    total = torch.zeros(T, device="cuda:0")
+    n_terms = 0
+    for i in FULL_LAYERS:
+        lay = cache.layers[i]
+        k = getattr(lay, "keys", None)
+        if k is None:
+            continue
+        attn_mod = txt.layers[i].self_attn
+        q = qtail[i].to("cuda:0").view(t_tail, n_heads, hd)
+        q = attn_mod.q_norm(q).float()                      # RMSNorm per head
+        q = (q * cos[:, None, :]) + (_rotate_half(q) * sin[:, None, :])
+        q = q.transpose(0, 1)                               # [H, t, hd]
+        kk = k[0, :, :T, :].float()                          # [KVH, T, hd]
+        kk = kk.repeat_interleave(rep, dim=0)                # [H, T, hd]
+        s = torch.einsum("htd,hTd->htT", q, kk) / math.sqrt(hd)
+        s = s.masked_fill(~causal[None], float("-inf"))
+        a = torch.softmax(s, dim=-1)                         # [H, t, T]
+        total += a.sum(dim=(0, 1))
+        n_terms += n_heads * t_tail
+        del s, a, kk, q
+    torch.cuda.empty_cache()
+    return (total / max(n_terms, 1)).to("cpu")
+
+
+@torch.inference_mode()
+def _latent_thought_loop(sess, m, mode, top_p=0.95, entropy_stop=1.0,
+                         min_steps=4, temperature=1.0):
+    """v2 latent-thought rollouts, continuing from the session's live cache
+    (on a COPY). mode='soft': Soft-Thinking — feed the probability-weighted
+    mixture of INPUT embeddings under the (top-p truncated) next-token
+    distribution; entropy cold-stop after min_steps. mode='align':
+    LatentMAS-style — full-softmax expected embedding, fixed m, no stop.
+    mode='coconut': v1 raw-hidden recycling (kept for reference).
+
+    Memory note: rolls the SESSION's live cache forward and crops it back to
+    the original length afterwards (a deepcopy would put a second full-length
+    cache on the GPU — 6-7 GB for a 40k session on a 14B model)."""
+    cache = sess["cache"]
+    orig_len = sess["n_tokens"]
     h = sess["last_hidden"].clone()
     emb_norm = sess["emb_norm"]
-    vecs, norms, sims = [], [], []
+    emb_w = txt.embed_tokens.weight                          # [V, d]
+    vecs, norms, sims, ents = [], [], [], []
+    stop_reason = "cap"
     prev = None
-    for _ in range(m):
-        # store what gets INJECTED into B (the rescaled vector when rescale
-        # is on) — raw norms are still recorded for the collapse diagnostics
-        feed = h * (emb_norm / h.norm()) if rescale else h
-        vecs.append(feed.to("cpu", torch.float16).clone())
-        norms.append(float(h.norm()))
+    for step in range(m):
+        if mode == "coconut":
+            feed = (h * (emb_norm / h.norm())).to(DTYPE)
+        else:
+            logits = lm_head(h.to("cuda:0", DTYPE))[0] if h.dim() > 1 else \
+                lm_head(h.to("cuda:0", DTYPE))
+            logits = logits.float()
+            p = torch.softmax(logits / temperature, dim=-1)
+            ent = float(-(p * torch.log(p + 1e-12)).sum())
+            ents.append(round(ent, 3))
+            if mode == "soft" and step >= min_steps and ent < entropy_stop:
+                stop_reason = "cold_stop"
+                break
+            if mode == "soft":
+                sp, si = torch.sort(p, descending=True)
+                keep = torch.cumsum(sp, 0) - sp < top_p      # keep until mass
+                keep[0] = True
+                idx = si[keep]
+                w = p[idx] / p[idx].sum()
+            else:                                            # align: full softmax
+                idx = None
+                w = p
+            if idx is not None:
+                feed = (w[:, None] * emb_w[idx].float()).sum(0).to(DTYPE)
+            else:
+                # full-softmax expectation without a fp32 copy of the whole
+                # embedding table: accumulate in fp32 over row chunks
+                acc = torch.zeros(emb_w.shape[1], device="cuda:0",
+                                  dtype=torch.float32)
+                for s0 in range(0, emb_w.shape[0], 16384):
+                    blk = emb_w[s0:s0 + 16384].float()
+                    acc += (w[s0:s0 + 16384, None] * blk).sum(0)
+                feed = acc.to(DTYPE)
+        vecs.append(feed.to("cpu").clone())
+        norms.append(float(feed.float().norm()))
         if prev is not None:
             sims.append(float(torch.nn.functional.cosine_similarity(
-                h, prev, dim=0)))
-        prev = h.clone()
-        out = txt(inputs_embeds=feed[None, None, :].to("cuda:0", torch.float16),
+                feed.float(), prev, dim=0)))
+        prev = feed.float().clone()
+        out = txt(inputs_embeds=feed[None, None, :].to("cuda:0", DTYPE),
                   past_key_values=cache, use_cache=True)
         cache = out.past_key_values
         h = out.last_hidden_state[0, -1].clone()
-    del cache
+    # restore the session cache to its pre-loop length
+    try:
+        cache.crop(orig_len)
+    except Exception:
+        for lay in cache.layers:
+            if getattr(lay, "keys", None) is not None:
+                lay.keys = lay.keys[:, :, :orig_len, :]
+                lay.values = lay.values[:, :, :orig_len, :]
+    sess["cache"] = cache
     torch.cuda.empty_cache()
-    return torch.stack(vecs), norms, sims
+    return (torch.stack(vecs) if vecs else torch.zeros(0, TEXT_CFG.hidden_size)), \
+        norms, sims, ents, stop_reason
 
 
 @app.post("/make_artifact")
@@ -423,6 +527,7 @@ def make_artifact(body: dict):
                                         content={"error": "unknown session"})
                 T = sess["n_tokens"]
                 n = min(int(p.get("n", 300)), T)
+                extra = None
                 if arm == "kv_last":
                     positions = list(range(T - n, T))
                 elif arm == "kv_positions":
@@ -430,29 +535,39 @@ def make_artifact(body: dict):
                 elif arm == "kv_rand":
                     g = torch.Generator().manual_seed(int(p.get("seed", 0)))
                     positions = torch.randperm(T, generator=g)[:n].tolist()
-                else:
-                    return JSONResponse(status_code=400, content={
-                        "error": "kv_attn not implemented in v1"})
-                aux = _kv_artifact(sess, positions, aid,
-                                   include_linear_state=bool(
-                                       p.get("include_linear_state")),
-                                   note=p.get("note", ""))
+                else:                                        # kv_attn
+                    scores = attn_scores(sess)
+                    positions = torch.topk(scores, n).indices.tolist()
+                    ssort = torch.sort(scores, descending=True).values
+                    extra = {"selection": "attn_mass_tail%d" % QTAIL,
+                             "score_mass_selected": round(float(
+                                 ssort[:n].sum() / scores.sum()), 4),
+                             "score_top8": [round(float(x), 6)
+                                            for x in ssort[:8]]}
+                aux = _kv_artifact(sess, positions, aid, note=p.get("note", ""),
+                                   extra_aux=extra)
                 return aux
-            if arm == "thought_coconut":
+            if arm in ("thought_soft", "thought_align", "thought_coconut"):
                 if sess is None:
                     return JSONResponse(status_code=400,
                                         content={"error": "unknown session"})
+                mode = arm.split("_", 1)[1]
                 m = int(p.get("m", 32))
-                vecs, norms, sims = _coconut_thoughts(
-                    sess, m, rescale=bool(p.get("rescale", True)))
-                aux = {"n_slots": m, "slot_unit": "latent_vector",
+                vecs, norms, sims, ents, stop = _latent_thought_loop(
+                    sess, m, mode, top_p=float(p.get("top_p", 0.95)),
+                    entropy_stop=float(p.get("entropy_stop", 1.0)),
+                    min_steps=int(p.get("min_steps", 4)))
+                aux = {"n_slots": int(vecs.shape[0]),
+                       "slot_unit": "latent_vector",
                        "bit_ledger": {"total_bytes": vecs.numel() * 2},
-                       "hidden_norms": [round(x, 1) for x in norms],
+                       "mode": mode, "stop_reason": stop,
+                       "vec_norms": [round(x, 1) for x in norms],
                        "consec_cos_sim": [round(x, 3) for x in sims],
-                       "rescale": bool(p.get("rescale", True)),
+                       "step_entropies": ents,
                        "emb_norm": sess["emb_norm"],
                        "orig_ctx_len": sess["n_tokens"]}
-                return _save_artifact(aid, "embeds", {"vectors": vecs}, aux)
+                return _save_artifact(aid, "embeds",
+                                      {"vectors": vecs.to(torch.float16)}, aux)
             if arm == "thought_pool":
                 text = p["text"]
                 m = int(p.get("m", 32))
@@ -486,6 +601,73 @@ def make_artifact(body: dict):
             return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+# ------------------------------------------------------- probe scoring ----
+@app.post("/probe_score")
+def probe_score(body: dict):
+    """Score all captured positions of one layer with a linear probe and
+    return NMS peaks + decoded ±window text. body:
+      {session_id, layer, coef, mu, sd, intercept,
+       n_peaks (6), min_sep (300), window (150),
+       positions? (explicit peak override, e.g. lprobe_randsel),
+       return_curve? (bool, stride-subsampled)}"""
+    with GPU_LOCK:
+        try:
+            import numpy as np
+            sess = SESSIONS.get(body.get("session_id") or "")
+            if sess is None:
+                return JSONResponse(status_code=400,
+                                    content={"error": "unknown session"})
+            layer = int(body["layer"])
+            h = sess["hidden"].get(layer)
+            if h is None:
+                return JSONResponse(status_code=400,
+                                    content={"error": f"layer {layer} not captured"})
+            X = h.float().numpy()
+            mu = np.asarray(body["mu"], dtype=np.float32)
+            sd = np.asarray(body["sd"], dtype=np.float32)
+            coef = np.asarray(body["coef"], dtype=np.float32)
+            z = ((X - mu) / sd) @ coef + float(body.get("intercept", 0.0))
+            s = 1.0 / (1.0 + np.exp(-z))                    # [T]
+            T = len(s)
+            n_peaks = int(body.get("n_peaks", 6))
+            min_sep = int(body.get("min_sep", 300))
+            window = int(body.get("window", 150))
+            if body.get("positions"):
+                peaks = [int(p) for p in body["positions"] if 0 <= p < T]
+            else:
+                order = np.argsort(-s)
+                peaks = []
+                for p in order:
+                    if len(peaks) >= n_peaks:
+                        break
+                    if all(abs(int(p) - q) >= min_sep for q in peaks):
+                        peaks.append(int(p))
+                peaks.sort()
+            ids = sess["ids"][0]
+            windows = []
+            for p in peaks:
+                lo, hi = max(0, p - window), min(T, p + window)
+                windows.append({
+                    "pos": p, "score": round(float(s[p]), 4),
+                    "text": tok.decode(ids[lo:hi], skip_special_tokens=False)})
+            resp = {"n_tokens": T, "layer": layer,
+                    "curve_mean": round(float(s.mean()), 4),
+                    "curve_std": round(float(s.std()), 4),
+                    "curve_q90": round(float(np.quantile(s, 0.9)), 4),
+                    "peaks": [{"pos": w["pos"], "score": w["score"]}
+                              for w in windows],
+                    "windows": windows}
+            if body.get("return_curve"):
+                stride = max(1, T // 4000)
+                resp["curve"] = [round(float(x), 4) for x in s[::stride]]
+                resp["curve_stride"] = stride
+            return resp
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 # ------------------------------------------------------------- generation ----
 def _eos_ids():
     gc = model.generation_config
@@ -499,14 +681,13 @@ def _eos_ids():
 def generate_text(prompt_text, artifact=None, marker_split=None,
                   max_new=MAX_NEW_DEFAULT, temperature=0.0):
     """Core loop. artifact: loaded .pt dict or None. marker_split: (left,
-    right) prompt halves for embeds splice. Returns (text, n_prompt, n_gen,
-    finish)."""
+    right) prompt halves for embeds splice."""
     cache = new_cache()
     pos0 = 0          # rotary position of the first prompt token
     cache_len = 0     # physical slots already in the cache
     if artifact and artifact["kind"] == "kv":
         kv = {i: (k, v) for i, (k, v) in artifact["kv"].items()}
-        seed_cache_kv(cache, kv, artifact.get("linear"))
+        seed_cache_kv(cache, kv)
         n_prefix = artifact["positions"].shape[0]
         pos0 = int(artifact["orig_len"])
         cache_len = n_prefix
@@ -517,7 +698,7 @@ def generate_text(prompt_text, artifact=None, marker_split=None,
                                   add_special_tokens=False).input_ids.to("cuda:0"))
         er = txt.embed_tokens(tok(right, return_tensors="pt",
                                   add_special_tokens=False).input_ids.to("cuda:0"))
-        lat = artifact["vectors"].to("cuda:0", torch.float16)[None]
+        lat = artifact["vectors"].to("cuda:0", DTYPE)[None]
         embeds = torch.cat([el, lat, er], dim=1)
         n_prompt = embeds.shape[1]
         feed = {"inputs_embeds": embeds}
@@ -527,7 +708,6 @@ def generate_text(prompt_text, artifact=None, marker_split=None,
         n_prompt = ids.shape[1]
         feed = {"input_ids": ids}
 
-    # prefill the prompt (with explicit positions when a KV prefix is present)
     position_ids = torch.arange(pos0, pos0 + n_prompt, device="cuda:0")[None]
     cache_position = torch.arange(cache_len, cache_len + n_prompt,
                                   device="cuda:0")
@@ -621,9 +801,10 @@ def chat_completions(body: dict):
 @app.get("/health")
 def health():
     return {"ok": model is not None,
+            "model": MODEL_DIR.rsplit("/", 3)[-3] if model else None,
             "gpu_mem_gb": round(torch.cuda.memory_allocated() / 1e9, 1),
             "sessions": list(SESSIONS.keys()),
-            "full_layers": FULL_LAYERS}
+            "n_full_layers": len(FULL_LAYERS)}
 
 
 if __name__ == "__main__":

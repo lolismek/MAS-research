@@ -20,17 +20,19 @@ def test_latent_arm_lists_consistent():
     assert set(LA.LATENT_ARMS) == set(LATENT_ARMS)
     assert not set(LATENT_ARMS) & set(ARMS)
     assert not set(LATENT_ARMS) & BOARD_FAMILY
-    # capacity sweep points: W, W/4, W/16
-    assert LA.KV_SWEEP == {"lkv": 300, "lkv_n75": 75, "lkv_n19": 19}
+    # v2 KV arm -> server-arm mapping, all at slot parity n=W
+    assert LA.KV_ARMS == {"lkv_attn": "kv_attn", "lkv_last": "kv_last",
+                          "lkv_rand": "kv_rand"}
+    assert LA.W_SLOTS == 300
 
 
 def test_marker_roundtrip():
-    txt = LA._artifact_text("kv", LA._aid("lkv", "x" * 100, 12))
+    txt = LA._artifact_text("kv", LA._aid("lkv_attn", "x" * 100, 12))
     m = MARKER_RE.search(txt)
     assert m and m.group(1) == "kv"
-    assert m.group(2).startswith("lkv__")
+    assert m.group(2).startswith("lkv_attn__")
     # carrier text identical across arms/kinds (prompt-confound control)
-    t2 = LA._artifact_text("embeds", "lthought__abc__k12")
+    t2 = LA._artifact_text("embeds", "lthought_soft__abc__k12")
     assert MARKER_RE.sub("", txt).strip() == MARKER_RE.sub("", t2).strip()
 
 

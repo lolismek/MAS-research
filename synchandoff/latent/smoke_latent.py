@@ -89,6 +89,11 @@ def main():
     arts["lkv_rand"] = post("/make_artifact", {"arm": "kv_rand", "session_id": sid,
                                                "params": {"n": n, "seed": 7},
                                                "artifact_id": "smoke_lkv_rand"})
+    arts["lkv_attn"] = post("/make_artifact", {"arm": "kv_attn", "session_id": sid,
+                                               "params": {"n": n},
+                                               "artifact_id": "smoke_lkv_attn"})
+    print("   kv_attn mass_selected:", arts["lkv_attn"].get("score_mass_selected"),
+          "contiguous:", arts["lkv_attn"].get("contiguous"))
     arts["lkv_full"] = post("/make_artifact", {"arm": "kv_last", "session_id": sid,
                                                "params": {"n": T},
                                                "artifact_id": "smoke_lkv_full"})
@@ -99,15 +104,23 @@ def main():
                                    "Time is up. Summarize everything useful you "
                                    "established for the worker taking over."}],
         "add_generation_prompt": True})
-    arts["lthought"] = post("/make_artifact",
-                            {"arm": "thought_coconut", "session_id": s2["session_id"],
-                             "params": {"m": 8, "rescale": True},
-                             "artifact_id": "smoke_lthought"})
-    print("   coconut norms:", arts["lthought"].get("hidden_norms"))
-    print("   consec cos sim:", arts["lthought"].get("consec_cos_sim"))
+    arts["lthought_soft"] = post("/make_artifact",
+                                 {"arm": "thought_soft", "session_id": s2["session_id"],
+                                  "params": {"m": 16, "entropy_stop": 1.0,
+                                             "min_steps": 4},
+                                  "artifact_id": "smoke_lthought_soft"})
+    print("   soft n_slots:", arts["lthought_soft"].get("n_slots"),
+          "stop:", arts["lthought_soft"].get("stop_reason"))
+    print("   soft entropies:", arts["lthought_soft"].get("step_entropies"))
+    print("   soft cos sim:", arts["lthought_soft"].get("consec_cos_sim"))
+    arts["lthought_align"] = post("/make_artifact",
+                                  {"arm": "thought_align",
+                                   "session_id": s2["session_id"],
+                                   "params": {"m": 8},
+                                   "artifact_id": "smoke_lthought_align"})
     arts["lthought_rand"] = post("/make_artifact",
                                  {"arm": "thought_rand",
-                                  "params": {"ref_artifact_id": "smoke_lthought",
+                                  "params": {"ref_artifact_id": "smoke_lthought_soft",
                                              "seed": 7},
                                   "artifact_id": "smoke_lthought_rand"})
     note = ("Predecessor's note: " + FACTS[2] + " fails because " + FACTS[0] +
@@ -121,9 +134,11 @@ def main():
     for name, marker in [
             ("control_none", None),
             ("lkv", "[[LATENT:kv:smoke_lkv]]"),
+            ("lkv_attn", "[[LATENT:kv:smoke_lkv_attn]]"),
             ("lkv_full", "[[LATENT:kv:smoke_lkv_full]]"),
             ("lkv_rand", "[[LATENT:kv:smoke_lkv_rand]]"),
-            ("lthought", "[[LATENT:embeds:smoke_lthought]]"),
+            ("lthought_soft", "[[LATENT:embeds:smoke_lthought_soft]]"),
+            ("lthought_align", "[[LATENT:embeds:smoke_lthought_align]]"),
             ("lthought_rand", "[[LATENT:embeds:smoke_lthought_rand]]"),
             ("lthought_pool", "[[LATENT:embeds:smoke_lthought_pool]]")]:
         text = gen(marker)

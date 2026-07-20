@@ -12,11 +12,15 @@ kernels) — the pass bar is same-content, same-format behavior: long common
 prefix and/or equivalent final answer + tool-call syntax.
 """
 import json
+import os
 
 import requests
 
-VLLM = "http://localhost:8801/v1/chat/completions"
-LAT = "http://localhost:8802/v1/chat/completions"
+VLLM = os.environ.get("PARITY_VLLM",
+                      "http://localhost:8804") + "/v1/chat/completions"
+LAT = os.environ.get("PARITY_LAT",
+                     "http://localhost:8802") + "/v1/chat/completions"
+MODEL = os.environ.get("PARITY_MODEL", "Qwen/Qwen3-8B")
 
 TOOLS = [{"type": "function", "function": {
     "name": "bash",
@@ -39,7 +43,7 @@ CASES = [
 
 
 def call(url, messages, tools, max_tokens=600):
-    body = {"model": "Qwen/Qwen3.6-35B-A3B", "messages": messages,
+    body = {"model": MODEL, "messages": messages,
             "temperature": 0.0, "max_tokens": max_tokens}
     if tools:
         body["tools"] = tools
