@@ -52,6 +52,24 @@ EOF
       rm -f /tmp/libpack.tar /tmp/solist.txt; ldconfig 2>/dev/null || true'
     echo "  restored $(wc -l < /tmp/solist.txt) zeroed libs"
   fi
+  # 3. requests only: the repo's mtls client cert (2-year validity, README)
+  #    expired 2026-03-13, so test_different_connection_pool_for_mtls_settings
+  #    fails in GOLD state. Re-sign the shipped CSR with the shipped CA key —
+  #    the exact command from tests/certs/mtls/client/Makefile — on the host
+  #    (the image's openssl binary is one of the stripped zero-byte files).
+  if [[ "$prefix" == 4_requests_* ]]; then
+    certdir=$(mktemp -d)
+    for f in certs/expired/ca/ca.crt certs/expired/ca/ca-private.key certs/mtls/client/client.csr; do
+      docker cp "fix_$prefix:/workspace/test_repo/tests/$f" "$certdir/$(basename $f)"
+    done
+    (cd "$certdir" && \
+     openssl x509 -req -CA ca.crt -CAkey ca-private.key -in client.csr \
+       -outform PEM -out client.pem -days 730 -CAcreateserial && \
+     openssl x509 -in ca.crt -outform PEM >> client.pem)
+    docker cp "$certdir/client.pem" "fix_$prefix:/workspace/test_repo/tests/certs/mtls/client/client.pem"
+    rm -rf "$certdir"
+    echo "  renewed mtls client cert"
+  fi
   docker commit "fix_$prefix" "xuehang/$prefix:3.11-git"
   docker rm -f "fix_$prefix"
   echo "FIXED $prefix"
