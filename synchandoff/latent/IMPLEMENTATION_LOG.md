@@ -124,6 +124,14 @@ predecessor was doing":
 ~104–119 (vs emb-norm rescale applied at injection), consecutive cos-sim
 0.32–0.66 (a collapsed loop would be ~1.0). Received coherently by B.
 
+**Behavioral caveat (log this in the report):** in the smoke, B's think trace
+shows it RETRIEVING planted facts from the KV prefix and then actively
+DISTRUSTING them as potential hallucinations ("I must not invent a test like
+`test_trailing_newline` ... unless it was in the prompt. It wasn't.") — the
+model's anti-hallucination instincts fight the latent channel. Latent
+transmission may therefore show up more in B's priors/actions than in B's
+explicit claims; expect utilization loss relative to what the channel carries.
+
 ## Ops runbook (exact commands)
 
 **Latent server (tigerfish GPU 1, port 8802):**
@@ -189,11 +197,20 @@ infra/proxy_server.py -> piranha:/tmp/aij2115/px/latent/server.py.
 
 ## Status
 - [x] recon
-- [ ] HF load + parity check vs vLLM
-- [ ] server.py (prefill_capture / make_artifact / generate)
-- [ ] KV injection coherence
-- [ ] latent thoughts coherence
-- [ ] piranha proxy :8745 + tunnel :8802
-- [ ] arms/build_artifacts integration (lkv, lkv_notekv, lkv_rand, lthought, lthought_rand, lprobe, lprobe_shuffled)
-- [ ] end-to-end single-instance smokes
-- [ ] L-PROBE capture + training wave + probes
+- [x] HF load (custom awq_moe loader) + parity check vs vLLM (PASSED)
+- [x] server.py (prefill_capture / make_artifact / generate / chat.completions)
+- [x] KV injection coherence + planted-fact signal (PASSED)
+- [x] latent thoughts: coherent, no collapse; m=8 carried no explicit facts in
+      the smoke (anticipated risk — pooled variant + controls in place)
+- [x] piranha latent proxy :8745 + tunnel :8802 (both up)
+- [x] arms/build_artifacts integration (8 latent arms + lprobe stubs);
+      offline tests 21/21 green (tests/test_latent_offline.py)
+- [x] L-PROBE code (capture/labels/train/annex) + training wave RUNNING on
+      piranha (51 instances, 7 disjoint repos, 4 shards)
+- [ ] end-to-end single-instance phase-2 smoke (lkv, lthought) — in progress
+- [ ] probe capture + training (needs the wave to finish)
+- [ ] kv_attn (attention-scored selection) — deferred (v1 = last-n + rand
+      controls; the chosen keep-original-positions scheme supports
+      non-contiguous selection when it's added)
+- [ ] lkv_state (linear-state handover) — flag exists server-side
+      (include_linear_state), no arm wired yet
