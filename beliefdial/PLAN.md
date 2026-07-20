@@ -106,6 +106,33 @@ fake clients, duet-style.
 Cost: ~8-turn dialogue + B + observer ≈ $0.02–0.05/episode on Qwen. Smoke =
 2 seeds × 7 arms ≈ well under the $5 cap. Full 40×7×2 grid = user runs.
 
+## Smoke findings (2026-07-20 — 2 seeds × 7 arms + floor/ceiling, 18/18 runs, $0.84)
+
+1. **Instrument validates.** floor = 0/8 leaky with 12/12 can't-tell (the
+   anti-prior design leaves genuinely nothing guessable); ceiling = 8/8 + 4/4;
+   probe held 12/12 in every arm (plants survive the dialogue).
+2. **Ceiling effect on the main metric:** vanilla's note alone already
+   transmits 8/8 leaky — at 6 turns × 4 leaky slots there is no upward
+   headroom for arms. Differentiation lives in fidelity / inert / honesty
+   axes, or needs harder cells (subtler plants, more slots, tighter notes).
+3. **Board FIRES here: 4–8 writes/episode** — the P4 channel-competition law
+   confirmed in its predicted favorable habitat (tool-less dialogue). Cost is
+   3–6× vanilla (think traces inside the tool loop).
+4. **Ledger fidelity (store-only quiz): extract 8/8, board_inert 8/8, board
+   7/8 leaky** — the memory mechanisms preserve nearly the whole slate on
+   their own. This is the metric duet couldn't produce, and it works.
+5. **down declined both asks** — payload judged sufficient; consistent with
+   duet's down-engagement-tracks-uncertainty.
+6. **Inert-control caveat (real finding):** full/trip_advice's inert hit was
+   genuine leakage — A spontaneously injected its planted cat-belief into
+   trip advice ("cats don't run on itineraries, and neither should you").
+   Planted beliefs bleed off-topic, so inert slots measure bleed+inference,
+   not pure over-inference. Option for the grid: add "these views never come
+   up unless relevant" to the plant preamble — or keep, and count bleed as
+   its own phenomenon.
+7. board leaked=5 verbatim flags vs vanilla=2 (write-then-say contamination?)
+   but board_inert=1 argues noise — watch at N>2.
+
 ## Build order
 
 1. Schema + 3 hand-written seeds
