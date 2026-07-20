@@ -124,6 +124,69 @@ predecessor was doing":
 ~104–119 (vs emb-norm rescale applied at injection), consecutive cos-sim
 0.32–0.66 (a collapsed loop would be ~1.0). Received coherently by B.
 
+## Ops runbook (exact commands)
+
+**Latent server (tigerfish GPU 1, port 8802):**
+```
+# start
+ssh aij2115@tigerfish.cs.columbia.edu \
+  'cd /tmp/aij2115/latent && LATENT_GPU=1 LATENT_PORT=8802 setsid nohup \
+   ./serve_latent.sh > server_8802.log 2>&1 < /dev/null &'
+# check
+ssh aij2115@tigerfish.cs.columbia.edu 'curl -s http://localhost:8802/health'
+# stop (bracket trick; NEVER pkill without it)
+ssh aij2115@tigerfish.cs.columbia.edu 'pkill -u aij2115 -f "[s]erver.py --port 8802"'
+```
+If GPU 0 frees up (check `nvidia-smi` — as of today it has a horvitz job):
+second instance with `LATENT_GPU=0 LATENT_PORT=8803` + a second tunnel.
+
+**Tunnel piranha->tigerfish :8802 (on piranha):**
+```
+ssh -i /tmp/aij2115/tunnel_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+    -o ExitOnForwardFailure=yes -N -f -L 8802:localhost:8802 \
+    aij2115@tigerfish.cs.columbia.edu
+```
+
+**Latent proxy (piranha :8745; runs the REPO's infra/proxy_server.py from
+/tmp/aij2115/px/latent/server.py — the live :8744 text proxy is untouched):**
+```
+ssh aij2115@piranha.cs.columbia.edu \
+  'setsid nohup /tmp/aij2115/run_proxy_latent.sh > /tmp/aij2115/proxy_latent.log 2>&1 < /dev/null &'
+```
+
+**Build latent artifacts (piranha, tunnel+server up; vanilla.txt must exist
+first for lkv_notekv/lthought_pool; keep this arm ORDER so the 2-session
+server cache is reused):**
+```
+cd /tmp/aij2115/synchandoff && SYNCHANDOFF_LATENT_BASE=http://localhost:8802 \
+/tmp/aij2115/pyenv/bin/python build_artifacts.py --k 12 \
+  --arms lkv,lkv_n75,lkv_n19,lkv_rand,lkv_notekv,lthought,lthought_rand,lthought_pool \
+  [--instances <iid>] [--limit N]
+```
+
+**Latent phase-2 (piranha; 1-2 shards only — the server serializes):**
+```
+/tmp/aij2115/run_phase2_latent.sh 12 8 lkv,lkv_rand,... 1 <tag>
+```
+
+**L-PROBE pipeline (piranha):**
+```
+# 1. phase-1 training wave (needs the 7 pulled images; ~51 instances)
+/tmp/aij2115/synchandoff/infra/run_wave_train.sh 12 4
+# 2. activation capture (tunnel+server up)
+cd /tmp/aij2115/synchandoff && SYNCHANDOFF_LATENT_BASE=http://localhost:8802 \
+/tmp/aij2115/pyenv/bin/python -m latent.probe.capture \
+  --candidates latent/probe/train_candidates.json --k 12
+# 3. train probes (writes latent/probe/probes.json; then scp it back into the
+#    repo AND leave it in place for annex building)
+/tmp/aij2115/pyenv/bin/python -m latent.probe.train
+# 4. lprobe/lprobe_shuffled artifacts via build_artifacts --arms lprobe,lprobe_shuffled
+```
+
+**Code sync:** repo `synchandoff/latent/*.py` -> tigerfish:/tmp/aij2115/latent/
+(server-side) and piranha:/tmp/aij2115/synchandoff/... (harness-side) via scp;
+infra/proxy_server.py -> piranha:/tmp/aij2115/px/latent/server.py.
+
 ## Status
 - [x] recon
 - [ ] HF load + parity check vs vLLM
