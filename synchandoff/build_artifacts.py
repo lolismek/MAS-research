@@ -40,11 +40,16 @@ def main():
     ap.add_argument("--split", default="callee")
     ap.add_argument("--arms", default=",".join(a for a in A.ARMS if a != "floor"))
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--instances", default=None,
+                    help="comma-separated instance_id filter (for sharding)")
     args = ap.parse_args()
     wanted_arms = [a.strip() for a in args.arms.split(",") if a.strip()]
 
     by_id = {i["instance_id"]: i for i in I.load_instances(args.split)}
     frozen_ids = sorted(os.listdir(FROZEN)) if os.path.isdir(FROZEN) else []
+    if args.instances:
+        only = {s.strip() for s in args.instances.split(",") if s.strip()}
+        frozen_ids = [i for i in frozen_ids if i in only]
     if args.limit:
         frozen_ids = frozen_ids[:args.limit]
     built = skipped = missing = 0
