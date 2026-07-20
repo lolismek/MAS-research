@@ -157,7 +157,7 @@ even perfect information (substrate too hard → fallback).
 | `vanilla` | free-text note A writes at turn k, budget W |
 | `full` | full transcript, truncated-from-the-front to W (naive baseline distinct from ceiling) |
 | `sop` | MetaGPT-style typed sections: FINDINGS / EVIDENCE / VERDICT / NEXT_STEPS |
-| `down` | vanilla + per-claim CONFIDENCE line; B may ask one bounded clarification Q if confidence < θ (θ=0.6, as in duet) |
+| `down` | vanilla note + B may raise ONE bounded clarification Q, at B's own judgment (duet dropped the θ-confidence gate: it never fired — models always self-report high confidence) |
 | `board` | belief ledger A maintained *during* Phase 1 via add_belief/revise_belief tools; ledger is the artifact |
 | `extract` | observer LLM reads A's trajectory post-hoc and writes the ledger (no in-loop tools) |
 | `board_inert` | A has the board tools but the ledger is NOT transmitted (confound control for the tool-use effect on A's own exploration) |
