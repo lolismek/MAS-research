@@ -73,9 +73,17 @@ def _run_tool(env, name, args):
     return f"[error: unknown tool {name}]"
 
 
-def run_agent(env, system, user, tool_budget, tag=""):
+def run_agent(env, system, user, tool_budget, tag="", extra_tools=None):
     """Returns {'events': [...], 'final_text': str|None, 'stop_reason': str,
-    'tool_calls_used': int, 'usage': {...}}."""
+    'tool_calls_used': int, 'usage': {...}}.
+
+    extra_tools: optional (specs_list, handler) for arm-owned tools (the board
+    family's add_belief/revise_belief). Extra-tool calls are FREE — they don't
+    consume the environment tool budget, so the board arm's k is comparable to
+    plain-family k (recording a belief is not an environment probe)."""
+    extra_specs, extra_handler = (extra_tools or ([], None))
+    extra_names = {s["function"]["name"] for s in extra_specs}
+    specs = TOOL_SPECS + list(extra_specs)
     usage = llm.Usage()
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": user}]
@@ -86,7 +94,7 @@ def run_agent(env, system, user, tool_budget, tag=""):
     stop_reason, final_text = "model_stopped", None
 
     for _ in range(MAX_INNER_STEPS):
-        msg = llm.chat(messages, tools=TOOL_SPECS, tag=tag)
+        msg = llm.chat(messages, tools=specs, tag=tag)
         usage.add(msg.get("_usage", {}))
         content = msg.get("content") or ""
         tool_calls = msg.get("tool_calls") or []
@@ -106,16 +114,23 @@ def run_agent(env, system, user, tool_budget, tag=""):
 
         budget_hit = False
         for tc in tool_calls:
-            if used >= tool_budget:
-                budget_hit = True
-                messages.append({"role": "tool", "tool_call_id": tc["id"],
-                                 "content": "[tool budget exhausted]"})
-                continue
             name = tc["function"]["name"]
             try:
                 args = json.loads(tc["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
+            if name in extra_names:
+                result = extra_handler(name, args)
+                events.append({"type": "extra_tool", "name": name, "arguments": args,
+                               "result": result})
+                messages.append({"role": "tool", "tool_call_id": tc["id"],
+                                 "content": result})
+                continue
+            if used >= tool_budget:
+                budget_hit = True
+                messages.append({"role": "tool", "tool_call_id": tc["id"],
+                                 "content": "[tool budget exhausted]"})
+                continue
             action_key = (name, tc["function"]["arguments"])
             repeats = repeats + 1 if action_key == last_action else 1
             last_action = action_key

@@ -104,10 +104,25 @@ class InstanceEnv:
         return parse_pytest_output(out), out
 
     def agent_diff(self):
-        """What the agent changed since the out-of-sync baseline commit."""
+        """What the agent changed since the last baseline commit. `git add -N`
+        makes newly created files visible to diff; the default-context patch is
+        replayable with `git apply` (phase 2 restores A's end state from it)."""
+        self.exec("git add -N .", timeout=30)
         _, files = self.exec("git diff HEAD --name-only", timeout=30)
-        _, diff = self.exec("git diff HEAD -U0", timeout=30)
+        _, diff = self.exec("git diff HEAD", timeout=30)
         return {"files": [f for f in files.strip().split("\n") if f], "diff": diff}
+
+    def apply_patch(self, patch_text):
+        """Replay a frozen phase-1 patch onto the out-of-sync state and commit
+        it as the new baseline (B's LA is measured against A's end state)."""
+        if patch_text.strip():
+            assert self.write_file("/tmp/phase1.patch", patch_text)
+            code, out = self.exec("git apply /tmp/phase1.patch", timeout=60)
+            if code != 0:
+                raise RuntimeError(f"phase-1 patch failed to apply: {out[-500:]}")
+        code, out = self.exec(
+            "git add -A && git commit -qm phase1-end-state --allow-empty", timeout=60)
+        assert code == 0, f"phase-1 state commit failed: {out}"
 
 
 def parse_pytest_output(out):
