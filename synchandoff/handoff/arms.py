@@ -46,6 +46,12 @@ TOOL_RESULT_CHARS = 700          # duet's TRANSCRIPT_TOOL_CHARS
 ARMS = ["floor", "ceiling", "oracle", "vanilla", "full", "sop", "down",
         "extract", "board", "board_inert"]
 BOARD_FAMILY = {"board", "board_inert"}
+# Latent conditions (handoff/latent_arms.py; need the latent server + tunnel,
+# so they are NOT in ARMS — build_artifacts only builds them when asked
+# explicitly via --arms). All use the plain phase-1 family.
+LATENT_ARMS = ["lkv", "lkv_n75", "lkv_n19", "lkv_rand", "lkv_notekv",
+               "lthought", "lthought_rand", "lthought_pool",
+               "lprobe", "lprobe_shuffled"]
 
 # --- prompts (duet's, lightly adapted to the single-handoff setting) ----------
 HANDOFF_REQUEST = (
@@ -417,6 +423,9 @@ def build_artifact(arm, frozen, instance, task_block=""):
     family. Returns (artifact_text_or_None, aux_dict)."""
     iid = instance["instance_id"]
     events = frozen["events"]
+    if arm in LATENT_ARMS:
+        from handoff import latent_arms
+        return latent_arms.build(arm, frozen, instance)
     if arm == "floor":
         return None, {}
     if arm == "ceiling":
