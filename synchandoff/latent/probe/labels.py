@@ -32,6 +32,9 @@ def turn_labels(events, instance):
     for ev in events:
         t = ev.get("type")
         if t == "assistant":
+            # the captured position is the END of this assistant message: it
+            # can reflect the message itself and everything BEFORE it, but not
+            # the tool results that come back afterwards
             blob = (ev.get("content") or "") + " ".join(
                 (c.get("arguments") or "") for c in ev.get("tool_calls", []))
             if rel in blob or base in blob:
@@ -45,8 +48,6 @@ def turn_labels(events, instance):
                 located = True
             if fm in blob:
                 seen = True
-            if out:
-                out[-1] = {"located_file": located, "seen_func": seen}
     return out
 
 

@@ -510,7 +510,7 @@ def generate_text(prompt_text, artifact=None, marker_split=None,
         cache_len = n_prefix
 
     if artifact and artifact["kind"] == "embeds":
-        left, right = marker_split
+        left, right = marker_split if marker_split else ("", prompt_text)
         el = txt.embed_tokens(tok(left, return_tensors="pt",
                                   add_special_tokens=False).input_ids.to("cuda:0"))
         er = txt.embed_tokens(tok(right, return_tensors="pt",
