@@ -390,13 +390,15 @@ def _coconut_thoughts(sess, m, rescale=True):
     vecs, norms, sims = [], [], []
     prev = None
     for _ in range(m):
-        vecs.append(h.to("cpu", torch.float16).clone())
+        # store what gets INJECTED into B (the rescaled vector when rescale
+        # is on) — raw norms are still recorded for the collapse diagnostics
+        feed = h * (emb_norm / h.norm()) if rescale else h
+        vecs.append(feed.to("cpu", torch.float16).clone())
         norms.append(float(h.norm()))
         if prev is not None:
             sims.append(float(torch.nn.functional.cosine_similarity(
                 h, prev, dim=0)))
         prev = h.clone()
-        feed = h * (emb_norm / h.norm()) if rescale else h
         out = txt(inputs_embeds=feed[None, None, :].to("cuda:0", torch.float16),
                   past_key_values=cache, use_cache=True)
         cache = out.past_key_values
