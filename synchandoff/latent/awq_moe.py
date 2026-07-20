@@ -100,6 +100,22 @@ class AWQExperts(nn.Module):
         return dequant_awq(qw[e], qz[e], s[e])
 
     def forward(self, hidden_states, top_k_index, top_k_weights):
+        if hidden_states.shape[0] == 1:
+            # decode fast path: no mask/loop — one batched dequant + one
+            # einsum per projection over the token's top-k experts
+            idx = top_k_index[0]
+            Wg = dequant_awq(self.gate_qweight[idx], self.gate_qzeros[idx],
+                             self.gate_scales[idx])
+            Wu = dequant_awq(self.up_qweight[idx], self.up_qzeros[idx],
+                             self.up_scales[idx])
+            Wd = dequant_awq(self.down_qweight[idx], self.down_qzeros[idx],
+                             self.down_scales[idx])
+            x = hidden_states[0]
+            g = torch.einsum("h,khi->ki", x, Wg)
+            u = torch.einsum("h,khi->ki", x, Wu)
+            d = torch.einsum("ki,kih->kh", self.act_fn(g) * u, Wd)
+            out = (d * top_k_weights[0][:, None]).sum(0, keepdim=True)
+            return out.to(hidden_states.dtype)
         final = torch.zeros_like(hidden_states)
         with torch.no_grad():
             expert_mask = nn.functional.one_hot(

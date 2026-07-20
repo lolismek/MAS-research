@@ -92,6 +92,9 @@ TINKER = dict(
 # A thinking model with no client-set cap can generate unboundedly; bound per-call
 # output so a runaway think can't balloon cost (generous enough to finish + answer).
 TINKER_MAX_TOKENS = int(os.environ.get('TINKER_MAX_TOKENS', '8000'))
+# HF-backed latent upstream decodes at single-digit tok/s: allow a longer
+# upstream timeout there (run_proxy_latent.sh sets 3600; default unchanged).
+UPSTREAM_TIMEOUT = int(os.environ.get('PROXY_UPSTREAM_TIMEOUT', '600'))
 
 
 def _redact_images(messages):
@@ -437,7 +440,7 @@ def call_upstream_chat(rbody, backend):
     for attempt in range(8):
         try:
             r = requests.post(f"{backend['base']}/chat/completions", json=rbody,
-                              timeout=600,
+                              timeout=UPSTREAM_TIMEOUT,
                               headers={'Authorization': f"Bearer {backend['key']}"})
         except requests.RequestException as e:
             last = (599, str(e)); time.sleep(2 ** (attempt + 1)); continue

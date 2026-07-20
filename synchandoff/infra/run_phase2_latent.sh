@@ -10,6 +10,7 @@ export PATH=$HOME/miniforge3/bin:$PATH
 export UDOCKER_DIR=/tmp/aij2115/udocker SYNCHANDOFF_ENV=udocker
 export SYNCHANDOFF_LLM_BASE=http://localhost:8745/m/v1
 export SYNCHANDOFF_LLM_LOG=/tmp/aij2115/synchandoff/llm_calls_latent.jsonl
+export SYNCHANDOFF_LLM_TIMEOUT=3900   # HF decode is slow; > proxy's 3600 upstream
 cd /tmp/aij2115/synchandoff
 /tmp/aij2115/pyenv/bin/python - <<PYEOF
 import json

@@ -78,6 +78,52 @@ pillow 11, pycaret 11, matplotlib 4, transformers 4, optuna 3, flaml 4,
 mlflow 3, whisper 2, scikit-learn 1 → 65 candidates. Need phase-1 k=12 waves
 on piranha for these (udocker image availability to be checked).
 
+## 2026-07-20 — build + verification results
+
+**AWQ-under-HF (the flagged hard risk) — SOLVED with a custom loader.**
+Stock `from_pretrained` fails twice: (1) transformers 5.14's AWQ path needs
+`gptqmodel` (installed in an OVERLAY venv `/tmp/aij2115/latentenv`,
+`--system-site-packages` over vllmenv, so the live vLLM env is untouched);
+(2) then dies in `replace_with_awq_linear` — the checkpoint's
+`modules_to_not_convert` uses vLLM substring semantics and, decisively, the
+checkpoint stores experts PER-EXPERT (`experts.{i}.gate_proj.qweight`...)
+while HF's `Qwen3_5MoeExperts` is fused 3D fp16 params, unloadable.
+→ `latent/awq_moe.py`: text-only `Qwen3_5MoeForCausalLM` skeleton on meta
+(fp16, vision/mtp dropped, `model.language_model.*`→`model.*` remap), experts
+of layers 1–39 swapped for `AWQExperts` (packed int4 buffers, pure-torch AWQ
+GEMM dequant of HIT experts per forward; layer 0 is unquantized in the
+checkpoint and keeps the stock fused module). Loads in ~15 s, 22.8 GB on the
+40 GB GPU, `filled=91237 unexpected=0 missing=[]`.
+
+**Speed:** decode 1.9 → 4.7 tok/s (batched hit-expert dequant + fla 0.5.1
+for the deltanet decode path) → einsum single-token fast path added after the
+smoke (untested number, expect ~6-10). Prefill is chunked (8192) and fast
+enough (135-token prefill instant; 30-40k transcripts ≈ 1-2 min). Latent
+B-episodes are ~10-50x slower than vLLM text arms — plan latent phase-2 waves
+at 1-2 shards and expect hours/instance-set, or accept single-seed smokes.
+Timeout plumbing added end-to-end (SYNCHANDOFF_LLM_TIMEOUT=3900,
+PROXY_UPSTREAM_TIMEOUT=3600 in the latent proxy).
+
+**Parity check (LITREVIEW global note) — PASSED.** Same greedy prompt to
+vLLM :8801 vs latent server :8802 text-only path: tools case BYTE-IDENTICAL
+(245/245 chars incl. `<tool_call>` XML); plain case identical for a 371-char
+prefix then benign same-content divergence (expected: Marlin vs pure-torch
+dequant numerics). `latent/parity_check.py`, log at tigerfish
+`/tmp/aij2115/latent/parity.log`.
+
+**KV-injection coherence + signal — PASSED (smoke_latent.py).** Synthetic
+A-transcript with planted facts; B prompted with only "describe what your
+predecessor was doing":
+- control (no artifact): fluent, honest "no information", 0 fact hits.
+- lkv (last-120 KV prefix): fluent, and B's output surfaces planted facts
+  ('test_trailing_newline', 'manifest') that exist NOWHERE in B's prompt —
+  the KV channel transmits content. (Full per-arm hit table in
+  tigerfish:/tmp/aij2115/latent/smoke.log.)
+
+**Coconut thoughts (training-free) — no collapse at m=8**: hidden norms
+~104–119 (vs emb-norm rescale applied at injection), consecutive cos-sim
+0.32–0.66 (a collapsed loop would be ~1.0). Received coherently by B.
+
 ## Status
 - [x] recon
 - [ ] HF load + parity check vs vLLM

@@ -14,5 +14,9 @@ export TINKER_MODEL=latent-qwen
 export TINKER_MAX_TOKENS=8000
 export TINKER_ARGS_STYLE=string
 export PROXY_PORT=8745
-export PROXY_DUMP=/tmp/aij2115/px/shared/raw_calls_latent.jsonl
-exec /tmp/aij2115/pyenv/bin/python /tmp/aij2115/px/shared/server.py
+export PROXY_UPSTREAM_TIMEOUT=3600
+export PROXY_DUMP=/tmp/aij2115/px/latent/raw_calls_latent.jsonl
+# NB: /tmp/aij2115/px/latent/server.py is the REPO's infra/proxy_server.py
+# (has the PROXY_UPSTREAM_TIMEOUT knob); the live :8744 text proxy at
+# px/shared/server.py is untouched.
+exec /tmp/aij2115/pyenv/bin/python /tmp/aij2115/px/latent/server.py

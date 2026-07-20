@@ -265,7 +265,7 @@ def evict_sessions():
 
 
 @app.post("/prefill_capture")
-async def prefill_capture(body: dict):
+def prefill_capture(body: dict):
     """body: messages | raw_text, tools?, add_generation_prompt (default
     False), capture_layers [ints], session_id?, return_hidden?
     {positions: [ints] | 'turn_ends:<role>' | 'last', layers: [ints]}"""
@@ -327,7 +327,7 @@ def _hidden_slice(sess, rh):
 
 
 @app.post("/session_free")
-async def session_free(body: dict):
+def session_free(body: dict):
     SESSIONS.pop(body.get("session_id"), None)
     torch.cuda.empty_cache()
     return {"ok": True}
@@ -407,7 +407,7 @@ def _coconut_thoughts(sess, m, rescale=True):
 
 
 @app.post("/make_artifact")
-async def make_artifact(body: dict):
+def make_artifact(body: dict):
     """body: {arm, session_id?, params{...}, artifact_id?}"""
     with GPU_LOCK:
         arm = body["arm"]
@@ -572,7 +572,7 @@ def generate_text(prompt_text, artifact=None, marker_split=None,
 @app.post("/generate")
 @app.post("/v1/chat/completions")
 @app.post("/chat/completions")
-async def chat_completions(body: dict):
+def chat_completions(body: dict):
     with GPU_LOCK:
         t0 = time.time()
         try:
@@ -617,7 +617,7 @@ async def chat_completions(body: dict):
 
 
 @app.get("/health")
-async def health():
+def health():
     return {"ok": model is not None,
             "gpu_mem_gb": round(torch.cuda.memory_allocated() / 1e9, 1),
             "sessions": list(SESSIONS.keys()),

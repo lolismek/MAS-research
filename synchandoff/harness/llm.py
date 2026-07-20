@@ -21,6 +21,9 @@ TEMPERATURE = 0.0
 # Qwen3.6's think trace counts against max_tokens; small caps truncate real
 # answers (duet/camel finding). 28k matches their proven regime.
 MAX_OUTPUT_TOKENS = int(os.environ.get("SYNCHANDOFF_MAX_TOKENS", "28000"))
+# HF-backed latent arms decode at single-digit tok/s: long calls need a
+# larger client timeout than the vLLM default (set in run_phase2_latent.sh).
+TIMEOUT = int(os.environ.get("SYNCHANDOFF_LLM_TIMEOUT", "600"))
 _HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.environ.get("SYNCHANDOFF_LLM_LOG",
                      os.path.join(os.path.dirname(_HERE), "llm_calls.jsonl"))
@@ -58,7 +61,7 @@ def chat(messages, tools=None, max_tokens=None, tag="", retries=4):
     last_err = None
     for attempt in range(retries):
         try:
-            r = requests.post(f"{BASE}/chat/completions", json=body, timeout=600)
+            r = requests.post(f"{BASE}/chat/completions", json=body, timeout=TIMEOUT)
             if r.status_code >= 500 or r.status_code == 429:
                 last_err = f"HTTP {r.status_code}: {r.text[:300]}"
                 time.sleep(4 * (attempt + 1))
