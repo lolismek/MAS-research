@@ -222,15 +222,32 @@ infra/proxy_server.py -> piranha:/tmp/aij2115/px/latent/server.py.
 - [x] end-to-end single-instance phase-2 smoke: **lkv PASSED** on
       9_sympy...second_moment_of_area (SR=True la_file=True la_func=True,
       7 tool calls; full chain harness→:8745→tunnel→KV-injected HF B →
-      udocker tests; runs/<iid>/lkv_k12_m8/ on piranha). lthought episode
-      completing at time of writing (chain identical; artifact differs only
-      in kind).
+      udocker tests; runs/<iid>/lkv_k12_m8/ on piranha). **lthought episode
+      also mechanically clean** (8 calls, zero harness errors, result.json
+      written) with SR=False la_file=False — consistent with the weak coconut
+      channel (single instance; not evidence by itself).
 - [x] artifact build over a real frozen trajectory: all 8 latent arms
       built=8 skipped=0 missing_frozen=0 (~9k-token prefill, session reuse,
       notekv, coconut m=32, rand/pool controls)
-- [ ] probe capture + training (needs the wave to finish)
+- [~] probe training wave RUNNING on piranha (27/51 frozen at last check,
+      zero tracebacks; logs /tmp/aij2115/train_wave_*_k12.log). When done:
+      run capture.py then train.py per the runbook (capture ≈ 1-2 h on one
+      server instance), then build lprobe/lprobe_shuffled artifacts.
 - [ ] kv_attn (attention-scored selection) — deferred (v1 = last-n + rand
       controls; the chosen keep-original-positions scheme supports
       non-contiguous selection when it's added)
 - [ ] lkv_state (linear-state handover) — flag exists server-side
       (include_linear_state), no arm wired yet
+
+## Live state at handoff (2026-07-20 ~13:30 ET)
+- tigerfish: latent servers on GPU 1 (:8802) and GPU 0 (:8803), current code,
+  idle after the e2e smokes. GPUs 2,3 = text-arm vLLM, untouched throughout.
+- piranha: latent proxies :8745→:8802 and :8746→:8803 (both tunnels up);
+  text proxy :8744 untouched; probe TRAINING WAVE still running (4 shards,
+  ~27/51 done); one pre-existing text phase-2 shard (not ours to touch).
+- Artifacts: /tmp/aij2115/latent_artifacts on tigerfish (smoke_* + the
+  9_sympy e2e set); piranha repo copy synced with all latent code.
+- Everything above is committed on lab-test (latest: e2e results).
+- NOT run (by design): the 30-instance latent waves — orchestrating session
+  launches those via run_phase2_latent.sh (1-2 shards; ~10-50x slower per
+  call than vLLM text arms, budget wall-clock accordingly).
