@@ -1,0 +1,43 @@
+{
+ "instance_id": "9_sympy_callee__trigonometric___pi_coeff__aa2fa9cbda0c22df57c841888dcefe1f65480550",
+ "condition": "ceiling",
+ "k": 12,
+ "m": 8,
+ "family": "plain",
+ "success": true,
+ "pre_test_summary": {
+  "passed": 23,
+  "xpassed": 0,
+  "failed": 0,
+  "xfailed": 0,
+  "deselected": 1,
+  "skipped": 0,
+  "warning": 0,
+  "error": 0,
+  "total": 23
+ },
+ "post_test_summary": {
+  "passed": 23,
+  "xpassed": 0,
+  "failed": 0,
+  "xfailed": 0,
+  "deselected": 1,
+  "skipped": 0,
+  "warning": 0,
+  "error": 0,
+  "total": 23
+ },
+ "la_file": true,
+ "la_func": true,
+ "tool_calls_used": 7,
+ "stop_reason": "model_stopped",
+ "usage": {
+  "prompt_tokens": 36290,
+  "completion_tokens": 2229,
+  "calls": 8
+ },
+ "final_text": "All 23 tests pass. Here's a summary of the fix:\n\n**Problem:** In `sympy/functions/elementary/trigonometric.py`, the `_pi_coeff` function had two bugs:\n\n1. `c.is_Real` should be `c.is_real` (lowercase) \u2014 the predecessor had already fixed this.\n2. `Real(float(m)/2)` was not defined (`Real` wasn't imported), and the predecessor's attempt to fix it with `Float(m, 2)` was also wrong \u2014 `Float(m, 2)` sets precision to 2 digits rather than computing m/2.\n\n**Fix:** Changed line 210 from `if Float(m, 2) == c:` to `if c * 2 == m:` which correctly checks whether `c` is exactly `m/2` (a binary fraction), matching the original intent of recasting exact binary fractions to Rationals.",
+ "files_touched": [
+  "sympy/functions/elementary/trigonometric.py"
+ ]
+}
