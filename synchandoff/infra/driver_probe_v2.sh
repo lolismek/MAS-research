@@ -15,7 +15,10 @@ if [ ! -s latent/probe/synth_data.jsonl ]; then
 fi
 echo GEN_DONE
 export SYNCHANDOFF_LATENT_BASE=http://localhost:${LATENT_CAPTURE_PORT:-8803}
+# middle layers; 14B (Qwen3-14B) has 40 decoder layers -> 14/20/26 ~ depth
+# 0.35/0.50/0.65 (the 8B/36-layer run used 12/18/24)
 /tmp/aij2115/pyenv/bin/python -u -m latent.probe.capture_synth \
+  --layers ${PROBE_LAYERS:-14,20,26} \
   > /tmp/aij2115/probe_capture.log 2>&1
 echo CAPTURE_DONE
 /tmp/aij2115/pyenv/bin/python -u -m latent.probe.train \

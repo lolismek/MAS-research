@@ -8,7 +8,9 @@ set -u
 cd /tmp/aij2115/synchandoff
 export PATH=$HOME/miniforge3/bin:$PATH
 PY=/tmp/aij2115/pyenv/bin/python
-ARMS=lkv_attn,lkv_last,lkv_notekv,lthought_soft,lthought_pool,lthought_rand,lthought_align,lkv_rand
+# session-friendly order: the three traj-session arms first, then the note
+# arms, then the thought-session arms (matters when LATENT_MAX_SESSIONS=1)
+ARMS=lkv_attn,lkv_last,lkv_rand,lkv_notekv,lthought_soft,lthought_align,lthought_rand,lthought_pool
 while true; do
   nvan=$(ls artifacts/*/plain_k12/vanilla.txt 2>/dev/null | wc -l)
   [ "$nvan" -ge 30 ] && break

@@ -143,6 +143,16 @@ not budget. Actions per PLAN_V2's escape clause, run in PARALLEL:
   MAX_FILE_CHARS 20000 -> 8000 (env-tunable SYNCHANDOFF_MAX_FILE_CHARS) —
   ~2k tokens per read keeps worst-case k=16 prompts ~32k.
 
+## FALLBACK DECISION (13:4x ET): Qwen3-14B
+k=16 try on 8B: 16+ frozen, solved 0/16, touched ~19% — the extra budget
+does not move the gate (failure is capability: A voluntarily stops and
+summarizes). Per PLAN_V2 §Sanity and the run instructions, switching the
+whole stack to **Qwen/Qwen3-14B** and proceeding without waiting. Same
+ports/proxies/tunnels; k returns to 12. The 8B phase-1 traces are kept
+aside as phase1_frozen_8b_k12k16/ for the record. Probe synthetic TEXT pool
+(synth_data.jsonl) is model-independent and reused; 8B activation captures
+discarded (capture_synth re-runs on 14B). All smokes re-run on 14B.
+
 ## Next
 - Decommission 35B (workers on GPUs 2,3 + :8744 proxy + :8801 tunnel),
   relaunch text proxy on :8744 -> :8804, start second HF worker on a freed
