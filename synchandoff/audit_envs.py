@@ -16,7 +16,7 @@ import json
 import os
 
 from harness import instances as I
-from harness.env import InstanceEnv
+from harness.env import make_env
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "audit_results")
@@ -36,7 +36,7 @@ def audit_one(inst, broken_only=False):
     orig = I.parse_summary(inst["original_summary"])
     gold = I.parse_summary(inst["gold_summary"])
     r = {"instance_id": iid, "expected_broken": key(orig), "expected_gold": key(gold)}
-    env = InstanceEnv(inst)
+    env = make_env(inst)
     try:
         env.start()
         env.setup_out_of_sync()

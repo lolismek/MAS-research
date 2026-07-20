@@ -21,7 +21,7 @@ import os
 
 from harness import instances as I
 from harness.agent import run_agent
-from harness.env import InstanceEnv
+from harness.env import make_env
 from harness.prompts import build_prompts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,7 +47,7 @@ def run_one(inst, k, family="plain"):
     elif family != "plain":
         raise ValueError(f"unknown family {family!r}")
 
-    env = InstanceEnv(inst)
+    env = make_env(inst)
     try:
         env.start()
         env.setup_out_of_sync()

@@ -11,8 +11,11 @@ Images are amd64-only; on Apple Silicon Docker runs them under emulation
 (fine for smoke tests; pilot/full batches run on native x86).
 """
 import json
+import os
 import re
+import shutil
 import subprocess
+import time
 import uuid
 
 from . import instances as I
@@ -133,6 +136,126 @@ class InstanceEnv:
         code, out = self.exec(
             "git add -A && git commit -qm phase1-end-state --allow-empty", timeout=60)
         assert code == 0, f"phase-1 state commit failed: {out}"
+
+
+class UdockerEnv(InstanceEnv):
+    """InstanceEnv on udocker (rootless; for shared machines without a Docker
+    daemon — piranha/tigerfish). Differences from the Docker backend:
+
+    - No daemon and no `docker commit`: containers are plain rootfs dirs under
+      $UDOCKER_DIR/containers/<id>/ROOT, created fresh per instance from the
+      RAW upstream image; the image fixes (git transplant, zeroed-.so restore,
+      renewed mtls cert — see smoke/build_images.sh) are applied at start()
+      by untarring fix-packs directly into the rootfs from the host side.
+    - exec() = `udocker run` per call (PRoot, ptrace engine). Filesystem state
+      persists across calls (same rootfs), like docker exec; process/env state
+      does not (same as docker exec).
+    - read/write_file go straight to the rootfs on the host — faster than a
+      container roundtrip and immune to stdin quirks.
+
+    Fix-packs are looked up in SYNCHANDOFF_FIXPACKS (default synchandoff/
+    fixpacks/): gitpack.tar, libpack.tar, solist.txt, mtls_client.pem.
+    """
+
+    def __init__(self, instance, platform=None):
+        super().__init__(instance, platform="")
+        prefix = instance["instance_id"].split("__")[0]
+        self.image = f"xuehang/{prefix}:3.11"   # raw upstream; fixed at start()
+        self._is_requests = prefix.startswith("4_requests")
+        self._root = None
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.fixpacks = os.environ.get("SYNCHANDOFF_FIXPACKS",
+                                       os.path.join(here, "fixpacks"))
+
+    def _udocker(self, *args, timeout=600):
+        r = subprocess.run(["udocker", *args], capture_output=True, text=True,
+                           timeout=timeout)
+        return r.returncode, (r.stdout or "") + (("\n" + r.stderr) if r.stderr else "")
+
+    def start(self):
+        self._udocker("rm", "-f", self.name, timeout=120)
+        for attempt in range(3):     # udocker repo metadata races under parallelism
+            code, out = self._udocker("create", f"--name={self.name}", self.image,
+                                      timeout=900)
+            if code == 0:
+                break
+            time.sleep(2 * (attempt + 1))
+        assert code == 0, f"udocker create failed: {out[-400:]}"
+        code, out = self._udocker("inspect", "-p", self.name, timeout=60)
+        root = out.strip().split("\n")[-1].strip()
+        assert code == 0 and os.path.isdir(root), f"no rootfs for {self.name}: {out[-200:]}"
+        self._root = root
+        self._apply_fixpacks()
+
+    def _apply_fixpacks(self):
+        """Host-side equivalent of smoke/build_images.sh over the fresh rootfs."""
+        git = os.path.join(self._root, "usr/bin/git")
+        if os.path.exists(git) and os.path.getsize(git) == 0:
+            subprocess.run(["tar", "-C", self._root, "-xf",
+                            os.path.join(self.fixpacks, "gitpack.tar")], check=True)
+        solist = os.path.join(self.fixpacks, "solist.txt")
+        if os.path.exists(solist):
+            members = []
+            with open(solist) as f:
+                for line in f:
+                    rel = line.strip().lstrip("/")
+                    if not rel:
+                        continue
+                    tgt = os.path.join(self._root, rel)
+                    if os.path.isfile(tgt) and os.path.getsize(tgt) == 0:
+                        members.append(rel)
+            if members:
+                subprocess.run(["tar", "-C", self._root, "-xf",
+                                os.path.join(self.fixpacks, "libpack.tar"), *members],
+                               check=True)
+        if self._is_requests:
+            cert = os.path.join(self.fixpacks, "mtls_client.pem")
+            dst = os.path.join(self._root,
+                               "workspace/test_repo/tests/certs/mtls/client/client.pem")
+            if os.path.exists(cert) and os.path.exists(os.path.dirname(dst)):
+                shutil.copyfile(cert, dst)
+
+    def stop(self):
+        self._udocker("rm", "-f", self.name, timeout=300)
+
+    def exec(self, cmd, timeout=TEST_TIMEOUT, workdir=I.WORKDIR):
+        try:
+            r = subprocess.run(
+                ["udocker", "run", "--nobanner", f"--workdir={workdir}",
+                 self.name, "bash", "-c", cmd],
+                capture_output=True, text=True, timeout=timeout)
+            out = (r.stdout or "") + (("\n" + r.stderr) if r.stderr else "")
+            return r.returncode, out
+        except subprocess.TimeoutExpired:
+            return 124, f"[timed out after {timeout}s]"
+
+    def _host_path(self, path):
+        return os.path.join(self._root, path.lstrip("/"))
+
+    def write_file(self, path, content):
+        try:
+            hp = self._host_path(path)
+            os.makedirs(os.path.dirname(hp), exist_ok=True)
+            with open(hp, "w") as f:
+                f.write(content)
+            return True
+        except OSError:
+            return False
+
+    def read_file(self, path):
+        try:
+            with open(self._host_path(path)) as f:
+                return f.read()
+        except (OSError, UnicodeDecodeError):
+            return None
+
+
+def make_env(instance):
+    """Backend factory: SYNCHANDOFF_ENV=udocker selects UdockerEnv (shared
+    GPU machines); default is the local Docker backend."""
+    if os.environ.get("SYNCHANDOFF_ENV") == "udocker":
+        return UdockerEnv(instance)
+    return InstanceEnv(instance)
 
 
 def parse_pytest_output(out):

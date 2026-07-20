@@ -22,7 +22,7 @@ import os
 from handoff import arms as A
 from harness import instances as I
 from harness.agent import run_agent
-from harness.env import InstanceEnv, tests_pass
+from harness.env import make_env, tests_pass
 from harness.prompts import build_prompts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -83,7 +83,7 @@ def run_one(inst, condition, k, m):
         with open(art_f) as f:
             artifact = f.read()
 
-    env = InstanceEnv(inst)
+    env = make_env(inst)
     try:
         env.start()
         env.setup_out_of_sync()
