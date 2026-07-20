@@ -43,8 +43,8 @@ W_HARD_CHARS = W_HARD_TOKENS * 4
 CEILING_CHARS = 12000            # duet's TRANSCRIPT_TOTAL_CHARS
 TOOL_RESULT_CHARS = 700          # duet's TRANSCRIPT_TOOL_CHARS
 
-ARMS = ["floor", "ceiling", "oracle", "vanilla", "sop", "down", "extract",
-        "board", "board_inert"]
+ARMS = ["floor", "ceiling", "oracle", "vanilla", "full", "sop", "down",
+        "extract", "board", "board_inert"]
 BOARD_FAMILY = {"board", "board_inert"}
 
 # --- prompts (duet's, lightly adapted to the single-handoff setting) ----------
@@ -425,6 +425,11 @@ def build_artifact(arm, frozen, instance, task_block=""):
         return _oracle(instance), {}
     if arm == "vanilla":
         return _vanilla_note(events, iid, "arm:vanilla"), {}
+    if arm == "full":
+        # naive baseline distinct from ceiling: the SAME rendered transcript
+        # but under the arms' W budget, truncated from the FRONT (latest
+        # evidence survives). No LLM call — pure transformation.
+        return render_events(events, total_chars=W_HARD_CHARS), {}
     if arm == "sop":
         raw = continue_transcript(events, SOP_HANDOFF_REQUEST.format(soft=W_SOFT_TOKENS),
                                   f"arm:sop:{iid}")
