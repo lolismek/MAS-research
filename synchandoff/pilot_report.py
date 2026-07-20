@@ -75,19 +75,29 @@ def load_runs(runs_dir):
     return runs
 
 
-def g2_table(runs):
-    by_cond = defaultdict(list)
+def g2_table(runs, metas=()):
+    """Per (k,m) block, split by whether A had ALREADY solved at the end of
+    phase 1: on A-solved instances the replayed repo state carries the fix, so
+    every condition scores SR=100% regardless of the note — only the A-unsolved
+    slice discriminates the brackets/arms (2026-07-20 pilot finding)."""
+    solved_by_A = {(m["instance_id"], m["k"]): m.get("post_A_solved")
+                   for m in metas if m.get("family") == "plain"}
+    by_block = defaultdict(lambda: defaultdict(list))
     for r in runs:
-        by_cond[r["condition"]].append(r)
+        a_solved = solved_by_A.get((r["instance_id"], r["k"]))
+        abin = "A_solved" if a_solved else ("A_unsolved" if a_solved is not None else "?")
+        by_block[(r["k"], r["m"])][(abin, r["condition"])].append(r)
     print("=== G2: brackets/arms (phase-2 outcomes)")
-    print(f"{'condition':>12} {'n':>4} {'SR':>6} {'LA_file':>8} {'LA_func':>8} {'mean_calls':>11}")
-    for cond, rs in sorted(by_cond.items()):
-        n = len(rs)
-        sr = sum(1 for r in rs if r.get("success")) / n
-        laf = sum(1 for r in rs if r.get("la_file")) / n
-        lam = sum(1 for r in rs if r.get("la_func")) / n
-        calls = sum(r.get("tool_calls_used", 0) for r in rs) / n
-        print(f"{cond:>12} {n:>4} {100*sr:>5.0f}% {100*laf:>7.0f}% {100*lam:>7.0f}% {calls:>11.1f}")
+    for (k, m), groups in sorted(by_block.items()):
+        print(f"--- k={k} m={m}")
+        print(f"{'slice':>11} {'condition':>12} {'n':>4} {'SR':>6} {'LA_file':>8} {'LA_func':>8} {'mean_calls':>11}")
+        for (abin, cond), rs in sorted(groups.items()):
+            n = len(rs)
+            sr = sum(1 for r in rs if r.get("success")) / n
+            laf = sum(1 for r in rs if r.get("la_file")) / n
+            lam = sum(1 for r in rs if r.get("la_func")) / n
+            calls = sum(r.get("tool_calls_used", 0) for r in rs) / n
+            print(f"{abin:>11} {cond:>12} {n:>4} {100*sr:>5.0f}% {100*laf:>7.0f}% {100*lam:>7.0f}% {calls:>11.1f}")
     print()
 
 
@@ -103,4 +113,4 @@ if __name__ == "__main__":
     runs = load_runs(args.runs)
     print(f"loaded {len(runs)} phase-2 results\n")
     if runs:
-        g2_table(runs)
+        g2_table(runs, metas)
