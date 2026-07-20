@@ -11,7 +11,10 @@
 export TINKER_BASE=http://localhost:8804/v1
 export TINKER_API_KEY=none
 export TINKER_MODEL=Qwen/Qwen3-8B
-export TINKER_MAX_TOKENS=8000
+# 2000, not 8000: Qwen3-8B's max_position_embeddings is 40960 and phase-1
+# prompts reach ~34k tokens — prompt + max_tokens must fit or vLLM 400s.
+# No-think agent replies measure ~60-200 tokens; handoff notes <=500.
+export TINKER_MAX_TOKENS=2000
 export TINKER_ARGS_STYLE=string
 export PROXY_PORT=${PROXY8B_PORT:-8744}
 exec /tmp/aij2115/pyenv/bin/python /tmp/aij2115/px/shared8b/server.py

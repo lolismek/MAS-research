@@ -94,6 +94,23 @@ archived at piranha:/tmp/aij2115/synchandoff_35b_archive (untouched).
 - Proxy chains from piranha: :8747 chat "PROXY_CHAIN_OK" + structured
   tool_calls; :8745 (latent) chat OK. PASS.
 
+## Phase-1 attempt 1 (12:26 ET) — two harness bugs found and FIXED
+First k=12 wave (10 lanes, ~9 min for 28/30) produced G3 = solved 0% /
+touched 0% — too clean a zero for capability. Trajectory audit found:
+1. **UdockerEnv relative-path bug (harness/env.py `_host_path`)**: read_file
+   and write_file resolved relative paths against the rootfs TOP instead of
+   /workspace/test_repo. Tally over all 28 trajectories: relative-path
+   read_file 181/181 FAILED, absolute-path 34/36 ok. Qwen3-8B habitually
+   passes relative paths (the 35B used absolute — the bug was latent in v1).
+   Writes with relative paths would also have landed outside the repo (LA
+   diff = empty). FIX: resolve relative paths against I.WORKDIR.
+2. **Context-window 400s**: one instance died with proxy 400 — prompt
+   33.7k tok + TINKER_MAX_TOKENS 8000 > Qwen3-8B's max_position_embeddings
+   40960 (v1's 35B served 65536). FIX: TINKER_MAX_TOKENS=2000 (no-think
+   replies measure ~60-200 tok; handoff notes <=500), leaving ~39k for
+   prompts vs ~34k worst case observed.
+phase1_frozen wiped; wave relaunched 12:44 ET with both fixes.
+
 ## Next
 - Decommission 35B (workers on GPUs 2,3 + :8744 proxy + :8801 tunnel),
   relaunch text proxy on :8744 -> :8804, start second HF worker on a freed
