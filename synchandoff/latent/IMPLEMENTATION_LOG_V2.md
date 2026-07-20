@@ -153,6 +153,25 @@ aside as phase1_frozen_8b_k12k16/ for the record. Probe synthetic TEXT pool
 (synth_data.jsonl) is model-independent and reused; 8B activation captures
 discarded (capture_synth re-runs on 14B). All smokes re-run on 14B.
 
+## 14B stack smokes (14:0x ET) — PASSED (with one behavioral finding)
+- Final 8B k=16 record: 22 frozen, solved 0/22, touched 4/22 (2 slowest
+  instances killed after the verdict was conclusive).
+- Swap done: vLLM Qwen3-14B :8804 (GPU 0, nothink template), HF latent 14B
+  on :8802 (GPU 1) / :8803 (GPU 2) / :8807 (GPU 3, capture-dedicated),
+  LATENT_MAX_SESSIONS=1, proxies unchanged (:8744 SYNCHANDOFF_MODEL knob).
+- Parity 14B: plain BYTE-IDENTICAL 70/70; tools content-identical. PASS.
+- Planted-fact on 14B: free-recall probe now returns "I don't have access
+  to my predecessor's memory" for ALL arms including lkv_full — but a
+  FORCED-guess probe ("you MUST guess: which file, which test") retrieves
+  the exact planted facts with lkv_full AND lkv_attn (control invents
+  generic names). So the KV channel TRANSMITS on 14B; what changed vs 8B is
+  B-side free-recall reticence (the v1 anti-hallucination caveat, stronger
+  here). Gate = PASS on transmission; expect utilization loss in-episode.
+- lthought_soft: no transmission under either probe (matches 8B/v1-coconut)
+  — kept as a result; pool + controls make the comparison interpretable.
+- 14B phase-1 k=12 wave (10 lanes) + probe chain (capture on :8807, layers
+  14/20/26) launched 14:0x ET.
+
 ## Next
 - Decommission 35B (workers on GPUs 2,3 + :8744 proxy + :8801 tunnel),
   relaunch text proxy on :8744 -> :8804, start second HF worker on a freed
