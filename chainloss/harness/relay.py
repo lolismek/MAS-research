@@ -35,11 +35,14 @@ from dataclasses import dataclass, field
 from agent import run_agent, continue_agent, TokenMeter
 import prompts
 
-# Calibrated on the 2026-07-30 shakedown: natural N=1 spend on solvable FanOutQA
-# tasks is ~0.5-2k completion tokens (think-spiral tasks blow through any cap and
-# fail regardless), so 16k is generous at N=1 while N=8's 2k slices are honestly
-# tight — the fixed-total-resources deal the experiment is about.
-DEFAULT_TOTAL_BUDGET = int(os.environ.get("CHAINLOSS_TOTAL_BUDGET", "16000"))
+# Calibrated TWICE on 2026-07-30. First pass set 16k (natural N=1 spend is
+# ~0.5-2k), but the pilot showed 16k/8 = 2k slices sit BELOW Qwen3.6's minimum
+# viable generation with thinking on (~1-2k to close a think block): every N=8
+# run died to 'length' clips with final='' — a floor artifact, not channel loss.
+# 32k makes the N=8 slice (4k) viable while the budget stays non-binding at low N,
+# which sharpens attribution: differences across N come from the crossings, not
+# from starvation.
+DEFAULT_TOTAL_BUDGET = int(os.environ.get("CHAINLOSS_TOTAL_BUDGET", "32000"))
 
 # Tail reserves carved out of a slice for its mandatory terminal artifact. The commit
 # reserve is smaller: a commit is a decision line, a note is a written record.

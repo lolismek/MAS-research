@@ -424,22 +424,28 @@ def continue_agent(result, user_prompt, client, model, *, meter=None,
         if msg is None:
             finish = "ctx_overflow"
             break
+        # No retry ladder on an overspent slice: the first attempt always runs
+        # (floored), but retries are a luxury the slice must fund. (Pilot: 512-floor
+        # retries x 8 shifts leaked up to +60% past the total budget.)
+        will_retry = attempt < WRAPUP_MAX_TRIES - 1 and not (
+            slice_budget is not None and meter is not None and meter.spent >= slice_budget)
         # text-only: any tool_calls the model emitted are dropped (unhonored), so message
         # ordering stays valid across retries (no dangling tool_calls awaiting a response).
         a = _assistant_dict(msg, drop_tool_calls=True)
         record.append(a); wire.append(a)
         finish = "length" if fr == "length" else "stop"
         # Usable if it is real text AND cleanly terminated; retry a 'length' generation
-        # for a clean short one. EXCEPT on the last attempt: a 'length' reply whose text
-        # survived (the proxy only keeps content when the think block CLOSED — an open
-        # spiral becomes the sentinel) is returned as-is with finish='length', and the
-        # caller decides whether to salvage it. Shakedown showed the discard-all rule
-        # throwing away a perfectly good 372-char note and crossing a marker instead.
-        if _usable_text(msg.content) and (fr != "length" or attempt == WRAPUP_MAX_TRIES - 1):
+        # for a clean short one. EXCEPT on the final attempt we will make: a 'length'
+        # reply whose text survived (the proxy only keeps content when the think block
+        # CLOSED — an open spiral becomes the sentinel) is returned as-is with
+        # finish='length', and the caller decides whether to salvage it. Shakedown
+        # showed the discard-all rule throwing away a perfectly good note.
+        if _usable_text(msg.content) and (fr != "length" or not will_retry):
             final = (msg.content or "").strip()
             break
-        if attempt < WRAPUP_MAX_TRIES - 1:      # empty / sentinel / truncated -> re-ask firmly
-            nudge = {"role": "user", "content": prompts.WRAPUP_NUDGE}
-            record.append(nudge); wire.append(nudge)
+        if not will_retry:
+            break
+        nudge = {"role": "user", "content": prompts.WRAPUP_NUDGE}   # re-ask firmly
+        record.append(nudge); wire.append(nudge)
     return AgentResult(role=result.role, final=final, n_steps=result.n_steps + n_extra,
                        n_tool_calls=result.n_tool_calls, transcript=record, finish=finish)
