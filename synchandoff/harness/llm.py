@@ -79,5 +79,11 @@ def chat(messages, tools=None, max_tokens=None, tag="", retries=4):
             return msg
         except requests.RequestException as e:
             last_err = str(e)[:300]
+            # surface the response body — a bare "400 Bad Request" hides the
+            # actual cause (context overflow vs bad fields), which cost real
+            # debugging time on 2026-07-20
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                last_err += " | body: " + (resp.text or "")[:400]
             time.sleep(4 * (attempt + 1))
     raise RuntimeError(f"LLM call failed after {retries} attempts: {last_err}")

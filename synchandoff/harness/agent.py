@@ -19,11 +19,12 @@ from . import llm
 MAX_INNER_STEPS = 40      # runaway backstop; the budget stops healthy runs first
 REPEAT_LIMIT = 3          # identical (tool,args) in a row -> thrashing; stop
 MAX_TOOL_CHARS = 6000     # generic tool-output cap (duet's value)
-# v2 (2026-07-20): 20000 -> 8000. Qwen3's native window is 40960 (the v1 35B
-# served 65536): read-heavy k=12 trajectories at 5k tokens/read overflowed
-# the window and 3-5/30 instances died on 400s. ~2k tokens/read keeps worst
-# case ~32k. Uniform across arms/phases (paired design unaffected).
-MAX_FILE_CHARS = int(os.environ.get("SYNCHANDOFF_MAX_FILE_CHARS", "8000"))
+# v2 history: briefly 8000 while the stack served a 40960 window (read-heavy
+# prompts overflowed) — but the clip made whole-file reads truncate, and the
+# 14B then REWROTE files from the clipped view, breaking whole test suites
+# (post-A error=1, passed=0). With YaRN 65536 the overflow motive is gone:
+# back to the v1-calibrated 20000.
+MAX_FILE_CHARS = int(os.environ.get("SYNCHANDOFF_MAX_FILE_CHARS", "20000"))
 
 TOOL_SPECS = [
     {"type": "function", "function": {

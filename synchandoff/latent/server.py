@@ -3,7 +3,7 @@
 v2 (2026-07-20): model = Qwen/Qwen3-8B, dense bf16, STOCK from_pretrained (no
 AWQ loader — awq_moe.py is the archived v1 path for the hybrid 35B). Every
 layer is full-attention GQA+RoPE, so KV arms cover all 36 layers. Thinking is
-disabled at the template (enable_thinking=False), matching the vLLM stack's
+disabled at the template (enable_thinking=ENABLE_THINKING), matching the vLLM stack's
 baked no-think template for byte parity.
 
 Endpoints:
@@ -52,6 +52,13 @@ MODEL_DIR = os.environ.get(
     "b968826d9c46dd6066d109eabc6255188de91218")
 ART_DIR = os.environ.get("LATENT_ART_DIR", "/tmp/aij2115/latent_artifacts")
 MAX_SESSIONS = int(os.environ.get("LATENT_MAX_SESSIONS", "2"))
+# thinking-ON is the default (v2 deviation 2026-07-20, matching the vLLM
+# stack: no-think Qwen3 degenerates agentically); LATENT_NOTHINK=1 restores
+# the no-think template for experiments.
+ENABLE_THINKING = os.environ.get("LATENT_NOTHINK", "") != "1"
+# LATENT_YARN=<factor> applies Qwen's official YaRN recipe (original 32768)
+# so RoPE matches the vLLM server's --rope-scaling exactly.
+YARN_FACTOR = float(os.environ.get("LATENT_YARN", "0") or 0)
 PREFILL_CHUNK = 8192
 QTAIL = 64                       # tail queries captured for kv_attn scoring
 MAX_NEW_DEFAULT = 8000           # no-think: match the 8B text proxy cap
@@ -74,8 +81,21 @@ def load_model():
     global tok, model, txt, lm_head, FULL_LAYERS, TEXT_CFG
     t0 = time.time()
     tok = AutoTokenizer.from_pretrained(MODEL_DIR)
+    kwargs = {}
+    if YARN_FACTOR:
+        from transformers import AutoConfig
+        cfg = AutoConfig.from_pretrained(MODEL_DIR)
+        # transformers 5.x: rope config lives in rope_parameters (must carry
+        # rope_theta); Qwen official YaRN recipe scales from 32768
+        theta = (getattr(cfg, "rope_parameters", None) or {}).get(
+            "rope_theta", 1000000)
+        cfg.rope_parameters = {"rope_type": "yarn", "rope_theta": theta,
+                               "factor": YARN_FACTOR,
+                               "original_max_position_embeddings": 32768}
+        cfg.max_position_embeddings = int(32768 * YARN_FACTOR)
+        kwargs["config"] = cfg
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_DIR, dtype=DTYPE, device_map="cuda:0")
+        MODEL_DIR, dtype=DTYPE, device_map="cuda:0", **kwargs)
     model.eval()
     txt = model.model
     lm_head = model.lm_head
@@ -131,7 +151,7 @@ def find_marker(messages):
 def template_text(messages, tools=None, add_generation_prompt=True):
     return tok.apply_chat_template(
         normalize_messages(messages), tools=tools or None, tokenize=False,
-        add_generation_prompt=add_generation_prompt, enable_thinking=False)
+        add_generation_prompt=add_generation_prompt, enable_thinking=ENABLE_THINKING)
 
 
 def message_boundaries(messages, tools=None):
@@ -140,13 +160,13 @@ def message_boundaries(messages, tools=None):
         norm = normalize_messages(messages)
         full = tok.apply_chat_template(norm, tools=tools or None, tokenize=False,
                                        add_generation_prompt=False,
-                                       enable_thinking=False)
+                                       enable_thinking=ENABLE_THINKING)
         out = []
         for i in range(1, len(norm) + 1):
             pref = tok.apply_chat_template(norm[:i], tools=tools or None,
                                            tokenize=False,
                                            add_generation_prompt=False,
-                                           enable_thinking=False)
+                                           enable_thinking=ENABLE_THINKING)
             if not full.startswith(pref):
                 return None
             n = len(tok(pref, add_special_tokens=False).input_ids)
