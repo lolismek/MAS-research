@@ -94,8 +94,57 @@ poison nor power the relay on MATH-L5. Caveats: convergent-answer benchmark
 (near-worst-case for belief effects), deliberately non-essential beliefs by
 design, one model, k=3.
 
+## v3 — FEVER two-way with directional beliefs (fast follow-up)
+
+Rationale: MATH's convergent solution space is near-worst-case for belief
+effects; v3 swaps to claim verification, where priors ARE the judgment axis,
+and strengthens the beliefs to directional tier-3 epistemic priors — a
+*skeptic* set, a *credulous* set (each incl. an explicit "when unsure, lean
+REFUTES/SUPPORTED" tiebreaker), and a *neutral* set. Same v2 skeleton: 3-agent
+capped handoff relay (cap 2500), arms probe/homo/none. 24 balanced claims
+(12 SUPPORTS / 12 REFUTES, NEI dropped), k=2, 144 relays. Time-boxed cuts:
+no difficulty screen, flavor sets shared across tasks (not per-task authored),
+probe rotates flavor→seat by task ordinal to deconfound flavor from position.
+Primary readout = REFUTES-rate shift per flavor vs none (label-distribution
+shift is a far more sensitive instrument than accuracy).
+
+| arm | n | accuracy | Wilson 95% CI | REFUTES-rate |
+|---|---|---|---|---|
+| none | 48 | 0.917 | [0.804, 0.967] | 0.562 |
+| homo | 48 | 0.938 | [0.832, 0.979] | 0.562 |
+| probe | 48 | 0.896 | [0.778, 0.955] | 0.521 |
+
+Paired accuracy deltas all ns (homo−none +2.1pp SE 2.1; probe−none −2.1pp SE
+4.7; probe−homo −4.2pp SE 4.2). Directional shift, homo flavor subsets paired
+vs none on the same tasks: skeptic **+0.000**, credulous **+0.000**, neutral
+**+0.000** — SE 0.000: every task's REFUTES-rate was *identical* under
+belief-saturated and belief-free relays. Probe deciding-seat splits differ by
+at most one sample flip. Truncation hygiene: 12/432 turns (2.8%), no arm skew.
+
+### Finding
+
+**The beliefs never fire, so there is nothing to transmit.** On claims the
+model confidently knows (~92% accuracy, high-consensus verdicts), directional
+priors — including explicit uncertainty tiebreakers — have zero purchase even
+on a *solo-equivalent* basis (homo = all three agents share the prior, and the
+verdict distribution is bit-identical to none). This is the manipulation-check
+answer we lacked on MATH: the nulls across v1–v3 are not (only) "the channel
+filters beliefs out" but "subjective priors do not override confident
+parametric knowledge at the source." A belief-transmission effect would need a
+pool of genuinely *uncertain* claims — where "when unsure, lean X" actually
+binds — i.e., a difficulty-screened FEVER band, which the 15-minute budget cut.
+
+### Overall verdict (v1 + v2 + v3)
+
+Three regimes — uncapped relay, budget-capped load-bearing channel, and a
+judgment-axis benchmark with directional priors — all null. Subjective beliefs
+injected into relay agents neither poison nor power end-task performance when
+the model has confident task knowledge; heterogeneity vs homogeneity of
+beliefs never mattered (probe−homo ns everywhere). The untested remaining
+regime: belief-relevant *uncertainty* (screened hard/ambiguous claims).
+
 ## Spend
 
 v1 (screen + discarded screen + top-up + smoke + grid): **$10.33**.
-Total incl. v2 (pilot + capped grid): **$13.55** of the $20 cap,
-self-metered from proxy calls.jsonl.
+v2 (pilot + capped grid): +$3.22. v3 (FEVER grid): +$0.51.
+Total: **$14.06** of the $20 cap, self-metered from proxy calls.jsonl.
