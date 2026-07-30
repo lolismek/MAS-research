@@ -17,7 +17,8 @@ context bounding) are inherited unchanged.
   crossings changes; every shift is a fresh context holding [task, inherited
   payload] and never a predecessor transcript (note arm).
 - **Fixed budget:** `--budget` = total COMPLETION tokens for the whole run
-  (default 32k; calibrated in the pilot against natural N=1 spend). Each shift gets
+  (default 16k — calibrated on the 2026-07-30 shakedown: natural N=1 spend on
+  solvable tasks is ~0.5–2k, think-spiral tasks fail at any cap). Each shift gets
   an equal slice `B/N`. Every generated token bills the slice — solving, thinking
   (Qwen3.6 think trace counts as completion), and hand-off note writing. Channel
   overhead is honestly part of the cost of being a MAS.
@@ -59,6 +60,18 @@ duet P4: vanilla 28.8% all-or-nothing — floor, not ceiling. Mitigations:
   death observed directly on the channel, not inferred from accuracy.
 - If the pilot shows notes trivially carry everything (channel never binds), we
   escalate info-load (popqa-compound, k-fact bundles) — decided on pilot data.
+
+## Shakedown findings (2026-07-30, 5 live runs, ~$0.08)
+
+- Harness end-to-end green at N=1 and N=2; markers cross instead of garbage.
+- FIXED after shakedown: (1) 'length'-finished wrap-up notes with clean closed-think
+  text were discarded wholesale — now salvaged when ≥ NOTE_MIN_SALVAGE_CHARS,
+  clip-marked; (2) date-format mismatches zeroed recall on right answers — item
+  matcher canonicalizes day-month-year both ways; (3) an empty final (34k think
+  spiral death) scored "abstained" — now always no_answer; (4) reserves scale with
+  the slice (min(reserve, slice//2)) so high-N shifts keep a work budget.
+- Qwen3.6 spend is bimodal: ~0.5–2k ctok on solvable tasks; unbounded spirals on a
+  minority (those fail at any budget; the USD cap contains them).
 
 ## Grid
 

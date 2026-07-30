@@ -76,6 +76,30 @@ def _initials(s):
     return re.sub(r"\b([a-z])\.\s*", r"\1", s)
 
 
+# Dates: FanOutQA gold writes '6 October 1959', models often answer 'October 6,
+# 1959' — a pure format difference that zeroed recall on shakedown (fanout_003:
+# 3/4 dates right, scored 0.0). Canonicalize any day-month-year mention to
+# (y, m, d) tuples and hit on tuple equality. Conservative: only fires when the
+# GOLD item itself is a recognizable date.
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    ["january", "february", "march", "april", "may", "june", "july",
+     "august", "september", "october", "november", "december"])}
+_MONTHS.update({m[:3]: i for m, i in list(_MONTHS.items())})
+_MON_RE = "|".join(sorted(_MONTHS, key=len, reverse=True))
+_DATE_DMY = re.compile(rf"\b(\d{{1,2}})\s+({_MON_RE})\.?\s+(\d{{4}})\b")
+_DATE_MDY = re.compile(rf"\b({_MON_RE})\.?\s+(\d{{1,2}})\s+(\d{{4}})\b")
+
+
+def _dates_in(text):
+    """All (y, m, d) date tuples mentioned in normalized text (both orders)."""
+    out = set()
+    for d, m, y in _DATE_DMY.findall(text):
+        out.add((int(y), _MONTHS[m], int(d)))
+    for m, d, y in _DATE_MDY.findall(text):
+        out.add((int(y), _MONTHS[m], int(d)))
+    return out
+
+
 def _text_views(text):
     """The three views of a reply the per-item matcher checks against: the whole
     normalized text, its list-ish tokens (split on , ; newline ' and '), and its
@@ -99,6 +123,9 @@ def _item_hit(views, gold_item):
     if not ng:
         return True                       # vacuous item: never fail on it
     if _alias_hit(nf, ng) or _alias_hit(_initials(nf), _initials(ng)):
+        return True
+    gold_dates = _dates_in(ng)
+    if gold_dates and gold_dates & _dates_in(nf):
         return True
     if any(_num_eq(t, ng) or t == ng for t in nf_tokens):
         return True
@@ -165,9 +192,12 @@ def classify_outcome(final, expected, answer_type="freeform", committed=True):
 
     `committed` is False when the run never emitted a parseable `FINAL ANSWER:`
     line. Such a non-answer is NOT a confident hallucination, so it gets its own
-    bucket instead of inflating `wrong_confident`. Abstention is checked first
-    (honest UNKNOWN); a truncated reply that still happens to contain the right
-    answer is credited as correct."""
+    bucket instead of inflating `wrong_confident`. An EMPTY final is always
+    no_answer — shakedown showed a 34k-token think-spiral dying with final=''
+    being credited as an honest abstention it never made. A truncated reply that
+    still happens to contain the right answer is credited as correct."""
+    if not (final or "").strip():
+        return "no_answer"
     if is_abstention(final):
         return "abstained"
     if match(final, expected, answer_type):

@@ -35,7 +35,11 @@ from dataclasses import dataclass, field
 from agent import run_agent, continue_agent, TokenMeter
 import prompts
 
-DEFAULT_TOTAL_BUDGET = int(os.environ.get("CHAINLOSS_TOTAL_BUDGET", "32000"))
+# Calibrated on the 2026-07-30 shakedown: natural N=1 spend on solvable FanOutQA
+# tasks is ~0.5-2k completion tokens (think-spiral tasks blow through any cap and
+# fail regardless), so 16k is generous at N=1 while N=8's 2k slices are honestly
+# tight — the fixed-total-resources deal the experiment is about.
+DEFAULT_TOTAL_BUDGET = int(os.environ.get("CHAINLOSS_TOTAL_BUDGET", "16000"))
 
 # Tail reserves carved out of a slice for its mandatory terminal artifact. The commit
 # reserve is smaller: a commit is a decision line, a note is a written record.
@@ -45,6 +49,11 @@ COMMIT_RESERVE = int(os.environ.get("CHAINLOSS_COMMIT_RESERVE", "2000"))
 # Channel width (note arm): ~300 words asked in the prompt; hard clip here. Constant
 # across N by design — only the NUMBER of crossings varies with N.
 NOTE_MAX_CHARS = int(os.environ.get("CHAINLOSS_NOTE_MAX_CHARS", "2000"))
+
+# Salvage floor for a 'length'-finished note whose text survived (think closed, cut
+# mid-prose): at least this many chars or the marker crosses instead. Shakedown
+# showed all-or-nothing discarding real notes (note yield 0/1 on fanout_001 n=2).
+NOTE_MIN_SALVAGE_CHARS = int(os.environ.get("CHAINLOSS_NOTE_MIN_SALVAGE", "200"))
 
 # Transcript-arm render caps (the "lossless up to" caps, stated in PLAN.md): each
 # tool result is clipped per-render; each shift's whole rendered log is clipped so
@@ -196,6 +205,9 @@ def run_relay(task_prompt, tool_names, client, model, *, n, arm="note",
             reserve = COMMIT_RESERVE
         else:
             reserve = NOTE_RESERVE if arm == "note" else 0
+        # Scale down at small slices (high N / low budget): the reserve must never
+        # eat the whole slice, or high-N shifts would do zero work by construction.
+        reserve = min(reserve, slice_budget // 2)
         work_budget = max(0, slice_budget - reserve)
 
         res = run_agent(role, prompts.SOLVER_SYS, ctx, tool_names, client, model,
@@ -237,10 +249,18 @@ def run_relay(task_prompt, tool_names, client, model, *, n, arm="note",
             note_res = continue_agent(res, prompts.HANDOFF_REQUEST, client, model,
                                       meter=meter, slice_budget=slice_budget,
                                       usd_budget=usd_budget)
-            # A truncated OR empty note must not cross the edge — the marker does.
-            usable = note_res.final and not note_res.truncated
-            payload = (_clip(note_res.final, NOTE_MAX_CHARS, prompts.NOTE_CLIP_MARKER)
-                       if usable else prompts.TRUNCATED_MARKER)
+            # An empty note must not cross the edge — the marker does. A truncated
+            # ('length') note IS crossed when enough clean text survived (salvage,
+            # see agent.continue_agent), explicitly clip-marked so the successor
+            # knows the channel cut it, not its author.
+            salvaged = note_res.truncated and len(note_res.final or "") >= NOTE_MIN_SALVAGE_CHARS
+            usable = bool(note_res.final) and (not note_res.truncated or salvaged)
+            if usable:
+                payload = _clip(note_res.final, NOTE_MAX_CHARS, prompts.NOTE_CLIP_MARKER)
+                if salvaged and not payload.endswith(prompts.NOTE_CLIP_MARKER):
+                    payload += prompts.NOTE_CLIP_MARKER
+            else:
+                payload = prompts.TRUNCATED_MARKER
             shifts.append(note_res)      # note_res.transcript is the full shift incl. the note
             per_shift.append(_ledger(role, meter, slice_budget, work_budget, note_res,
                                      note_res.n_steps - steps_before))

@@ -138,6 +138,44 @@ def test_note_clip_and_marker():
     check("marker framed for successor", prompts.TRUNCATED_MARKER in _msgs_text(c.requests[6]))
 
 
+def test_note_salvage():
+    # last wrap-up attempt finishes 'length' but with substantive closed-think text
+    # -> it crosses (clip-marked), NOT the marker (shakedown fix).
+    salvage_text = "Established: the 2019 winner is the Jaguar I-Pace. " * 6
+    script = [
+        reply(content="working"),                          # shift1 solve
+        reply(content=None, fr="length"),                  # note attempt 1: spiral
+        reply(content=None, fr="length"),                  # attempt 2: spiral
+        reply(content=salvage_text, fr="length"),          # attempt 3: cut but real
+        reply(content="FINAL ANSWER: UNKNOWN"),            # shift2
+    ]
+    c = FakeClient(script)
+    res = run_relay("q", [], c, "m", n=2, arm="note", total_budget=16000)
+    check("salvage: note crossed", res.payloads[0].startswith("Established:"))
+    check("salvage: clip-marked", res.payloads[0].endswith(prompts.NOTE_CLIP_MARKER))
+    # but a TINY length-cut fragment still dies to the marker
+    c2 = FakeClient([
+        reply(content="working"),
+        reply(content=None, fr="length"),
+        reply(content=None, fr="length"),
+        reply(content="short stub", fr="length"),
+        reply(content="FINAL ANSWER: UNKNOWN"),
+    ])
+    res2 = run_relay("q", [], c2, "m", n=2, arm="note", total_budget=16000)
+    check("salvage: tiny fragment rejected", res2.payloads[0] == prompts.TRUNCATED_MARKER)
+
+
+def test_reserve_scales_with_slice():
+    # n=8 at 4000 total -> slice 500; the 2500 note reserve must shrink to 250,
+    # never eating the slice whole.
+    script = ([reply(content="w"), reply(content="note " * 50)] * 7
+              + [reply(content="FINAL ANSWER: UNKNOWN")])
+    c = FakeClient(script)
+    res = run_relay("q", [], c, "m", n=8, arm="note", total_budget=4000)
+    check("reserve scaled", res.per_shift[0]["work_budget"] == 250
+          and res.per_shift[0]["slice_budget"] == 500, res.per_shift[0])
+
+
 def test_terminal_commit_retry():
     script = [
         reply(content="I believe it is Paris."),         # n=1 solve: stop, no FINAL line
@@ -209,6 +247,16 @@ def test_scoring():
     check("outcome secondary intact",
           scoring.classify_outcome(part, gold, "list") == "wrong_confident"
           and scoring.classify_outcome("unknown", gold, "list") == "abstained")
+    check("empty final is no_answer, never abstained",
+          scoring.classify_outcome("", gold, "list") == "no_answer"
+          and scoring.classify_outcome("  ", gold, "list", committed=False) == "no_answer")
+    dgold = json.dumps(["6 October 1959", "7 June 1957"])
+    dans = "Lai Ching-te (October 6, 1959) and Hou Yu-ih (born 7 Jun 1957)."
+    check("date formats canonicalized", scoring.list_recall(dans, dgold, "list") == 1.0)
+    check("wrong date still misses",
+          scoring.list_recall("October 7, 1959", json.dumps(["6 October 1959"]), "list") == 0.0)
+    check("non-date items unaffected by date path",
+          scoring.list_recall("the answer is 1959", json.dumps(["1959"]), "list") == 1.0)
 
 
 # --- 6. fact survival ---------------------------------------------------------
@@ -245,6 +293,8 @@ if __name__ == "__main__":
     test_zero_work_budget_calls_nothing()
     test_relay_note_no_early_finish()
     test_note_clip_and_marker()
+    test_note_salvage()
+    test_reserve_scales_with_slice()
     test_terminal_commit_retry()
     test_transcript_arm()
     test_wrapup_nudge()

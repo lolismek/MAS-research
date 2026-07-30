@@ -429,9 +429,13 @@ def continue_agent(result, user_prompt, client, model, *, meter=None,
         a = _assistant_dict(msg, drop_tool_calls=True)
         record.append(a); wire.append(a)
         finish = "length" if fr == "length" else "stop"
-        # Usable only if it is real text AND cleanly terminated. A 'length' generation is
-        # a partial/spiralled note; retry for a clean short one rather than crossing a stub.
-        if fr != "length" and _usable_text(msg.content):
+        # Usable if it is real text AND cleanly terminated; retry a 'length' generation
+        # for a clean short one. EXCEPT on the last attempt: a 'length' reply whose text
+        # survived (the proxy only keeps content when the think block CLOSED — an open
+        # spiral becomes the sentinel) is returned as-is with finish='length', and the
+        # caller decides whether to salvage it. Shakedown showed the discard-all rule
+        # throwing away a perfectly good 372-char note and crossing a marker instead.
+        if _usable_text(msg.content) and (fr != "length" or attempt == WRAPUP_MAX_TRIES - 1):
             final = (msg.content or "").strip()
             break
         if attempt < WRAPUP_MAX_TRIES - 1:      # empty / sentinel / truncated -> re-ask firmly
