@@ -38,11 +38,11 @@ def check_budget():
             raise SystemExit(f"BUDGET GUARD: ${cost:.2f} > ${ABORT_AT_USD} — aborting")
 
 
-def one(task, ordinal, beliefs, arm, sample):
+def one(task, ordinal, beliefs, arm, sample, variant, cap, tagpfx):
     check_budget()
     sets = belief_sets_for(arm, beliefs, ordinal)
-    tag = f"br_grid_{arm}_{task['id']}_{sample}"
-    res = run_relay(task, sets, tag)
+    tag = f"br_{tagpfx}_{arm}_{task['id']}_{sample}"
+    res = run_relay(task, sets, tag, variant=variant, max_tokens=cap)
     ans = extract_answer(res["final_message"])
     rec = dict(arm=arm, task_id=task["id"], sample=sample, answer=ans,
                correct=bool(match_math(ans, task["expected_answer"])),
@@ -60,7 +60,15 @@ def main():
     ap.add_argument("--k", type=int, default=2)
     ap.add_argument("--limit", type=int, default=0, help="cap pool tasks (smoke)")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--variant", default="v1", choices=("v1", "v2"),
+                    help="v2 = budget-capped handoff prompts")
+    ap.add_argument("--cap", type=int, default=16000,
+                    help="per-agent max output tokens (think included)")
+    ap.add_argument("--out", default="grid.jsonl")
     args = ap.parse_args()
+    global OUT
+    OUT = os.path.join(ROOT, "results", args.out)
+    tagpfx = "grid" if args.variant == "v1" else f"g2c{args.cap}"
 
     tasks = {json.loads(l)["id"]: json.loads(l) for l in open(TASKS)}
     pool = json.load(open(POOL))
@@ -87,7 +95,8 @@ def main():
             for s in range(args.k):
                 if (arm, p["task_id"], s) not in done:
                     jobs.append((tasks[p["task_id"]], ordinal,
-                                 beliefs[p["task_id"]], arm, s))
+                                 beliefs[p["task_id"]], arm, s,
+                                 args.variant, args.cap, tagpfx))
     print(f"{len(jobs)} relays to run ({len(done)} already done); "
           f"spend so far ${total_spend()['cost_usd']:.2f}")
     n_ok = n_err = 0

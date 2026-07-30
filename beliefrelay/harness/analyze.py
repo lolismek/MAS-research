@@ -23,7 +23,9 @@ def wilson(k, n, z=1.96):
 
 
 def main():
-    recs = [json.loads(l) for l in open(GRID)]
+    import sys
+    grid = os.path.join(ROOT, "results", sys.argv[1]) if len(sys.argv) > 1 else GRID
+    recs = [json.loads(l) for l in open(grid)]
     by_arm = defaultdict(list)
     by_arm_task = defaultdict(lambda: defaultdict(list))
     for r in recs:

@@ -24,6 +24,30 @@ SYS_BASE = (
     "FINAL ANSWER: <answer>"
 )
 
+# v2: budget-capped handoff relay. Each agent's output (thinking included) is capped
+# below what a full solo solve needs, so work MUST be split across the channel. The
+# prompt forces early externalization — a mid-think truncation yields an empty channel
+# message (the proxy strips unterminated <think>), so agents are told to stop
+# reasoning early and write partial progress down.
+SYS_HANDOFF = (
+    "You are agent {i} of {n} in a relay of agents solving a math problem together. "
+    "Your output budget is strictly limited — you do NOT have room to solve the whole "
+    "problem from scratch, and your reply is cut off if too long. Keep your private "
+    "reasoning very brief; put your work in the visible message instead. Build on the "
+    "previous agent's partial work (if any), advance the solution as far as your "
+    "budget allows, then STOP and write a compact handoff note: established results, "
+    "key intermediate values, and exactly what remains to be done. End your message "
+    "with the line:\nHANDOFF: <one-line summary of state>\n"
+    "Or, if the final answer is already established:\nFINAL ANSWER: <answer>"
+)
+SYS_HANDOFF_LAST = (
+    "You are agent {i} of {n}, the LAST agent in a relay of agents solving a math "
+    "problem together. The previous agents have made partial progress. Your output "
+    "budget is strictly limited, so keep your private reasoning very brief. Use the "
+    "previous agent's handoff to finish the problem. You MUST commit to an answer. "
+    "End your message with the line:\nFINAL ANSWER: <answer>"
+)
+
 BELIEF_TMPL = (
     "\n\nPersonal convictions of yours about problem-solving, which shape how you "
     "approach this work:\n- {0}\n- {1}\n- {2}"
@@ -38,9 +62,13 @@ FILLER = (
 )
 
 
-def system_prompt(agent_idx, belief_set):
+def system_prompt(agent_idx, belief_set, variant="v1"):
     """belief_set: list of 3 strings, or None for the filler control."""
-    sys = SYS_BASE.format(i=agent_idx + 1, n=N_AGENTS)
+    if variant == "v2":
+        base = SYS_HANDOFF_LAST if agent_idx == N_AGENTS - 1 else SYS_HANDOFF
+    else:
+        base = SYS_BASE
+    sys = base.format(i=agent_idx + 1, n=N_AGENTS)
     if belief_set is None:
         return sys + FILLER
     return sys + BELIEF_TMPL.format(*belief_set)
@@ -60,7 +88,8 @@ def belief_sets_for(arm, task_beliefs, task_ordinal):
     raise ValueError(f"unknown arm {arm}")
 
 
-def run_relay(task, agent_belief_sets, tag, temperature=0.7):
+def run_relay(task, agent_belief_sets, tag, temperature=0.7, variant="v1",
+              max_tokens=16000):
     """Run the 3-hop relay for one task. Returns per-agent messages + final answer."""
     question = task["question"]
     prev_msg = None
@@ -71,9 +100,10 @@ def run_relay(task, agent_belief_sets, tag, temperature=0.7):
         if prev_msg is not None:
             user += f"\n\nMESSAGE FROM AGENT {i} OF {N_AGENTS}:\n{prev_msg}"
         out = chat(tag, [
-            {"role": "system", "content": system_prompt(i, agent_belief_sets[i])},
+            {"role": "system", "content": system_prompt(i, agent_belief_sets[i],
+                                                        variant=variant)},
             {"role": "user", "content": user},
-        ], temperature=temperature)
+        ], temperature=temperature, max_tokens=max_tokens)
         prev_msg = out["content"]
         transcript.append(dict(agent=i + 1, message=out["content"],
                                finish=out.get("finish")))
