@@ -112,3 +112,13 @@ def extract_answer(text):
         return boxed[-1]
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     return lines[-1] if lines else ""
+
+
+def extract_label(text):
+    """Last SUPPORTS/REFUTES token in the text (word-boundary, tolerant of
+    SUPPORTED/REFUTED). None if absent (mute/placeholder finals score wrong)."""
+    hits = re.findall(r"\b(SUPPORT(?:S|ED)?|REFUT(?:ES|ED)?)\b", text or "",
+                      re.IGNORECASE)
+    if not hits:
+        return None
+    return "SUPPORTS" if hits[-1].upper().startswith("SUPPORT") else "REFUTES"

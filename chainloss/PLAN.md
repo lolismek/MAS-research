@@ -79,6 +79,34 @@ Pilot (Claude, ≤$5): ~8–12 tasks × N{1,8} × both arms; calibrate `--budget
 N=1 natural spend; check fact survival + note saturation.
 Full grid (user runs): ~48 tasks × N{1,2,4,8} × {note, transcript}.
 
+## Main run findings (2026-07-30, note arm, 40 tasks × N{1,2,4,8}, 32k budget, $6.52, 0 harness failures)
+
+| N | recall (sem) | exact | correct/no_answer/wrong_conf | recall\|answered | med ctok |
+|---|---|---|---|---|---|
+| 1 | 0.463 (0.065) | 0.225 | 9/5/26 | 0.529 | 3,481 |
+| 2 | 0.550 (0.066) | 0.300 | 12/2/26 | 0.579 | 17,206 |
+| 4 | 0.497 (0.068) | 0.225 | 9/5/26 | 0.569 | 20,205 |
+| 8 | 0.321 (0.066) | 0.175 | 7/16/17 | 0.535 | 28,233 |
+
+- **Inverted-U**: N=2 > N=1 (paired +0.087, 9 up / 5 down — the forced fresh-context
+  second pass acts as a verifier), N=4 ≈ N=1, N=8 well below (paired −0.141,
+  15 down / 5 up over 40 tasks).
+- **The N=8 drop is a DELIVERY failure, not fact-poor answers**: recall|answered is
+  flat (~0.53–0.58) at every N. All 16 N=8 no_answers are uncommitted chains that
+  burned the full budget (median 31.5k ctok) and died before the terminal shift
+  could commit.
+- **The channel is genuinely lossy**: note-arm fact survival P(item crosses edge |
+  available) ≈ 0.16–0.36 per edge at N=8; note yield (real note vs TRUNCATED
+  marker) only 0.32–0.50 — most edges deliver nothing and successors re-search
+  from scratch. Delivery P(in final | available at last edge) falls 0.731 (N=2) →
+  0.570 (N=4) → 0.406 (N=8). Transcript-arm survival = 1.000 (validation runs).
+- Successors compensate for the lossy channel by re-deriving facts (why
+  recall|answered stays flat) — but that re-work is what exhausts the budget, so
+  the loss re-emerges as failure-to-commit. Information loss and budget death are
+  the same mechanism seen from two ends.
+- **Attribution still open**: the 40-task transcript control at N{4,8} (README
+  "LATER" command, ~$5) decides channel-loss vs slice-starvation for the N=8 drop.
+
 ## Infra
 
 Same stack as duet: shared Tinker proxy (`PROXY_URL`, default `127.0.0.1:8744`),
