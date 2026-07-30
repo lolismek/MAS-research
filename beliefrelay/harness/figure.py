@@ -59,10 +59,10 @@ def main():
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.4),
                              gridspec_kw=dict(wspace=0.18))
     panel(axes[0], arm_stats("grid_v2.jsonl"),
-          "MATH-L5 — capped handoff relay (v2)",
+          "MATH-L5",
           "39 tasks × k=3, cap 4500 — deltas ns", 0.5, 0.8)
     panel(axes[1], arm_stats("grid_fever.jsonl"),
-          "FEVER two-way — directional beliefs (v3)",
+          "FEVER",
           "24 claims × k=2, cap 2500 — ns; shift 0.000", 0.8, 1.0)
     axes[0].set_ylabel("accuracy", fontsize=11)
     fig.suptitle("beliefrelay: belief injection in a 3-agent relay — "
