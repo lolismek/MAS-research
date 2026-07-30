@@ -49,9 +49,53 @@ partial progress, last agent must answer). Calibration gate: capped solo agent
 rare-solves; capped 3-hop chain solves substantially more often — that window is
 where the channel is load-bearing and belief effects have room to act.
 
-Status: pilot + grid in progress (results appended below when complete).
+Calibration pilot (cap 4500 tokens/agent, none-arm): capped solo 2/10 solved vs
+capped 3-hop chain 7/10 (independent-retry expectation from the solo rate ≈ 49%)
+→ the channel is load-bearing at this cap. Gate PASSED; grid run at cap 4500.
+
+### Grid — 3 arms × 39 tasks × k=3 (351 relays, tag `br_g2c4500`, 2026-07-30)
+
+| arm | n | accuracy | Wilson 95% CI |
+|---|---|---|---|
+| none (filler) | 117 | **0.632** | [0.542, 0.714] |
+| homo (shared belief set) | 117 | **0.701** | [0.613, 0.776] |
+| probe (different belief sets) | 117 | **0.709** | [0.622, 0.784] |
+
+Paired per-task deltas (39 tasks): homo−none **+0.068** (SE 0.048), probe−none
+**+0.077** (SE 0.045, p≈0.09), probe−homo **+0.009** (SE 0.055). **All ns at
+~95%.** The headline contrast — heterogeneous vs shared beliefs (probe−homo) —
+is a dead null in both regimes.
+
+### Findings
+
+1. **Ceiling removed, still no heterogeneity effect.** v2 has real headroom
+   (63–71% on a 39% pool, ~4× v1's error mass), the channel is provably
+   load-bearing, and probe−homo is +0.9pp (SE 5.5pp). Belief heterogeneity
+   across the relay does not measurably change end-task accuracy.
+2. **The belief-vs-none trend (+7pp, ns) is mostly a muteness artifact, not
+   belief transmission.** 42% of agent turns hit the cap mid-think and emit the
+   empty-channel placeholder. Final-agent muteness (auto-wrong) differs by arm:
+   none 36/117, probe 30/117, homo 24/117 — that gap alone accounts for most of
+   the arm deltas. Conditional on a non-mute final agent, accuracies are
+   ~88–95% across arms with no clean ordering. Plausible mechanism: any extra
+   system-prompt text about *how to work* nudges the model to think less before
+   writing; nothing suggests belief *content* traveled the channel and helped.
+3. Sign flip vs v1 (beliefs slightly negative → slightly positive) at ~1–2 SE
+   in both directions is exactly what noise around zero looks like.
+
+### Verdict (v1 + v2)
+
+Across an uncapped relay (v1) and a budget-capped handoff relay where the
+channel demonstrably carries the solution (v2), injecting subjective,
+task-adjacent beliefs — same or different per agent — produced **no
+statistically detectable effect on end-task accuracy** (351 relays per regime,
+paired SEs ~2–5pp). Whatever these beliefs do, they stay cheap: they neither
+poison nor power the relay on MATH-L5. Caveats: convergent-answer benchmark
+(near-worst-case for belief effects), deliberately non-essential beliefs by
+design, one model, k=3.
 
 ## Spend
 
-v1 total (screen + discarded screen + top-up + smoke + grid): **$10.33** of the
-$20 cap, self-metered from proxy calls.jsonl.
+v1 (screen + discarded screen + top-up + smoke + grid): **$10.33**.
+Total incl. v2 (pilot + capped grid): **$13.55** of the $20 cap,
+self-metered from proxy calls.jsonl.
