@@ -24,11 +24,17 @@ def main():
     args = ap.parse_args()
 
     hits = defaultdict(list)
+    fins = defaultdict(list)
     for line in open(SCREEN):
         r = json.loads(line)
         hits[r["task_id"]].append(r["correct"])
+        fins[r["task_id"]].append(r["finish"])
     rates = {t: sum(v) / len(v) for t, v in hits.items()}
-    band = [(t, r) for t, r in rates.items() if r <= args.band_max]
+    # Hard-but-answerable only: a task ALL of whose samples died at the token cap
+    # never produced an answer at all — that's budget-bound, not hard. Require at
+    # least one completed (finish=stop) sample to be eligible.
+    band = [(t, r) for t, r in rates.items()
+            if r <= args.band_max and any(f == "stop" for f in fins[t])]
     partial = sorted([x for x in band if x[1] > 0], key=lambda x: x[0])
     zero = sorted([x for x in band if x[1] == 0], key=lambda x: x[0])
     chosen = (partial + zero)[:args.n]
