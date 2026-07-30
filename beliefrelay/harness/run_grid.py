@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from relay import belief_sets_for, run_relay  # noqa: E402
-from scoring import extract_answer, match_math  # noqa: E402
+from scoring import extract_answer, extract_label, match_math  # noqa: E402
 from spend import ABORT_AT_USD, total_spend  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -40,12 +40,17 @@ def check_budget():
 
 def one(task, ordinal, beliefs, arm, sample, variant, cap, tagpfx):
     check_budget()
-    sets = belief_sets_for(arm, beliefs, ordinal)
+    sets = belief_sets_for(arm, beliefs, ordinal, rotate_probe=(variant == "v2f"))
     tag = f"br_{tagpfx}_{arm}_{task['id']}_{sample}"
     res = run_relay(task, sets, tag, variant=variant, max_tokens=cap)
-    ans = extract_answer(res["final_message"])
+    if task.get("answer_type") == "label":
+        ans = extract_label(res["final_message"])
+        correct = ans == task["expected_answer"]
+    else:
+        ans = extract_answer(res["final_message"])
+        correct = bool(match_math(ans, task["expected_answer"]))
     rec = dict(arm=arm, task_id=task["id"], sample=sample, answer=ans,
-               correct=bool(match_math(ans, task["expected_answer"])),
+               correct=correct,
                expected=task["expected_answer"], usage=res["usage"],
                belief_sets=sets, transcript=res["transcript"])
     with _write_lock:
@@ -60,21 +65,28 @@ def main():
     ap.add_argument("--k", type=int, default=2)
     ap.add_argument("--limit", type=int, default=0, help="cap pool tasks (smoke)")
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--variant", default="v1", choices=("v1", "v2"),
-                    help="v2 = budget-capped handoff prompts")
+    ap.add_argument("--variant", default="v1", choices=("v1", "v2", "v2f"),
+                    help="v2 = budget-capped handoff prompts; v2f = FEVER two-way")
     ap.add_argument("--cap", type=int, default=16000,
                     help="per-agent max output tokens (think included)")
     ap.add_argument("--out", default="grid.jsonl")
+    ap.add_argument("--tasks", default=None)
+    ap.add_argument("--pool", default=None)
+    ap.add_argument("--beliefs", default=None)
     args = ap.parse_args()
     global OUT
     OUT = os.path.join(ROOT, "results", args.out)
-    tagpfx = "grid" if args.variant == "v1" else f"g2c{args.cap}"
+    tagpfx = {"v1": "grid", "v2": f"g2c{args.cap}",
+              "v2f": f"g3f{args.cap}"}[args.variant]
 
-    tasks = {json.loads(l)["id"]: json.loads(l) for l in open(TASKS)}
-    pool = json.load(open(POOL))
+    tasks_path = os.path.join(ROOT, args.tasks) if args.tasks else TASKS
+    pool_path = os.path.join(ROOT, args.pool) if args.pool else POOL
+    beliefs_path = os.path.join(ROOT, args.beliefs) if args.beliefs else BELIEFS
+    tasks = {json.loads(l)["id"]: json.loads(l) for l in open(tasks_path)}
+    pool = json.load(open(pool_path))
     if args.limit:
         pool = pool[:args.limit]
-    beliefs = json.load(open(BELIEFS))
+    beliefs = json.load(open(beliefs_path))
     missing = [p["task_id"] for p in pool if p["task_id"] not in beliefs]
     if missing:
         raise SystemExit(f"no beliefs authored for: {missing}")

@@ -48,6 +48,24 @@ SYS_HANDOFF_LAST = (
     "End your message with the line:\nFINAL ANSWER: <answer>"
 )
 
+# v2f: FEVER two-way claim verification, same capped-handoff mechanics as v2.
+SYS_FEVER = (
+    "You are agent {i} of {n} in a relay of agents verifying a factual claim "
+    "together. Your output budget is strictly limited, so keep your private "
+    "reasoning very brief; put your work in the visible message instead. Build on "
+    "the previous agent's notes (if any): recall relevant facts, weigh whether the "
+    "claim holds, and write a compact note for the next agent — what you recalled, "
+    "your current leaning, and what remains uncertain. End your message with the "
+    "line:\nLEANING: <SUPPORTS or REFUTES, plus one clause of justification>"
+)
+SYS_FEVER_LAST = (
+    "You are agent {i} of {n}, the LAST agent in a relay of agents verifying a "
+    "factual claim together. Your output budget is strictly limited, so keep your "
+    "private reasoning very brief. Weigh the previous agents' notes against your "
+    "own knowledge and commit to a verdict. End your message with the line:\n"
+    "FINAL ANSWER: <SUPPORTS or REFUTES>"
+)
+
 BELIEF_TMPL = (
     "\n\nPersonal convictions of yours about problem-solving, which shape how you "
     "approach this work:\n- {0}\n- {1}\n- {2}"
@@ -64,7 +82,9 @@ FILLER = (
 
 def system_prompt(agent_idx, belief_set, variant="v1"):
     """belief_set: list of 3 strings, or None for the filler control."""
-    if variant == "v2":
+    if variant == "v2f":
+        base = SYS_FEVER_LAST if agent_idx == N_AGENTS - 1 else SYS_FEVER
+    elif variant == "v2":
         base = SYS_HANDOFF_LAST if agent_idx == N_AGENTS - 1 else SYS_HANDOFF
     else:
         base = SYS_BASE
@@ -74,11 +94,16 @@ def system_prompt(agent_idx, belief_set, variant="v1"):
     return sys + BELIEF_TMPL.format(*belief_set)
 
 
-def belief_sets_for(arm, task_beliefs, task_ordinal):
+def belief_sets_for(arm, task_beliefs, task_ordinal, rotate_probe=False):
     """-> list of 3 belief-sets (one per agent), each a list[str] or None.
     task_beliefs: the task's 3 authored sets. task_ordinal: stable index in the pool
-    (drives the homo-arm rotation deterministically)."""
+    (drives the homo-arm rotation deterministically). rotate_probe: rotate set->agent
+    assignment by ordinal (v2f directional sets: deconfounds flavor from position)."""
     if arm == "probe":
+        if rotate_probe:
+            r = task_ordinal % 3
+            return [task_beliefs[(0 + r) % 3], task_beliefs[(1 + r) % 3],
+                    task_beliefs[(2 + r) % 3]]
         return [task_beliefs[0], task_beliefs[1], task_beliefs[2]]
     if arm == "homo":
         s = task_beliefs[task_ordinal % 3]
