@@ -78,7 +78,7 @@ def run_one(task, n, arm="note", total_budget=None, budget_usd=None):
                  PREFILL_PER_MTOK, SAMPLE_PER_MTOK)
     client = client_for(tag)
     res = run_relay(question, tool_names, client, MODEL, n=n, arm=arm,
-                    total_budget=total_budget, usd_budget=usd)
+                    total_budget=total_budget, usd_budget=usd, task_id=tid)
     dur = time.time() - t0
 
     # Edge yield: what actually crossed each edge. A marker means the producer left
@@ -96,7 +96,12 @@ def run_one(task, n, arm="note", total_budget=None, budget_usd=None):
 
     pt = sum(s["prompt"] for s in res.per_shift)
     ct = sum(s["completion"] for s in res.per_shift)
-    cost = round(pt / 1e6 * PREFILL_PER_MTOK + ct / 1e6 * SAMPLE_PER_MTOK, 6)
+    # QA arms: the hand-off Q&A is metered OUTSIDE the relay budget (separate ledger
+    # keys), so ct stays comparable to the note baseline; the cost is real and billed.
+    qa_pt = sum(s.get("qa_prompt", 0) for s in res.per_shift)
+    qa_ct = sum(s.get("qa_completion", 0) for s in res.per_shift)
+    cost = round((pt + qa_pt) / 1e6 * PREFILL_PER_MTOK
+                 + (ct + qa_ct) / 1e6 * SAMPLE_PER_MTOK, 6)
 
     result = dict(
         id=tid, bench=bench, arm=arm, n=n, run=k, tool_profile=profile,
@@ -108,6 +113,7 @@ def run_one(task, n, arm="note", total_budget=None, budget_usd=None):
         edges=edges, edge_markers=markers, note_yield=note_yield,
         shifts_used=res.shifts_used, n_calls=res.n_calls, n_tool_calls=res.n_tool_calls,
         completion_tokens=ct, prompt_tokens=pt, total_tokens=pt + ct, cost_usd=cost,
+        qa_completion_tokens=qa_ct, qa_prompt_tokens=qa_pt,
         tokens_overrun=sum(s["overrun"] for s in res.per_shift),
         per_shift=res.per_shift,
         per_agent=[dict(role=a.role, finish=a.finish, steps=a.n_steps,
@@ -120,9 +126,13 @@ def run_one(task, n, arm="note", total_budget=None, budget_usd=None):
         json.dump([dict(role=a.role, finish=a.finish, transcript=a.transcript)
                    for a in res.agents], f, indent=1)
     if res.payloads:                               # what crossed each edge
-        fname = "handoff_notes.txt" if arm == "note" else "work_logs.txt"
+        fname = "work_logs.txt" if arm == "transcript" else "handoff_notes.txt"
         with open(os.path.join(rundir, fname), "w") as f:
             for j, p in enumerate(res.payloads, 1):
+                f.write(f"===== edge {j} =====\n{p}\n\n")
+    if res.qa_payloads:                            # QA arms: the Q&A block per edge
+        with open(os.path.join(rundir, "handoff_qa.txt"), "w") as f:
+            for j, p in enumerate(res.qa_payloads, 1):
                 f.write(f"===== edge {j} =====\n{p}\n\n")
 
     print(f"[{arm}/n{n}/{tid}] {dur:.0f}s final={final!r} expected={expected!r} "
