@@ -75,7 +75,11 @@ TRANSCRIPT_LOG_CLIP = int(os.environ.get("CHAINLOSS_TRANSCRIPT_LOG_CLIP", "12000
 # confound: these arms spend extra tokens and cross a wider channel (note + ≤1500
 # chars of Q&A) than the `note` baseline.
 QA_K = int(os.environ.get("CHAINLOSS_QA_K", "3"))
-QA_BUDGET = int(os.environ.get("CHAINLOSS_QA_BUDGET", "600"))      # per handoff, extra-budget
+# Per-handoff Q&A token allowance (extra-budget). Spec asked ~600; the 2026-08-19
+# smoke showed Qwen3.6's think trace ALONE blows a 600 cap (unclosed <think> ->
+# proxy sentinel -> dead marker on both arms), so the default is 1500 — the smallest
+# round cap that let the answers finish. Deviation documented in REPORT_E1_randq.md.
+QA_BUDGET = int(os.environ.get("CHAINLOSS_QA_BUDGET", "1500"))
 QA_MAX_CHARS = int(os.environ.get("CHAINLOSS_QA_MAX_CHARS", "1500"))
 
 ARMS = ("note", "transcript", "note_randq", "note_epiq")

@@ -41,6 +41,14 @@ conda run -n autogen_gc python chainloss/harness/run_batch.py \
 
 # mechanism metric (post-hoc, offline): fact survival on the channel
 conda run -n autogen_gc python chainloss/metrics/fact_survival.py
+
+# E1-mini (hand-off Q&A arms): note_randq (off-topic questions answered in the
+# shift's own work context) and note_epiq (epistemic probes), N=2 only, paired
+# against the full-sweep note/n2 cell. Q&A tokens are OUTSIDE the relay budget
+# (documented width/compute confound). Results: REPORT_E1_randq.md.
+conda run -n autogen_gc python chainloss/harness/run_batch.py \
+    --tasks fanoutqa.jsonl --limit 40 --ns 2 --arms note_randq,note_epiq --workers 24 --name e1_qa
+conda run -n autogen_gc python chainloss/metrics/qa_arms_analysis.py e1_qa
 ```
 
 Results: `sweeps/<name>/results.jsonl` + `summary.md` (recall/exact/abstain by
