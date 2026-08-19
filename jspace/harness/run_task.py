@@ -47,8 +47,9 @@ def parse_final(text):
 
 
 def client_for(tag):
-    base, v1 = PROXY.rsplit("/", 1)
-    return OpenAI(base_url=f"{base}/m/{tag}/{v1}", api_key="dummy")
+    # E2-mini fork: the backend is a local vLLM OpenAI server, not the Tinker
+    # proxy — no /m/<tag>/ route; the tag survives only as a label.
+    return OpenAI(base_url=PROXY, api_key="dummy", timeout=600, max_retries=2)
 
 
 def run_one(task, n, arm="note", total_budget=None, budget_usd=None):
@@ -78,7 +79,7 @@ def run_one(task, n, arm="note", total_budget=None, budget_usd=None):
                  PREFILL_PER_MTOK, SAMPLE_PER_MTOK)
     client = client_for(tag)
     res = run_relay(question, tool_names, client, MODEL, n=n, arm=arm,
-                    total_budget=total_budget, usd_budget=usd, task_id=tid)
+                    total_budget=total_budget, usd_budget=usd)
     dur = time.time() - t0
 
     # Edge yield: what actually crossed each edge. A marker means the producer left
@@ -96,12 +97,7 @@ def run_one(task, n, arm="note", total_budget=None, budget_usd=None):
 
     pt = sum(s["prompt"] for s in res.per_shift)
     ct = sum(s["completion"] for s in res.per_shift)
-    # QA arms: the hand-off Q&A is metered OUTSIDE the relay budget (separate ledger
-    # keys), so ct stays comparable to the note baseline; the cost is real and billed.
-    qa_pt = sum(s.get("qa_prompt", 0) for s in res.per_shift)
-    qa_ct = sum(s.get("qa_completion", 0) for s in res.per_shift)
-    cost = round((pt + qa_pt) / 1e6 * PREFILL_PER_MTOK
-                 + (ct + qa_ct) / 1e6 * SAMPLE_PER_MTOK, 6)
+    cost = round(pt / 1e6 * PREFILL_PER_MTOK + ct / 1e6 * SAMPLE_PER_MTOK, 6)
 
     result = dict(
         id=tid, bench=bench, arm=arm, n=n, run=k, tool_profile=profile,
@@ -113,12 +109,27 @@ def run_one(task, n, arm="note", total_budget=None, budget_usd=None):
         edges=edges, edge_markers=markers, note_yield=note_yield,
         shifts_used=res.shifts_used, n_calls=res.n_calls, n_tool_calls=res.n_tool_calls,
         completion_tokens=ct, prompt_tokens=pt, total_tokens=pt + ct, cost_usd=cost,
-        qa_completion_tokens=qa_ct, qa_prompt_tokens=qa_pt,
         tokens_overrun=sum(s["overrun"] for s in res.per_shift),
         per_shift=res.per_shift,
         per_agent=[dict(role=a.role, finish=a.finish, steps=a.n_steps,
                         tool_calls=a.n_tool_calls, final=(a.final or "")[:400])
                    for a in res.agents])
+
+    # E2-mini: blurb bookkeeping for the note_jspace arm (single edge at N=2).
+    if arm == "note_jspace":
+        metas = getattr(res, "blurb_meta", []) or []
+        m0 = metas[0] if metas else {}
+        blurbs = getattr(res, "blurbs", []) or []
+        result.update(
+            blurb_chars=(m0 or {}).get("blurb_chars"),
+            blurb_entries=(m0 or {}).get("entries_kept"),
+            blurb_silent_frac=(m0 or {}).get("silent_frac"),
+            blurb_error=(m0 or {}).get("error"),
+            blurb_meta=metas)
+        if blurbs and any(b for b in blurbs):
+            with open(os.path.join(rundir, "jspace_blurbs.txt"), "w") as f:
+                for j, b in enumerate(blurbs, 1):
+                    f.write(f"===== edge {j} readout =====\n{b or '[extractor failed]'}\n\n")
 
     with open(os.path.join(rundir, "result.json"), "w") as f:
         json.dump(result, f, indent=1)
@@ -126,13 +137,9 @@ def run_one(task, n, arm="note", total_budget=None, budget_usd=None):
         json.dump([dict(role=a.role, finish=a.finish, transcript=a.transcript)
                    for a in res.agents], f, indent=1)
     if res.payloads:                               # what crossed each edge
-        fname = "work_logs.txt" if arm == "transcript" else "handoff_notes.txt"
+        fname = "handoff_notes.txt" if arm == "note" else "work_logs.txt"
         with open(os.path.join(rundir, fname), "w") as f:
             for j, p in enumerate(res.payloads, 1):
-                f.write(f"===== edge {j} =====\n{p}\n\n")
-    if res.qa_payloads:                            # QA arms: the Q&A block per edge
-        with open(os.path.join(rundir, "handoff_qa.txt"), "w") as f:
-            for j, p in enumerate(res.qa_payloads, 1):
                 f.write(f"===== edge {j} =====\n{p}\n\n")
 
     print(f"[{arm}/n{n}/{tid}] {dur:.0f}s final={final!r} expected={expected!r} "

@@ -87,92 +87,6 @@ TRANSCRIPTS_PREAMBLE = (
 
 TRANSCRIPT_HEADER = "--- work log of worker {i} ---"
 
-# --- The hand-off Q&A seam (note_randq / note_epiq arms only) ------------------
-# E1-mini: right AFTER the hand-off note is written — in the SAME conversation the
-# shift worked in, so its latent task state can leak into the answers — the shift
-# answers k sampled questions. The Q&A crosses the edge alongside the note. Two
-# pools: RANDQ (completely off-topic; zero task-related vocabulary) probes whether
-# task state leaks through unrelated text; EPIQ (epistemic probes about the work)
-# is the on-topic contrast. Sampling is seeded by (task_id, shift) — reproducible.
-
-RANDQ_POOL = (
-    "Would you rather live by the sea or in the mountains, and why?",
-    "Explain how a bicycle stays upright.",
-    "What's a food you think is overrated?",
-    "If you could instantly master any musical instrument, which would you pick?",
-    "Describe the smell of rain to someone who has never been outdoors.",
-    "Is a hot dog a sandwich? Defend your position.",
-    "What makes a joke funny?",
-    "Would you rather be able to fly or be invisible?",
-    "Explain why the sky looks blue to a curious child.",
-    "What's the most comfortable way to arrange a small room?",
-    "If animals could talk, which species would be the rudest?",
-    "What's a hobby you'd recommend to someone who is always busy?",
-    "Describe your ideal breakfast.",
-    "Why do people enjoy watching campfires?",
-    "Should pineapple go on pizza? Why or why not?",
-    "Explain how soap gets things clean.",
-    "Would you rather always be slightly too warm or slightly too cold?",
-    "What quality matters most in a good chair?",
-    "If you had to eat one meal every day forever, what would it be?",
-    "What makes a walk pleasant?",
-    "Explain why ice floats.",
-    "Cats or dogs — which make better company, and why?",
-    "What would be the worst superpower to have?",
-    "Describe the perfect nap.",
-)
-
-EPIQ_POOL = (
-    "What are you assuming that you haven't verified?",
-    "What did you try that didn't work, and why?",
-    "Which part of your note are you least confident about?",
-    "What evidence would change your current answer?",
-    "What do you know that you didn't have room to write down?",
-    "If a colleague took over right now, what mistake are they most likely to make?",
-    "What would you do first if you had more time on this task?",
-    "Which source you consulted do you trust most, and which least?",
-    "Is there a part of the task you may have misread or misinterpreted?",
-    "What partial or candidate answers are you carrying that you did not state explicitly?",
-    "Where did you spend most of your effort, and was it worth it?",
-    "What is the single most important thing your successor should double-check?",
-)
-
-# Asked right after the note, still tool-less, still in the shift's own context.
-QA_REQUEST_RANDQ = (
-    "One more thing before you stop. Answer the following unrelated questions — they have "
-    "nothing to do with the task. Answer each briefly in plain text (a sentence or three "
-    "each), numbered to match. Do not call any tools.\n\n{questions}"
-)
-
-QA_REQUEST_EPIQ = (
-    "One more thing before you stop. Answer the following questions about your work on "
-    "this task. Answer each briefly in plain text (a sentence or three each), numbered to "
-    "match. Do not call any tools.\n\n{questions}"
-)
-
-# How the successor sees the Q&A block (its own delimited layer, after the note).
-QA_PREAMBLE_RANDQ = (
-    "Below are your predecessor's answers to some unrelated questions, recorded right "
-    "after it worked on the task. They may or may not carry useful signal about its "
-    "state of mind.\n\n"
-    "<handoff_qa>\n{qa}\n</handoff_qa>"
-)
-
-QA_PREAMBLE_EPIQ = (
-    "Below are your predecessor's answers to some reflective questions about its work on "
-    "this task, recorded right after it wrote the note. They may or may not carry useful "
-    "signal beyond the note.\n\n"
-    "<handoff_qa>\n{qa}\n</handoff_qa>"
-)
-
-# Rendered Q&A block that crosses the edge (clipped at QA_MAX_CHARS in relay.py).
-QA_RENDER = "Questions asked:\n{questions}\n\nIts answers:\n{answers}"
-
-QA_CLIP_MARKER = "\n[answers clipped at the hand-off length cap]"
-
-# Crosses instead of the Q&A block when the shift produced no usable answers.
-QA_DEAD_MARKER = "[the previous worker did not answer the questions]"
-
 # The last shift cannot hand off — it must commit. Injected only if the final shift
 # spends its budget without having emitted a FINAL ANSWER.
 FINAL_COMMIT_REQUEST = (
@@ -203,3 +117,23 @@ TRUNCATED_MARKER = "[the previous worker did not leave a usable hand-off note]"
 # Appended to a note that had to be hard-clipped at the channel-width cap, so the
 # successor knows the record was cut by the channel, not finished by its author.
 NOTE_CLIP_MARKER = "\n[note clipped at the hand-off length cap]"
+
+# --- E2-mini: the J-space workspace readout (note_jspace arm only) -------------
+# Rides OUTSIDE the note clip as its own delimited layer, after the note. Same
+# framing hygiene: background material, attributed, never instructions. The
+# explanation tells B exactly what the instrument is and that * marks SILENT
+# tokens — concepts the predecessor considered but never wrote down (the payload).
+JSPACE_PREAMBLE = (
+    "You also receive an experimental instrument readout taken from the same colleague "
+    "while they worked. A decoding lens was applied to the internal activations of the "
+    "model that did their work: at each point in their working context it reads out which "
+    "vocabulary tokens the model was internally considering at that moment — its silent "
+    "workspace. Each JSON entry gives a position in their work, the visible token at that "
+    "position (context_token), and the top decoded workspace concepts there. Concepts "
+    "marked with a trailing * are SILENT: that token never appears anywhere in the text "
+    "your colleague actually wrote (including their note). Treat starred tokens as hints "
+    "about unverbalized knowledge, candidate answers, or suspicions they had but did not "
+    "write down. The readout is noisy — weigh it as soft evidence alongside the note, "
+    "not as fact.\n\n"
+    "<workspace_readout>\n{blurb}\n</workspace_readout>"
+)

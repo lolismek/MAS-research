@@ -28,10 +28,8 @@ reshaped around the experiment's three requirements:
 N=1 runs this exact code path with zero edges: the single shift is terminal from
 the start, so single-agent-vs-MAS is never an implementation difference.
 """
-import hashlib
 import json
 import os
-import random
 from dataclasses import dataclass, field
 
 from agent import run_agent, continue_agent, TokenMeter
@@ -66,33 +64,13 @@ NOTE_MIN_SALVAGE_CHARS = int(os.environ.get("CHAINLOSS_NOTE_MIN_SALVAGE", "200")
 TRANSCRIPT_TOOL_CLIP = int(os.environ.get("CHAINLOSS_TRANSCRIPT_TOOL_CLIP", "1500"))
 TRANSCRIPT_LOG_CLIP = int(os.environ.get("CHAINLOSS_TRANSCRIPT_LOG_CLIP", "12000"))
 
-# --- E1-mini Q&A arms (note_randq / note_epiq) ---------------------------------
-# Note-arm mechanics unchanged; right AFTER the note, the shift answers QA_K sampled
-# questions IN ITS OWN WORK CONTEXT (that's the experiment: latent task state leaking
-# into the answers), and the Q&A crosses the edge alongside the note. The Q&A call
-# gets its own token allowance OUTSIDE the relay budget (metered separately; the
-# relay work is budget-identical to the plain note arm). Deliberate, documented
-# confound: these arms spend extra tokens and cross a wider channel (note + ≤1500
-# chars of Q&A) than the `note` baseline.
-QA_K = int(os.environ.get("CHAINLOSS_QA_K", "3"))
-# Per-handoff Q&A token allowance (extra-budget). Spec asked ~600; the 2026-08-19
-# smoke showed Qwen3.6's think trace ALONE blows a 600 cap (unclosed <think> ->
-# proxy sentinel -> dead marker on both arms), so the default is 1500 — the smallest
-# round cap that let the answers finish. Deviation documented in REPORT_E1_randq.md.
-QA_BUDGET = int(os.environ.get("CHAINLOSS_QA_BUDGET", "1500"))
-QA_MAX_CHARS = int(os.environ.get("CHAINLOSS_QA_MAX_CHARS", "1500"))
-
-ARMS = ("note", "transcript", "note_randq", "note_epiq")
-NOTE_ARMS = ("note", "note_randq", "note_epiq")   # note-channel mechanics
-QA_ARMS = ("note_randq", "note_epiq")
-
-
-def sample_questions(arm, task_id, shift, k=None):
-    """Deterministic k-question sample from the arm's pool, seeded by (task_id, shift).
-    sha256, not hash(): stable across processes so reruns ask the same questions."""
-    pool = prompts.RANDQ_POOL if arm == "note_randq" else prompts.EPIQ_POOL
-    seed = int(hashlib.sha256(f"{task_id}:{shift}".encode()).hexdigest(), 16) % (2 ** 32)
-    return random.Random(seed).sample(list(pool), k if k is not None else QA_K)
+# E2-mini: `note_jspace` = the note arm PLUS a J-space workspace readout of the
+# predecessor, extracted by the lens service (jclient/extractor) from A's realized
+# transcript and handed to B as its own context layer. Budget/note mechanics are
+# byte-identical to `note`; the blurb rides OUTSIDE the note clip (the documented
+# channel-width confound).
+ARMS = ("note", "transcript", "note_jspace")
+NOTE_ARMS = ("note", "note_jspace")
 
 
 @dataclass
@@ -103,7 +81,8 @@ class RelayResult:
     slice_budget: int = 0
     shifts: list = field(default_factory=list)    # one AgentResult per shift
     payloads: list = field(default_factory=list)  # what crossed each edge (len == shifts_used - 1)
-    qa_payloads: list = field(default_factory=list)  # QA arms: the Q&A block per edge
+    blurbs: list = field(default_factory=list)    # note_jspace: the readout per edge (or None)
+    blurb_meta: list = field(default_factory=list)  # extractor stats/error per edge
     per_shift: list = field(default_factory=list) # token ledger per shift (dicts)
     committed: bool = True
     budget_exceeded: bool = False                 # the USD safety cap, not the token budget
@@ -143,31 +122,10 @@ def _note_layer(note):
     return {"role": "user", "content": prompts.SUCCESSOR_PREAMBLE.format(note=note)}
 
 
-def _qa_layer(qa, arm):
-    """The predecessor's hand-off Q&A block (note_randq / note_epiq), after the note."""
-    tpl = prompts.QA_PREAMBLE_RANDQ if arm == "note_randq" else prompts.QA_PREAMBLE_EPIQ
-    return {"role": "user", "content": tpl.format(qa=qa)}
-
-
-def _run_handoff_qa(note_res, arm, task_id, shift, client, model, usd_budget):
-    """Ask the shift QA_K sampled questions IN ITS OWN WORK CONTEXT (appended to the
-    same conversation, right after its note) and render the Q&A block that crosses
-    the edge. Metered on its own TokenMeter — the relay budget is untouched (the
-    documented extra-compute confound). Returns (qa_payload, qa_meter)."""
-    qs = sample_questions(arm, task_id, shift)
-    numbered = "\n".join(f"{j}. {q}" for j, q in enumerate(qs, 1))
-    tpl = prompts.QA_REQUEST_RANDQ if arm == "note_randq" else prompts.QA_REQUEST_EPIQ
-    qa_meter = TokenMeter()
-    qa_res = continue_agent(note_res, tpl.format(questions=numbered), client, model,
-                            meter=qa_meter, slice_budget=QA_BUDGET, usd_budget=usd_budget)
-    if qa_res.final:
-        # A 'length'-cut answer still crosses: the Q&A is soft signal, not a record
-        # whose truncation could mislead — and the clip marker flags the cut anyway.
-        payload = _clip(prompts.QA_RENDER.format(questions=numbered, answers=qa_res.final),
-                        QA_MAX_CHARS, prompts.QA_CLIP_MARKER)
-    else:
-        payload = prompts.QA_DEAD_MARKER
-    return payload, qa_meter
+def _blurb_layer(blurb):
+    """The predecessor's J-space workspace readout, its own delimited layer after
+    the note (note_jspace arm)."""
+    return {"role": "user", "content": prompts.JSPACE_PREAMBLE.format(blurb=blurb)}
 
 
 def _logs_layer(logs):
@@ -231,35 +189,33 @@ def _ledger(role, meter, slice_budget, work_budget, res, wrapup_calls):
                 overrun=max(0, meter.completion - slice_budget))
 
 
-def _abort(result_kw, shifts, payloads, per_shift, qa_payloads=()):
+def _abort(result_kw, shifts, payloads, per_shift):
     """The USD safety cap tripped mid-run: publish an honest UNKNOWN."""
     return RelayResult(final="FINAL ANSWER: UNKNOWN", shifts=shifts, payloads=payloads,
-                       qa_payloads=list(qa_payloads), per_shift=per_shift,
-                       committed=True, budget_exceeded=True, **result_kw)
+                       per_shift=per_shift, committed=True, budget_exceeded=True,
+                       **result_kw)
 
 
 def run_relay(task_prompt, tool_names, client, model, *, n, arm="note",
-              total_budget=DEFAULT_TOTAL_BUDGET, usd_budget=None,
-              task_id=None) -> RelayResult:
+              total_budget=DEFAULT_TOTAL_BUDGET, usd_budget=None) -> RelayResult:
     if arm not in ARMS:
         raise ValueError(f"unknown arm {arm!r}; have {ARMS}")
     slice_budget = total_budget // n
     result_kw = dict(arm=arm, n=n, slice_budget=slice_budget)
-    # QA arms sample questions seeded by (task_id, shift); a stable fallback keeps
-    # direct run_relay callers (tests) deterministic too.
-    qa_task_id = task_id if task_id is not None else task_prompt[:64]
 
-    shifts, payloads, qa_payloads, per_shift, logs = [], [], [], [], []
-    prev_note = prev_qa = None
+    shifts, payloads, per_shift, logs = [], [], [], []
+    blurbs, blurb_meta = [], []
+    prev_note, prev_blurb = None, None
+    note_mode = arm in NOTE_ARMS
     for i in range(n):
         is_last = i == n - 1
         role = f"shift_{i + 1}"
         meter = TokenMeter()
         ctx = [_task_layer(task_prompt)]
-        if arm in NOTE_ARMS and prev_note is not None:
+        if note_mode and prev_note is not None:
             ctx.append(_note_layer(prev_note))
-            if arm in QA_ARMS and prev_qa is not None:
-                ctx.append(_qa_layer(prev_qa, arm))
+            if arm == "note_jspace" and prev_blurb:
+                ctx.append(_blurb_layer(prev_blurb))
         elif arm == "transcript" and logs:
             ctx.append(_logs_layer(logs))
 
@@ -269,7 +225,7 @@ def run_relay(task_prompt, tool_names, client, model, *, n, arm="note",
         if is_last:
             reserve = COMMIT_RESERVE
         else:
-            reserve = NOTE_RESERVE if arm in NOTE_ARMS else 0
+            reserve = NOTE_RESERVE if note_mode else 0
         # Scale down at small slices (high N / low budget): the reserve must never
         # eat the whole slice, or high-N shifts would do zero work by construction.
         reserve = min(reserve, slice_budget // 2)
@@ -280,7 +236,7 @@ def run_relay(task_prompt, tool_names, client, model, *, n, arm="note",
         if usd_budget is not None and usd_budget.exceeded:
             shifts.append(res)
             per_shift.append(_ledger(role, meter, slice_budget, work_budget, res, 0))
-            return _abort(result_kw, shifts, payloads, per_shift, qa_payloads)
+            return _abort(result_kw, shifts, payloads, per_shift)
 
         if is_last:
             # The terminal shift must commit. If its loop ended without a FINAL
@@ -303,14 +259,14 @@ def run_relay(task_prompt, tool_names, client, model, *, n, arm="note",
                                      fin.n_steps - steps_before))
             committed = fin.has_final_answer or fin.finish == "stop"
             return RelayResult(final=fin.final, shifts=shifts, payloads=payloads,
-                               qa_payloads=qa_payloads, per_shift=per_shift,
-                               committed=committed,
+                               blurbs=blurbs, blurb_meta=blurb_meta,
+                               per_shift=per_shift, committed=committed,
                                budget_exceeded=bool(usd_budget and usd_budget.exceeded),
                                **result_kw)
 
         # Non-terminal shift: NO early finish — even a shift that already wrote a
         # FINAL ANSWER line hands off (its claim crosses inside the payload).
-        if arm in NOTE_ARMS:
+        if note_mode:
             steps_before = res.n_steps
             note_res = continue_agent(res, prompts.HANDOFF_REQUEST, client, model,
                                       meter=meter, slice_budget=slice_budget,
@@ -327,23 +283,23 @@ def run_relay(task_prompt, tool_names, client, model, *, n, arm="note",
                     payload += prompts.NOTE_CLIP_MARKER
             else:
                 payload = prompts.TRUNCATED_MARKER
-            led = _ledger(role, meter, slice_budget, work_budget, note_res,
-                          note_res.n_steps - steps_before)
-            if arm in QA_ARMS:
-                # The hand-off Q&A, asked in the SAME conversation the shift worked
-                # in (continue_agent appends to note_res.transcript, so the stored
-                # shift transcript carries the Q&A turns too). Extra-budget: its own
-                # meter, ledgered under qa_* — never charged to the relay budget.
-                qa_payload, qa_meter = _run_handoff_qa(
-                    note_res, arm, qa_task_id, i + 1, client, model, usd_budget)
-                led.update(qa_calls=qa_meter.calls, qa_completion=qa_meter.completion,
-                           qa_prompt=qa_meter.prompt)
-                qa_payloads.append(qa_payload)
-                prev_qa = qa_payload
             shifts.append(note_res)      # note_res.transcript is the full shift incl. the note
-            per_shift.append(led)
+            per_shift.append(_ledger(role, meter, slice_budget, work_budget, note_res,
+                                     note_res.n_steps - steps_before))
             payloads.append(payload)
             prev_note = payload
+            if arm == "note_jspace":
+                # Extract the J-space readout from A's FULL realized transcript
+                # (prompt + everything generated, incl. the note it just wrote).
+                # Never fatal: on extractor failure B gets the plain note and the
+                # error lands in blurb_meta / the trace.
+                import jclient
+                from tools import tool_specs
+                blurb, meta = jclient.extract(note_res.transcript,
+                                              tools=tool_specs(tool_names))
+                blurbs.append(blurb)
+                blurb_meta.append(meta)
+                prev_blurb = blurb
         else:
             log = render_own_log(res.transcript)
             shifts.append(res)
@@ -352,6 +308,6 @@ def run_relay(task_prompt, tool_names, client, model, *, n, arm="note",
             logs.append(log)
 
         if usd_budget is not None and usd_budget.exceeded:
-            return _abort(result_kw, shifts, payloads, per_shift, qa_payloads)
+            return _abort(result_kw, shifts, payloads, per_shift)
 
     raise AssertionError("unreachable: the terminal shift always returns")

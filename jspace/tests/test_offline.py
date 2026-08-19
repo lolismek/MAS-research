@@ -229,102 +229,10 @@ def test_wrapup_nudge():
 
 
 # --- 4b. hand-off Q&A arms (note_randq / note_epiq) ----------------------------
-def test_qa_sampling_deterministic():
-    a = relay.sample_questions("note_randq", "fanout_003", 1)
-    b = relay.sample_questions("note_randq", "fanout_003", 1)
-    check("qa sample: deterministic for (task,shift)", a == b, (a, b))
-    check("qa sample: k=3 distinct, from the randq pool",
-          len(a) == relay.QA_K == len(set(a)) and all(q in prompts.RANDQ_POOL for q in a))
-    check("qa sample: varies with task",
-          relay.sample_questions("note_randq", "fanout_004", 1) != a)
-    check("qa sample: varies with shift",
-          relay.sample_questions("note_randq", "fanout_003", 2) != a)
-    e = relay.sample_questions("note_epiq", "fanout_003", 1)
-    check("qa sample: epiq pool", all(q in prompts.EPIQ_POOL for q in e))
 
 
-def test_qa_arm_plumbing():
-    script = [
-        reply(content="Found X=1."),                              # shift1 solve
-        reply(content="Note: X=1 established."),                  # shift1 hand-off note
-        reply(content="1. The sea.\n2. Gyroscopes.\n3. Kale."),   # shift1 Q&A (same ctx)
-        reply(content="FINAL ANSWER: 1"),                         # shift2 commits
-    ]
-    c = FakeClient(script)
-    res = run_relay("what is x?", [], c, "m", n=2, arm="note_randq",
-                    total_budget=8000, task_id="fanout_003")
-    qs = relay.sample_questions("note_randq", "fanout_003", 1)
-    # the Q&A ran INSIDE shift1's work context: same conversation as task+note
-    qa_ctx = _msgs_text(c.requests[2])
-    check("qa: asked in A's work context",
-          "what is x?" in qa_ctx and "Found X=1." in qa_ctx
-          and "hand-off" in qa_ctx and qs[0] in qa_ctx)
-    check("qa: request tool-less and capped at QA_BUDGET",
-          c.requests[2].get("tools") is None
-          and c.requests[2]["max_tokens"] <= relay.QA_BUDGET)
-    # the successor sees note AND Q&A, each framed in its own layer
-    b_ctx = _msgs_text(c.requests[3])
-    check("qa: successor got the note", "handoff_note" in b_ctx
-          and "Note: X=1 established." in b_ctx)
-    check("qa: successor got the Q&A framed",
-          "state of mind" in b_ctx and "Gyroscopes." in b_ctx and qs[0] in b_ctx)
-    check("qa: payloads split (note vs qa)",
-          res.payloads == ["Note: X=1 established."]
-          and len(res.qa_payloads) == 1 and "Gyroscopes." in res.qa_payloads[0]
-          and all(q in res.qa_payloads[0] for q in qs))
-    # budget separation: the relay ledger never bills the Q&A tokens
-    led = res.per_shift[0]
-    check("qa: metered outside the relay budget",
-          led["completion"] == 400 and led["qa_completion"] == 200
-          and led["qa_calls"] == 1, led)
-    check("qa: shift transcript keeps the Q&A turns (audit)",
-          any(qs[0] in (m.get("content") or "") for m in res.shifts[0].transcript))
-    check("qa: no Q&A layer on shift 1 itself", "state of mind" not in _msgs_text(c.requests[0]))
 
 
-def test_qa_epiq_framing():
-    script = [
-        reply(content="working"),                                 # shift1 solve
-        reply(content="Note text."),                              # note
-        reply(content="1. I assume the source is current."),      # epiq answers
-        reply(content="FINAL ANSWER: UNKNOWN"),                   # shift2
-    ]
-    c = FakeClient(script)
-    res = run_relay("q", [], c, "m", n=2, arm="note_epiq", total_budget=8000,
-                    task_id="t9")
-    b_ctx = _msgs_text(c.requests[3])
-    check("epiq: successor framing", "reflective questions" in b_ctx
-          and "I assume the source is current." in b_ctx)
-    check("epiq: questions from the epiq pool crossed",
-          all(q in res.qa_payloads[0] for q in relay.sample_questions("note_epiq", "t9", 1)))
-
-
-def test_qa_clip_and_dead_marker():
-    long_answers = "y" * (relay.QA_MAX_CHARS + 800)
-    script = [
-        reply(content="working"), reply(content="note."), reply(content=long_answers),
-        reply(content="FINAL ANSWER: UNKNOWN"),
-    ]
-    c = FakeClient(script)
-    res = run_relay("q", [], c, "m", n=2, arm="note_randq", total_budget=8000, task_id="t1")
-    check("qa clip: at QA_MAX_CHARS, marked",
-          res.qa_payloads[0].endswith(prompts.QA_CLIP_MARKER)
-          and len(res.qa_payloads[0]) == relay.QA_MAX_CHARS + len(prompts.QA_CLIP_MARKER))
-    # a shift that never answers -> the dead marker crosses, framed for B
-    c2 = FakeClient([
-        reply(content="working"), reply(content="note."),
-        reply(content=None, fr="length"), reply(content=None, fr="length"),
-        reply(content=None, fr="length"),
-        reply(content="FINAL ANSWER: UNKNOWN"),
-    ])
-    res2 = run_relay("q", [], c2, "m", n=2, arm="note_randq", total_budget=8000, task_id="t1")
-    check("qa dead: marker crosses", res2.qa_payloads == [prompts.QA_DEAD_MARKER])
-    check("qa dead: marker framed for successor",
-          prompts.QA_DEAD_MARKER in _msgs_text(c2.requests[5]))
-    check("qa dead: note still crossed normally", res2.payloads == ["note."])
-
-
-# --- 5. scoring ---------------------------------------------------------------
 def test_scoring():
     gold = json.dumps(["Steven Spielberg", "1,234,567", "J. J. Abrams"])
     ans = "The directors were Steven Spielberg and J.J. Abrams; population 1234567."
@@ -394,10 +302,6 @@ if __name__ == "__main__":
     test_terminal_commit_retry()
     test_transcript_arm()
     test_wrapup_nudge()
-    test_qa_sampling_deterministic()
-    test_qa_arm_plumbing()
-    test_qa_epiq_framing()
-    test_qa_clip_and_dead_marker()
     test_scoring()
     test_fact_survival()
     print(f"OK — {len(PASS)} checks passed")
