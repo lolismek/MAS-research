@@ -49,7 +49,7 @@ LENS_REPO = "neuronpedia/jacobian-lens"
 LENS_REV = "qwen-n1000"
 LENS_FILE = "qwen3.5-4b/jlens/Salesforce-wikitext/Qwen3.5-4B_jacobian_lens_n1000.pt"
 
-DEV = "cuda:0"
+DEV = os.environ.get("JSPACE_DEVICE", "cuda:0")
 
 # --- stop/noise vocabulary for the noise filter ------------------------------
 _STOPWORDS = {

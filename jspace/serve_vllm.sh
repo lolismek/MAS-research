@@ -12,5 +12,6 @@ exec vllm serve Qwen/Qwen3.5-4B \
     --gpu-memory-utilization 0.55 \
     --max-model-len 65536 \
     --max-num-seqs 16 \
+    --limit-mm-per-prompt '{"image": 0, "video": 0}' \
     --enable-auto-tool-choice \
     --tool-call-parser hermes
