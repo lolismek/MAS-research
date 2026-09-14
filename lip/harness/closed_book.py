@@ -33,7 +33,45 @@ def run_task(t, c):
                         finish=r["finish"], completion_tokens=r["completion_tokens"]))
     return dict(id=t["id"], gold=t["answer"], samples=out, n_correct=sum(o["correct"] for o in out))
 
+def rerun_truncated(max_tokens=20000):
+    """Re-sample, with a larger output cap, every truncated (finish=length) sample of tasks currently kept,
+    so a task is not kept merely because the model ran out of thinking room."""
+    tasks = {t["id"]: t for t in (json.loads(l) for l in open(os.path.join(DATA, "tasks.jsonl")))}
+    outp = os.path.join(DATA, "closed_book.jsonl")
+    recs = [json.loads(l) for l in open(outp)]
+    c = TinkerChat(max_tokens=max_tokens)
+    def fix(rec):
+        if rec["n_correct"] >= 2: return rec
+        t = tasks[rec["id"]]
+        for s, smp in enumerate(rec["samples"]):
+            if smp.get("finish") != "length": continue
+            r = c.chat([{"role": "system", "content": SYS}, {"role": "user", "content": t["question"]}], tag=f"cb2/{t['id']}/{s}")
+            ans = final_answer(r["content"])
+            sc = score(t["question"], t["answer"], ans, tag=f"cbj2/{t['id']}/{s}")
+            rec["samples"][s] = dict(answer=ans, correct=sc["correct"], em=sc["em"], judge=sc["judge"], reason=sc["reason"],
+                                     finish=r["finish"], completion_tokens=r["completion_tokens"], rerun=True)
+        rec["n_correct"] = sum(o["correct"] for o in rec["samples"])
+        return rec
+    n = sum(1 for r in recs if r["n_correct"] < 2 for s in r["samples"] if s.get("finish") == "length")
+    print(f"rerun: {n} truncated samples in kept tasks", flush=True)
+    with ThreadPoolExecutor(8) as ex: recs = list(ex.map(fix, recs))
+    with open(outp, "w") as f:
+        for r in recs: f.write(json.dumps(r) + "\n")
+    still = sum(1 for r in recs if r["n_correct"] < 2 for s in r["samples"] if s.get("finish") == "length")
+    print(f"still truncated: {still}", flush=True)
+    write_screened(tasks, recs)
+
+def write_screened(tasks, recs):
+    keep = {r["id"] for r in recs if r["n_correct"] < 2}
+    with open(os.path.join(DATA, "tasks_screened.jsonl"), "w") as f:
+        for tid, t in tasks.items():
+            if tid in keep: f.write(json.dumps(t) + "\n")
+    from collections import Counter
+    print("n_correct distribution:", dict(sorted(Counter(r["n_correct"] for r in recs).items())))
+    print(f"kept {len(keep)}/{len(tasks)}  spend ${spend('cb'):.3f}", flush=True)
+
 def main():
+    if "--rerun-truncated" in sys.argv: return rerun_truncated()
     tasks = [json.loads(l) for l in open(os.path.join(DATA, "tasks.jsonl"))]
     outp = os.path.join(DATA, "closed_book.jsonl")
     done = {json.loads(l)["id"] for l in open(outp)} if os.path.exists(outp) else set()
@@ -45,13 +83,7 @@ def main():
             f.write(json.dumps(rec) + "\n"); f.flush()
             if (i + 1) % 20 == 0: print(f"  {i+1}/{len(todo)}  spend ${spend('cb'):.3f}", flush=True)
     recs = [json.loads(l) for l in open(outp)]
-    keep = {r["id"] for r in recs if r["n_correct"] < 2}
-    with open(os.path.join(DATA, "tasks_screened.jsonl"), "w") as f:
-        for t in tasks:
-            if t["id"] in keep: f.write(json.dumps(t) + "\n")
-    from collections import Counter
-    print("n_correct distribution:", dict(sorted(Counter(r["n_correct"] for r in recs).items())))
-    print(f"kept {len(keep)}/{len(tasks)}  spend ${spend('cb'):.3f}", flush=True)
+    write_screened({t["id"]: t for t in tasks}, recs)
 
 if __name__ == "__main__":
     main()

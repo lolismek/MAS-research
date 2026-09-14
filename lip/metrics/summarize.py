@@ -72,7 +72,7 @@ def summarize_arms(arms):
         for r in runs:
             t = tasks.get(r["task_id"]);
             if not t: continue
-            gts = [gmap.get(url_to_title(u), url_to_title(u)) for u in t["gold_links"]]
+            gts = [gmap.get(g, g) for g in t.get("gold_titles") or [url_to_title(u) for u in t["gold_links"]]]
             fbl = found_but_lost(r, gts)
             n_gold += len(fbl); n_found += sum(bool(x["opened_by"]) for x in fbl); n_lost_any += sum(bool(x["lost_at"]) for x in fbl)
             allf = all(x["opened_by"] for x in fbl)

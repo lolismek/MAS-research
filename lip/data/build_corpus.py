@@ -22,7 +22,7 @@ API = "https://en.wikipedia.org/w/api.php"
 UA = "lip-relay-research/0.1 (alex.jerpelea@gmail.com) python-requests"
 PIN = "2024-08-01T00:00:00Z"
 N_NEIGHBORS = int(os.environ.get("N_NEIGHBORS", "40000"))
-WORKERS = 4
+WORKERS = int(os.environ.get("WORKERS", "4"))
 
 _tls = threading.local()
 def sess():
@@ -53,6 +53,24 @@ def slug(title):
 def url_to_title(u):
     t = unquote(u.split("/wiki/", 1)[1]) if "/wiki/" in u else u
     return t.split("#")[0].replace("_", " ").strip()
+
+_ANNOT = re.compile(r"\s*\((NOT REQUIRED|OPTIONAL)[^)]*\)\s*", re.I)
+
+def parse_links(links):
+    """FRAMES wiki_links entries -> list of page titles. Handles strings that pack several URLs
+    ("A, https://.../B, https://.../C"), index.php?title=X URLs, and annotations. Unresolvable entries
+    (Special:Search, w.wiki short links) are dropped."""
+    out = []
+    for raw in links:
+        for part in re.split(r",\s*(?=https?://)", raw.strip()):
+            part = _ANNOT.sub("", part).strip().rstrip(",").strip()
+            if not part: continue
+            if "Special:Search" in part or "w.wiki/" in part: continue
+            m = re.search(r"index\.php\?(?:.*&)?title=([^&]+)", part)
+            if m: part = unquote(m.group(1))
+            t = url_to_title(part)
+            if t and t not in out: out.append(t)
+    return out
 
 # ---------------------------------------------------------------- HTML -> text
 DROP_SEL = ["style", "script", "sup.reference", ".mw-editsection", ".navbox", ".vertical-navbox",
@@ -112,15 +130,21 @@ def fetch_gold(title):
     if pg.get("missing") or "revisions" not in pg:
         return dict(requested=title, missing=True)
     rev = pg["revisions"][0]
-    p = get(dict(action="parse", oldid=rev["revid"], prop="text|links", disabletoc=1, disableeditsection=1))["parse"]
+    j = get(dict(action="parse", oldid=rev["revid"], prop="text|links", disabletoc=1, disableeditsection=1))
+    pinned = True
+    if "parse" not in j:            # e.g. revision-deleted text: fall back to the current revision, flagged
+        j = get(dict(action="parse", page=pg["title"], prop="text|links|revid", disabletoc=1, disableeditsection=1))
+        pinned = False
+        if "parse" not in j: return dict(requested=title, missing=True, error=str(j.get("error"))[:200])
+    p = j["parse"]
     links = [l["title"] for l in p.get("links", []) if l.get("ns") == 0 and l.get("exists", True)]
-    return dict(requested=title, title=pg["title"], pageid=pg.get("pageid"), revid=rev["revid"],
-                timestamp=rev["timestamp"], text=html_to_text(p["text"]), links=links, kind="gold")
+    return dict(requested=title, title=pg["title"], pageid=pg.get("pageid"), revid=rev["revid"] if pinned else p.get("revid"),
+                timestamp=rev["timestamp"] if pinned else None, pinned=pinned, text=html_to_text(p["text"]), links=links, kind="gold")
 
 def stage_gold():
     import pandas as pd
     df = pd.read_csv(os.path.join(HERE, "frames_raw.csv"))
-    titles = sorted({url_to_title(u) for ls in df.wiki_links.map(ast.literal_eval) for u in ls})
+    titles = sorted({t for ls in df.wiki_links.map(ast.literal_eval) for t in parse_links(ls)})
     os.makedirs(os.path.join(CORPUS, "gold"), exist_ok=True)
     todo = [t for t in titles if not os.path.exists(os.path.join(CORPUS, "gold", slug(t) + ".json"))]
     print(f"gold: {len(titles)} unique titles, {len(todo)} to fetch", flush=True)
