@@ -36,8 +36,19 @@ Rules:
 
 {TOOLS}"""
 
-def system_prompt(N, K):
-    return RULES.format(N=N, K=K, TOOLS=tools_to_prompt(TOOL_SPECS))
+BRIEFING_RULE = ("- Use only information obtained through the tools in this relay or stated in your briefing (if you have one). "
+                 "Do not answer from memory or guess.")
+BRIEFING = "\n\n# Briefing\n{B}"
+
+def system_prompt(N, K, briefing=None, briefing_mode=False):
+    """briefing_mode: internal-belief experiment (rule line admits a briefing; same wording for every agent in every arm).
+    briefing: this agent's private briefing text (None = this agent holds nothing)."""
+    s = RULES.format(N=N, K=K, TOOLS=tools_to_prompt(TOOL_SPECS))
+    if briefing_mode or briefing:
+        s = s.replace("- Use only information obtained through the tools in this relay. Do not answer from memory or guess.", BRIEFING_RULE)
+    if briefing:
+        s += BRIEFING.format(B=briefing.strip())
+    return s
 
 def user_prompt(question, i, N, K, incoming):
     s = f"Question: {question}\n\nYou are agent {i} of {N}. You have {K} tool calls."
@@ -85,9 +96,9 @@ def _final_from_text(text):
         if m and m.group(1).strip(): return m.group(1).strip().strip("*").strip()
     return None
 
-def run_agent(i, N, K, question, incoming, chat, corpus, tag):
+def run_agent(i, N, K, question, incoming, chat, corpus, tag, briefing=None, briefing_mode=False):
     """Execute one agent. Returns dict(handoff, final, steps, messages, ...)."""
-    msgs = [{"role": "system", "content": system_prompt(N, K)},
+    msgs = [{"role": "system", "content": system_prompt(N, K, briefing=briefing, briefing_mode=briefing_mode)},
             {"role": "user", "content": user_prompt(question, i, N, K, incoming)}]
     steps, used, nudges, final, handoff, seen, handoff_invalid, bad_finishes = [], 0, 0, None, None, set(), False, 0
     cost = tokens_in = tokens_out = 0
@@ -155,7 +166,7 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
                     steps.append(dict(kind="turn", reasoning=r["reasoning"], text=r["content"], raw=r["raw_content"],
                                       tool_calls=r["tool_calls"], finish_reason=r["finish"], result=f"finish({final!r})"))
                     msgs.append({"role": "assistant", "content": r["raw_content"]})
-                    return _agent_record(i, incoming, None, handoff_invalid, final, used, nudges, steps, msgs, cost, tokens_in, tokens_out, t0)
+                    return _agent_record(i, incoming, None, handoff_invalid, final, used, nudges, steps, msgs, cost, tokens_in, tokens_out, t0, briefing)
                 r["content"] = ans                      # a message stuffed into finish(): use it as the message
             handoff = _strip_delims((r["content"] or "").strip())
             steps.append(dict(kind="handoff", reasoning=r["reasoning"], text=handoff, finish_reason=r["finish"]))
@@ -190,10 +201,11 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
                 lines = [l.strip() for l in (steps[-1]["text"] or "").splitlines() if l.strip()]
                 final = (lines[-1] if lines else "")[:300]
                 steps[-1]["fallback"] = True
-    return _agent_record(i, incoming, handoff, handoff_invalid, final, used, nudges, steps, msgs, cost, tokens_in, tokens_out, t0)
+    return _agent_record(i, incoming, handoff, handoff_invalid, final, used, nudges, steps, msgs, cost, tokens_in, tokens_out, t0, briefing)
 
-def _agent_record(i, incoming, handoff, handoff_invalid, final, used, nudges, steps, msgs, cost, tokens_in, tokens_out, t0):
+def _agent_record(i, incoming, handoff, handoff_invalid, final, used, nudges, steps, msgs, cost, tokens_in, tokens_out, t0, briefing=None):
     return dict(agent=i, incoming=incoming, handoff=handoff, handoff_invalid=handoff_invalid, final=final, tool_calls_used=used, nudges=nudges,
+                briefing=briefing,
                 steps=steps, messages=msgs, cost=cost, tokens_in=tokens_in, tokens_out=tokens_out,
                 seconds=round(time.time() - t0, 1),
                 opened=[s["result"]["title"] for s in steps if s.get("kind") == "turn" and s.get("tool_calls")
@@ -201,17 +213,23 @@ def _agent_record(i, incoming, handoff, handoff_invalid, final, used, nudges, st
                 searches=[s["tool_calls"][0]["args"].get("query", "") for s in steps if s.get("kind") == "turn"
                           and s.get("tool_calls") and s["tool_calls"][0]["name"] == "search"])
 
-def run_relay(task, N, K, chat, corpus, tag, incoming=None, start_agent=1, prefix_agents=None):
+def run_relay(task, N, K, chat, corpus, tag, incoming=None, start_agent=1, prefix_agents=None, briefing=None, holders=()):
+    """briefing/holders: internal-belief experiment. Agents whose index is in `holders` get `briefing` in their
+    system prompt; every agent gets the briefing-aware rule line (briefing_mode) so arms differ only in who holds it.
+    The briefing never enters steps, so render_prefix/spans (the oracle's view) do not contain it."""
     agents = list(prefix_agents or [])
     assert len(agents) == start_agent - 1
+    holders = set(holders or ()); briefing_mode = briefing is not None
     t0 = time.time(); final = None
     for i in range(start_agent, N + 1):
-        a = run_agent(i, N, K, task["question"], incoming, chat, corpus, tag)
+        a = run_agent(i, N, K, task["question"], incoming, chat, corpus, tag,
+                      briefing=(briefing if i in holders else None), briefing_mode=briefing_mode)
         agents.append(a)
         if a["final"] is not None:
             final = a["final"]; break
         incoming = a["handoff"]
     return dict(task_id=task["id"], question=task["question"], gold=task["answer"], N=N, K=K,
+                briefing=briefing, holders=sorted(holders),
                 start_agent=start_agent, final=final, finished_by=agents[-1]["agent"] if final is not None else None,
                 agents=agents, cost=sum(a["cost"] for a in agents[start_agent - 1:]),
                 tokens_in=sum(a["tokens_in"] for a in agents[start_agent - 1:]),
