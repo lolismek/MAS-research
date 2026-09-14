@@ -247,15 +247,16 @@ def render_prefix(agents):
         out.append("")
     return "\n".join(out)
 
-def spans(agents):
-    """{span_id: text} for every citable span, same ids as render_prefix."""
+def spans(agents, thinking=True):
+    """{span_id: text} for every citable span, same ids as render_prefix. thinking=False drops the reasoning
+    (tool call + result / message text only): the source allowed for factual sentences."""
     d = {}
     for a in agents:
         i = a["agent"]; n = 0
         for s in a["steps"]:
             if s["kind"] == "turn":
                 n += 1
-                parts = [s.get("reasoning") or ""]
+                parts = [s.get("reasoning") or ""] if thinking else []
                 if s.get("tool_calls"):
                     tc = s["tool_calls"][0]
                     parts.append(f"{tc['name']}({json.dumps(tc['args'], ensure_ascii=False)})")
@@ -264,5 +265,5 @@ def spans(agents):
                     parts.append(s.get("text") or "")
                 d[f"a{i}.s{n}"] = "\n".join(p for p in parts if p)
             elif s["kind"] == "handoff":
-                d[f"a{i}.h"] = "\n".join(p for p in [s.get("reasoning") or "", s.get("text") or ""] if p)
+                d[f"a{i}.h"] = "\n".join(p for p in [(s.get("reasoning") or "") if thinking else "", s.get("text") or ""] if p)
     return d

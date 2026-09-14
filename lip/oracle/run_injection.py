@@ -30,9 +30,9 @@ def failed_run(task_id, arm="relay"):
             if tr.get("correct") is False and not tr.get("error") and len(tr["agents"]) >= 2: return tr
     return None
 
-def run_one(task, M, chat, corpus, conds, skip_done):
-    base = os.path.join(TRACES, "inj", task["id"]); os.makedirs(base, exist_ok=True)
-    tr = failed_run(task["id"])
+def run_one(task, M, chat, corpus, conds, skip_done, arm="relay", out="inj"):
+    base = os.path.join(TRACES, out, task["id"]); os.makedirs(base, exist_ok=True)
+    tr = failed_run(task["id"], arm)
     if tr is None: return dict(id=task["id"], skipped="no failed run with >=2 agents")
     op = os.path.join(base, "oracle.json")
     if os.path.exists(op) and skip_done:
@@ -40,6 +40,8 @@ def run_one(task, M, chat, corpus, conds, skip_done):
     else:
         oo = enhance(tr, tag=f"oracle/{task['id']}")
         oo["source_run"] = tr.get("run"); json.dump(oo, open(op, "w"), indent=1, ensure_ascii=False)
+    if oo.get("declined"):
+        return dict(id=task["id"], skipped="oracle declined: " + str(oo.get("why"))[:160], cost=oo.get("cost", 0))
     if not oo.get("i") or not oo.get("kept_text"):
         return dict(id=task["id"], skipped=f"oracle: i={oo.get('i')} kept={oo.get('n_kept')}", cost=oo.get("cost", 0))
     cm = conditions(tr, oo)
@@ -70,16 +72,18 @@ def main():
     ap.add_argument("--conds", default=",".join(CONDS)); ap.add_argument("--skip-done", action="store_true")
     ap.add_argument("--tasks", default=os.path.join(DATA, "tasks_screened.jsonl")); ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--budget", type=float, default=5.0)
+    ap.add_argument("--arm", default="relay", help="arm whose failed runs are the source traces")
+    ap.add_argument("--out", default="inj", help="traces subdir for this injection experiment")
     a = ap.parse_args()
     tasks = load_tasks(a.tasks)
-    ids = [t for t in tasks if failed_run(t)] if a.all else a.ids
+    ids = [t for t in tasks if failed_run(t, a.arm)] if a.all else a.ids
     if a.limit: ids = ids[:a.limit]
     conds = a.conds.split(",")
     print(f"injection: {len(ids)} tasks, M={a.m}, conds={conds}", flush=True)
     chat, corpus = TinkerChat(), Corpus.get(); spend0 = spend()
     def job(tid):
         if spend() - spend0 > a.budget: return dict(id=tid, skipped="budget")
-        return run_one(tasks[tid], a.m, chat, corpus, conds, a.skip_done)
+        return run_one(tasks[tid], a.m, chat, corpus, conds, a.skip_done, a.arm, a.out)
     with ThreadPoolExecutor(a.workers) as ex:
         for r in ex.map(job, ids):
             print("  " + json.dumps(r) + f"  | total ${spend():.2f}", flush=True)

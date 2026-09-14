@@ -89,10 +89,10 @@ def summarize_arms(arms):
                   f"| seen-then-absent-from-handoff {n_lost_any/n_gold:.2f} | runs with all gold seen {tasks_all_found/len(runs):.2f} "
                   f"| failed runs with all gold seen {tasks_fail_allfound}/{tasks_fail}")
 
-def summarize_inj():
+def summarize_inj(inj="inj"):
     from collections import Counter
     rows = defaultdict(dict); inv = Counter()
-    for p in glob.glob(os.path.join(TRACES, "inj", "*", "*", "run_*", "run.json")):
+    for p in glob.glob(os.path.join(TRACES, inj, "*", "*", "run_*", "run.json")):
         r = json.load(open(p))
         if r.get("error"): continue
         rows[r["task_id"]].setdefault(r["condition"], []).append(bool(r["correct"]))
@@ -113,13 +113,16 @@ def summarize_inj():
             s = [d[rng.randrange(len(d))] for _ in d]; bs.append(sum(s) / len(s))
         bs.sort()
         print(f"  enhanced - original: {mean:+.3f}  95% CI [{bs[50]:+.3f}, {bs[1949]:+.3f}]  (n={len(d)} tasks)")
-    oc = [json.load(open(p)) for p in glob.glob(os.path.join(TRACES, "inj", "*", "oracle.json"))]
+    oc = [json.load(open(p)) for p in glob.glob(os.path.join(TRACES, inj, "*", "oracle.json"))]
     if oc:
         kept = sum(o.get("n_kept", 0) for o in oc); tot = sum(o.get("n_total", 0) for o in oc)
-        print(f"  oracle: {len(oc)} calls, i distribution {dict(Counter(o.get('i') for o in oc))}, grounding kept {kept}/{tot}")
+        dec = sum(bool(o.get("declined")) for o in oc)
+        kinds = Counter((a.get("kind"), a.get("kept")) for o in oc for a in o.get("addendum", []))
+        print(f"  oracle: {len(oc)} calls, declined {dec}, i distribution {dict(Counter(o.get('i') for o in oc))}, grounding kept {kept}/{tot}, (kind, kept) {dict(kinds)}")
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--inj", action="store_true"); ap.add_argument("--arms", default="relay,ceiling")
+    ap.add_argument("--inj-dir", default="inj")
     a = ap.parse_args()
-    if a.inj: summarize_inj()
+    if a.inj: summarize_inj(a.inj_dir)
     else: summarize_arms(a.arms.split(","))

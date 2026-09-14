@@ -48,4 +48,28 @@ assert cm["i"] == 2 and cm["original"] == "Look for the Sports singer." and cm["
 assert "Additional notes" in cm["random"] and len(cm["random"]) >= len(cm["original"]) and "a1.s2 result" in cm["passthrough"]
 assert "a2.s1" not in cm["passthrough"] and "guess" not in cm["passthrough"] and "guess" not in cm["random"]   # suffix never leaks
 print("PASS conditions: original/enhanced/random/passthrough, no suffix leak")
-print("3 checks passed")
+# decline
+class Decliner:
+    def ask(self, prompt, system=None, tag="", effort=None):
+        return dict(text=json.dumps({"i": None, "why": "nothing was retrieved", "addendum": []}), cost=0.01)
+od = enhance(trace, oracle=Decliner(), grounder=FakeGrounder())
+assert od["i"] is None and od.get("declined") and od["kept_text"] == "" and "error" not in od, od
+print("PASS enhance: oracle may decline")
+# kind-aware grounding: a 'fact' cited to a span sees no thinking; a 'note' does
+class KindOracle:
+    def ask(self, prompt, system=None, tag="", effort=None):
+        return dict(text=json.dumps({"i": 2, "why": "w", "addendum": [
+            {"text": "Agent 1 planned: I will search.", "cite": "a1.s1", "kind": "note"},
+            {"text": "Agent 1 planned: I will search.", "cite": "a1.s1", "kind": "fact"}]}), cost=0.01)
+class SeesThinking:
+    def __init__(self): self.seen = []
+    def ask(self, prompt, system=None, tag="", effort=None):
+        span = prompt.split("SOURCE SPAN")[1].split("SENTENCE:")[0]
+        self.seen.append("I will search." in span)
+        return dict(text=json.dumps({"supported": "I will search." in span, "reason": "x"}), cost=0.001)
+g = SeesThinking(); ok = enhance(trace, oracle=KindOracle(), grounder=g)
+assert g.seen == [True, False], g.seen
+assert [a["kept"] for a in ok["addendum"]] == [True, False], ok["addendum"]
+assert spans(agents, thinking=False)["a1.h"] == "Look for the Sports singer."
+print("PASS enhance: note sentences may ground in thinking, fact sentences may not")
+print("5 checks passed")

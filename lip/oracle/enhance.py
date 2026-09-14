@@ -27,6 +27,8 @@ that did not make it into the message it handed on, and that a later agent would
 
 Pick ONE handoff edge, from agent i-1 to agent i (2 <= i <= last agent), where adding such lost information to the
 message would most plausibly have changed the outcome. Then write an addendum for that message.
+If NOTHING useful was lost at any edge (e.g. the needed facts were never retrieved by any agent, or every fact seen
+was carried forward), say so: output {"i": null, "why": "<why nothing was lost>", "addendum": []}. Do not invent.
 
 Hard constraints on the addendum:
 - Every sentence must state something that appears in the trace BEFORE agent i (agents 1..i-1). You may use their
@@ -34,17 +36,25 @@ Hard constraints on the addendum:
   Do not compute or infer the final answer yourself; do not add facts the agents never saw.
 - Lost information can be: a fact seen but dropped; an alternative value or candidate that was seen and discarded;
   a doubt or uncertainty the agent had; a dead end (searches or pages that were tried and useless); a partial plan.
+- Two kinds of sentence, and you must label each:
+  "fact": a statement about the world. It must come from a TOOL RESULT (search result, snippet, opened page) or from
+  a previous agent's MESSAGE. An agent's thinking is NOT a source for facts: something an agent merely believed or
+  recalled from memory is not lost information, even if it is true.
+  "note": a statement about the agents' process: an uncertainty they voiced, a candidate they considered and
+  discarded, a search or page that was tried and useless, a plan. These may come from thinking.
 - Each sentence ends with a citation to the span it comes from, using the span ids in the trace: a{j}.s{n} for tool
   step n of agent j (its thinking, call and result), a{j}.h for agent j's handoff (thinking and message).
 - At most """ + str(MAX_WORDS) + """ words in total. Write it as plain notes a colleague would append to the message.
 
 Output JSON only:
 {"i": <int>, "why": "<one or two sentences: what was lost and why it mattered>",
- "addendum": [{"text": "<one sentence>", "cite": "a1.s3"}, ...]}"""
+ "addendum": [{"text": "<one sentence>", "cite": "a1.s3", "kind": "fact" | "note"}, ...]}"""
 
 GROUND_SYS = """You check whether a sentence is fully supported by a given source span from an agent's trace.
 Supported means: everything the sentence claims is stated in the span (possibly in different words). A sentence
 that adds facts not in the span, or that draws a conclusion the span does not state, is NOT supported.
+For a "fact" sentence the span contains only tool results and messages (no thinking); the fact must be stated there.
+For a "note" sentence (uncertainty, discarded candidate, dead end, plan) the span may include the agent's thinking.
 Reply with JSON only: {"supported": true or false, "reason": "<short>"}"""
 
 def _json(text):
@@ -65,16 +75,20 @@ def enhance(trace, oracle=None, grounder=None, tag="oracle"):
     cost = r["cost"]
     try: i = int(j.get("i"))
     except Exception: i = None
+    if j.get("i") is None and "why" in j:
+        return dict(i=None, why=j.get("why"), addendum=[], kept_text="", n_kept=0, n_total=0, cost=cost, raw=r["text"], declined=True)
     if i is None or i < 2 or i > last:
-        return dict(i=None, why=j.get("why"), addendum=[], kept_text="", cost=cost, raw=r["text"], error="bad i")
-    sp = spans(agents)
+        return dict(i=None, why=j.get("why"), addendum=[], kept_text="", n_kept=0, n_total=0, cost=cost, raw=r["text"], error="bad i")
+    sp = spans(agents); sp_fact = spans(agents, thinking=False)
     out = []
     for item in j.get("addendum", []):
         text, cite = str(item.get("text", "")).strip(), str(item.get("cite", "")).strip()
+        kind = "note" if str(item.get("kind", "fact")).lower().startswith("note") else "fact"
         m = re.match(r"a(\d+)\.(s\d+|h)$", cite)
-        rec = dict(text=text, cite=cite, in_prefix=bool(m) and int(m.group(1)) < i and cite in sp, supported=None, reason=None)
+        rec = dict(text=text, cite=cite, kind=kind, in_prefix=bool(m) and int(m.group(1)) < i and cite in sp, supported=None, reason=None)
         if rec["in_prefix"] and text:
-            g = grounder.ask(f"SOURCE SPAN ({cite}):\n<<<\n{sp[cite][:12000]}\n>>>\n\nSENTENCE:\n{text}\n\nJSON:",
+            src = (sp if kind == "note" else sp_fact).get(cite, "")
+            g = grounder.ask(f"SENTENCE KIND: {kind}\nSOURCE SPAN ({cite}):\n<<<\n{src[:12000]}\n>>>\n\nSENTENCE:\n{text}\n\nJSON:",
                              system=GROUND_SYS, tag=f"{tag}/ground")
             gj = _json(g["text"]) or {}
             rec["supported"] = bool(gj.get("supported")); rec["reason"] = gj.get("reason"); cost += g["cost"]

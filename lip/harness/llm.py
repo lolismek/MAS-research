@@ -69,7 +69,7 @@ def tools_to_prompt(tools):
     return "\n".join(lines)
 
 class TinkerChat:
-    def __init__(self, model=TINKER_MODEL, max_tokens=12000, timeout=300, retries=4):
+    def __init__(self, model=TINKER_MODEL, max_tokens=12000, timeout=150, retries=4):
         from openai import OpenAI
         self.c = OpenAI(api_key=os.environ["TINKER_API_KEY"], base_url=TINKER_BASE, timeout=timeout, max_retries=0)
         self.model, self.max_tokens, self.retries = model, max_tokens, retries
@@ -85,7 +85,10 @@ class TinkerChat:
             try:
                 r = self.c.chat.completions.create(**kw); break
             except Exception as e:
-                last = e; time.sleep(2 * (k + 1))
+                last = e
+                _log(dict(tag=tag, backend="tinker", model=self.model, prompt_tokens=0, completion_tokens=0, cost_usd=0.0,
+                          latency_s=round(time.time() - t0, 2), finish="error", error=str(e)[:200], attempt=k))
+                time.sleep(2 * (k + 1))
         else:
             raise RuntimeError(f"tinker failed after {self.retries} tries: {last}")
         lat = time.time() - t0
