@@ -40,10 +40,12 @@ Question qualifier stripped (gpt-5.5), kept as a one-sentence private belief abo
 140/155 kept; fields `question` = stripped, `original_question`, `belief`, `qualifier`, `qualifier_type`, `alt_reading`).
 Arms differ only in who holds the belief in its system prompt (`--holder none|first|all`; `last` available); every agent in
 every arm gets the briefing-aware rule line; the briefing never enters the oracle's rendered prefix. Judge sees the original question.
+Config 5x3 (K=3 lets an agent search, open and follow up; the belief must cross 4 handoffs); any agent may finish.
 ```
 python lip/internal/make_tasks.py --workers 8            # generation (done); --sample 20 prints a hand-check sample
-for h in none first all; do python lip/harness/run_task.py --holder $h --tasks lip/data/tasks_internal.jsonl \
-    --n 8 --k 2 --runs 3 --all --workers 8 --skip-done --budget 40; done
+zsh lip/run_internal_batch.sh                           # full batch: 3 arms in parallel at 5x3, 3 runs, retry passes, summary
+                                                         #   (logs lip/traces/batch_internal/; shares the CAP file + watchdog with run_batch.sh)
+python lip/harness/run_task.py --holder first --tasks lip/data/tasks_internal.jsonl --n 5 --k 3 frames_184   # single run
 python lip/internal/summarize.py                          # accuracy per arm, interpretation-lost rate, edge-1 externalization
 python lip/tests/test_internal_offline.py
 ```
