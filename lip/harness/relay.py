@@ -54,19 +54,22 @@ FINAL_PROMPT = ("Your tool budget is spent and you are the last agent. You must 
                 "answer to the question.")
 FINAL_REASK = "Call finish(answer) now: emit only the <tool_call> block."
 NUDGE = "You did not call a tool. Call exactly one tool now (search, open, or finish). Calls remaining: {r}."
+FREE_REASK = ("Reply with exactly one of: a finish(answer) <tool_call> block (if that is your final answer), or the single word CONTINUE.")
 CUTOFF_REASK = "Your message was cut off before it was written out. Write the complete message now, concisely, without further deliberation."
 
+_ANS = re.compile(r"^\W*(?:final\s+answer|answer)\W*:\s*(.+?)\W*$", re.I)
 def _final_from_text(text):
+    """Last 'FINAL ANSWER: x' / 'Answer: x' line, if any."""
     for line in reversed((text or "").splitlines()):
-        if "FINAL ANSWER" in line.upper() and ":" in line:
-            return line.split(":", 1)[1].strip()
+        m = _ANS.match(line.strip())
+        if m and m.group(1).strip(): return m.group(1).strip().strip("*").strip()
     return None
 
 def run_agent(i, N, K, question, incoming, chat, corpus, tag):
     """Execute one agent. Returns dict(handoff, final, steps, messages, ...)."""
     msgs = [{"role": "system", "content": system_prompt(N, K)},
             {"role": "user", "content": user_prompt(question, i, N, K, incoming)}]
-    steps, used, nudges, final, handoff = [], 0, 0, None, None
+    steps, used, nudges, final, handoff, seen = [], 0, 0, None, None, set()
     cost = tokens_in = tokens_out = 0
     t0 = time.time()
 
@@ -93,11 +96,14 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
             else:
                 res = corpus.open(tc["args"].get("title", ""), tc["args"].get("page", 1))
             obs = render(tc["name"], res)
+            sig = (tc["name"], json.dumps(tc["args"], sort_keys=True))
+            if sig in seen: obs += "\n(note: this call is identical to an earlier one in this session; the result is the same)"
+            seen.add(sig)
             step["result"] = res; step["observation"] = obs
             msgs.append({"role": "assistant", "content": r["raw_content"]})
             remaining = K - used
             tail = (f"(tool calls remaining: {remaining})" if remaining > 0 else
-                    "(tool calls remaining: 0 — you may call finish(answer) now if you are confident; otherwise reply with a short note and you will be asked for your handoff message)")
+                    "(tool calls remaining: 0) Reply now with EITHER a finish(answer) <tool_call> block, if you are confident of the answer, OR the single word CONTINUE to write your message to the next agent instead.")
             msgs.append({"role": "user", "content": f"<tool_response>\n{obs}\n</tool_response>\n{tail}"})
         else:
             # text only (or unknown tool): nudge, then treat as spent
@@ -108,15 +114,20 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
                 continue
             used = K
         if used >= K:
-            if tc and tc["name"] in ("search", "open"):     # one finish-only turn after the last tool result
-                r = call(f"s{len(steps)}")
-                step = dict(kind="turn", reasoning=r["reasoning"], text=r["content"], raw=r["raw_content"],
-                            tool_calls=r["tool_calls"], finish_reason=r["finish"])
-                steps.append(step)
-                msgs.append({"role": "assistant", "content": r["raw_content"] or "(empty)"})
-                tc2 = r["tool_calls"][0] if r["tool_calls"] else None
-                if tc2 and tc2["name"] == "finish":
-                    final = (tc2["args"].get("answer") or "").strip(); step["result"] = f"finish({final!r})"
+            if tc and tc["name"] in ("search", "open"):     # finish-or-CONTINUE turn after the last tool result
+                for attempt in range(2):
+                    r = call(f"s{len(steps)}")
+                    step = dict(kind="turn", reasoning=r["reasoning"], text=r["content"], raw=r["raw_content"],
+                                tool_calls=r["tool_calls"], finish_reason=r["finish"])
+                    steps.append(step)
+                    msgs.append({"role": "assistant", "content": r["raw_content"] or "(empty)"})
+                    tc2 = r["tool_calls"][0] if r["tool_calls"] else None
+                    if tc2 and tc2["name"] == "finish":
+                        final = (tc2["args"].get("answer") or "").strip(); step["result"] = f"finish({final!r})"; break
+                    fa = _final_from_text(r["content"])
+                    if fa: final = fa; step["result"] = f"finish({final!r})"; step["from_text"] = True; break
+                    if "CONTINUE" in (r["content"] or "").upper() or attempt == 1: break
+                    msgs.append({"role": "user", "content": FREE_REASK})
             break
 
     if final is None:
@@ -146,8 +157,9 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
                 fa = _final_from_text(r["content"])
                 if fa: final = fa; break
                 msgs.append({"role": "user", "content": FINAL_REASK})
-            if final is None:
-                final = (steps[-1]["text"] or "").strip()[:300]
+            if final is None:                      # last non-empty line of the last reply
+                lines = [l.strip() for l in (steps[-1]["text"] or "").splitlines() if l.strip()]
+                final = (lines[-1] if lines else "")[:300]
                 steps[-1]["fallback"] = True
     return dict(agent=i, incoming=incoming, handoff=handoff, final=final, tool_calls_used=used, nudges=nudges,
                 steps=steps, messages=msgs, cost=cost, tokens_in=tokens_in, tokens_out=tokens_out,

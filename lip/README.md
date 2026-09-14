@@ -2,7 +2,8 @@
 
 Instrument: a relay of N identical agents (Qwen3.6-35B-A3B on Tinker), K tool calls each, over an
 offline Wikipedia snapshot (FRAMES gold pages pinned to 2024-08-01 + one-hop neighbors, BM25).
-Only the free-form handoff text crosses between agents. Any agent may `finish`; agent N must.
+Only the free-form handoff text crosses between agents. Any agent may `finish` (free, does not count against K;
+after the K-th tool result the agent gets one finish-or-CONTINUE turn); agent N must finish.
 
 External oracle experiment: on a failed run, gpt-5.5 (Perplexity) picks one edge i-1 -> i and writes a
 grounded addendum (every sentence cites a prefix span; gpt-5.4-mini verifies support; ungrounded sentences
@@ -27,7 +28,7 @@ python lip/data/build_corpus.py gold && python lip/data/build_corpus.py neighbor
 python lip/harness/closed_book.py                                   # -> data/tasks_screened.jsonl
 python lip/harness/run_task.py --arm relay   --n 4 --k 5  --runs 3 --all --workers 8 --skip-done --budget 60
 python lip/harness/run_task.py --arm ceiling --n 1 --k 20 --runs 3 --all --workers 8 --skip-done --budget 60
-python lip/oracle/run_injection.py --all --m 3 --workers 6 --skip-done --budget 80
+python lip/oracle/run_injection.py --all --m 3 --workers 6 --skip-done --budget 80   # --budget = this invocation's spend cap
 python lip/metrics/summarize.py ; python lip/metrics/summarize.py --inj
 ```
 Spend: `python -c "import sys; sys.path.insert(0,'lip/harness'); from llm import spend; print(spend())"`.

@@ -3,8 +3,8 @@
   python lip/metrics/summarize.py                 # per-arm accuracy, cost, budget exhaustion, found-but-lost
   python lip/metrics/summarize.py --inj           # injection conditions, paired by task
 
-Found-but-lost (mechanical): for each gold page of a task, which agent(s) opened it, and whether the handoff
-of each such agent mentions it (page title, or the last word of the title, case-insensitive).
+Found-but-lost (mechanical): for each gold page of a task, which agent(s) saw it (opened it, or had it in a search
+result list), and whether the handoff of each such agent mentions it (page title, or the last word of the title).
 """
 import argparse, glob, json, os, re, sys
 from collections import defaultdict
@@ -43,10 +43,14 @@ def mentions(text, title):
 def found_but_lost(tr, gold_titles):
     """Per gold page: opened_by (agents), lost_at (agents that opened it and whose handoff lacks it), never_found."""
     res = []
+    def surfaced(a, g):   # gold title appeared in one of this agent's search result lists
+        return any(s.get("kind") == "turn" and isinstance(s.get("result"), list) and any(norm(h.get("title")) == norm(g) for h in s["result"])
+                   for s in a["steps"])
     for g in gold_titles:
         opened_by = [a["agent"] for a in tr["agents"] if any(norm(o) == norm(g) for o in a["opened"])]
-        lost_at = [a["agent"] for a in tr["agents"] if a["agent"] in opened_by and a["handoff"] is not None and not mentions(a["handoff"], g)]
-        res.append(dict(title=g, opened_by=opened_by, lost_at=lost_at))
+        seen_by = [a["agent"] for a in tr["agents"] if a["agent"] in opened_by or surfaced(a, g)]
+        lost_at = [a["agent"] for a in tr["agents"] if a["agent"] in seen_by and a["handoff"] is not None and not mentions(a["handoff"], g)]
+        res.append(dict(title=g, opened_by=opened_by, seen_by=seen_by, lost_at=lost_at))
     return res
 
 def summarize_arms(arms):
@@ -68,19 +72,21 @@ def summarize_arms(arms):
         print(f"{arm}: {len(runs)} runs ({errs} errors), {len(by_task)} tasks | acc {acc:.3f} | task-majority {maj:.3f} | any {anyc:.3f} "
               f"| finished_by {dict(fin_by)} | last-agent-forced {exhausted:.2f} | ${cost:.2f} | {secs:.0f}s/run")
         # found-but-lost
-        n_gold = n_found = n_lost_any = 0; tasks_all_found = tasks_fail = tasks_fail_allfound = 0
+        n_gold = n_found = n_seen = n_lost_any = 0; tasks_all_found = tasks_fail = tasks_fail_allfound = 0
         for r in runs:
             t = tasks.get(r["task_id"]);
             if not t: continue
             gts = [gmap.get(g, g) for g in t.get("gold_titles") or [url_to_title(u) for u in t["gold_links"]]]
             fbl = found_but_lost(r, gts)
-            n_gold += len(fbl); n_found += sum(bool(x["opened_by"]) for x in fbl); n_lost_any += sum(bool(x["lost_at"]) for x in fbl)
-            allf = all(x["opened_by"] for x in fbl)
+            n_gold += len(fbl); n_found += sum(bool(x["opened_by"]) for x in fbl); n_seen += sum(bool(x["seen_by"]) for x in fbl)
+            n_lost_any += sum(bool(x["lost_at"]) for x in fbl)
+            allf = all(x["seen_by"] for x in fbl)
             tasks_all_found += allf
             if not r["correct"]: tasks_fail += 1; tasks_fail_allfound += allf
         if n_gold:
-            print(f"   gold pages: {n_gold} | opened by some agent {n_found/n_gold:.2f} | opened-then-absent-from-handoff {n_lost_any/n_gold:.2f} "
-                  f"| runs with all gold opened {tasks_all_found/len(runs):.2f} | failed runs with all gold opened {tasks_fail_allfound}/{tasks_fail}")
+            print(f"   gold pages: {n_gold} | opened {n_found/n_gold:.2f} | seen (opened or in search results) {n_seen/n_gold:.2f} "
+                  f"| seen-then-absent-from-handoff {n_lost_any/n_gold:.2f} | runs with all gold seen {tasks_all_found/len(runs):.2f} "
+                  f"| failed runs with all gold seen {tasks_fail_allfound}/{tasks_fail}")
 
 def summarize_inj():
     from collections import Counter
