@@ -166,6 +166,7 @@ class PplxResponses:
                 last = f"HTTP {r.status_code}: {r.text[:300]}"
                 _log(dict(tag=tag, backend="pplx", model=self.model, prompt_tokens=0, completion_tokens=0, cost_usd=0.0,
                           latency_s=round(time.time() - t0, 2), status="error", error=last[:200], attempt=k))
+                if r.status_code in (401, 403): raise RuntimeError(f"perplexity auth/quota error, not retrying: {last}")
             except Exception as e:
                 last = e
                 _log(dict(tag=tag, backend="pplx", model=self.model, prompt_tokens=0, completion_tokens=0, cost_usd=0.0,
