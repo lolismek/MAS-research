@@ -132,6 +132,15 @@ check("tool call twice -> invalid empty handoff, next agent told", tr["agents"][
 _, calls = parse_tool_calls("<tool_call>\n<function=search\n<parameter=query>\nx\n</parameter>\n</function>\n</tool_call>")
 check("malformed <function=search (no >) still parses", calls and calls[0]["name"] == "search" and calls[0]["args"]["query"] == "x")
 
+# 7c. finish used as a message -> re-ask; second invalid finish accepted in-loop
+msg = "Agent 1 found X but not Y; requested next agent to find Z."
+script = [tc("search", query="q"), tc("finish", answer=msg), tc("finish", answer="Andrew Pendlebury")]
+tr = run_relay(task, 2, 3, FakeChat(script), corpus, "test")
+check("message-like finish re-asked, then short finish accepted", tr["final"] == "Andrew Pendlebury" and tr["agents"][0]["steps"][1].get("invalid_finish"))
+script = [tc("search", query="q"), tc("finish", answer=msg), "CONTINUE", "handoff ok", tc("finish", answer="Z")]
+tr = run_relay(task, 2, 1, FakeChat(script), corpus, "test")
+check("message-like finish on the free turn -> re-ask -> CONTINUE -> handoff", tr["agents"][0]["handoff"] == "handoff ok" and tr["final"] == "Z")
+
 # 8. judge normalization
 check("exact match normalizes", exact_match("The Beatles", "beatles.") and not exact_match("1990", "1991"))
 print(f"\n{n_pass} checks passed")

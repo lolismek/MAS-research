@@ -58,6 +58,11 @@ FINAL_REASK = "search/open are disabled. Call finish(answer) now: emit only the 
 NUDGE = "You did not call a tool. Call exactly one tool now (search, open, or finish). Calls remaining: {r}."
 FREE_REASK = ("Reply with exactly one of: a finish(answer) <tool_call> block (if that is your final answer), or the single word CONTINUE.")
 CUTOFF_REASK = "Your message was cut off before it was written out. Write the complete message now, concisely, without further deliberation."
+BAD_FINISH_REASK = ("finish(answer) must contain only a short answer to the question (a name, number, date, word or short list), "
+                    "not a message or explanation. If you have the answer, call finish with just the answer; otherwise reply CONTINUE.")
+_BAD_FINISH = re.compile(r"next agent|agent \d|I (found|could not|couldn't|need)|please", re.I)
+def valid_finish(ans):
+    return bool(ans) and len(ans) <= 200 and len(ans.split()) <= 25 and not _BAD_FINISH.search(ans)
 NOTOOL_REASK = "That was not a message. Tools are disabled now. Write the message to the next agent in plain text."
 
 _ANS = re.compile(r"^\W*(?:final\s+answer|answer)\W*:\s*(.+?)\W*$", re.I)
@@ -72,7 +77,7 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
     """Execute one agent. Returns dict(handoff, final, steps, messages, ...)."""
     msgs = [{"role": "system", "content": system_prompt(N, K)},
             {"role": "user", "content": user_prompt(question, i, N, K, incoming)}]
-    steps, used, nudges, final, handoff, seen, handoff_invalid = [], 0, 0, None, None, set(), False
+    steps, used, nudges, final, handoff, seen, handoff_invalid, bad_finishes = [], 0, 0, None, None, set(), False, 0
     cost = tokens_in = tokens_out = 0
     t0 = time.time()
 
@@ -89,9 +94,14 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
         steps.append(step)
         tc = r["tool_calls"][0] if r["tool_calls"] else None
         if tc and tc["name"] == "finish":
-            final = (tc["args"].get("answer") or "").strip()
-            step["result"] = f"finish({final!r})"
-            break
+            ans = (tc["args"].get("answer") or "").strip()
+            if valid_finish(ans) or bad_finishes >= 1:
+                final = ans; step["result"] = f"finish({final!r})"
+                break
+            bad_finishes += 1; step["invalid_finish"] = True
+            msgs.append({"role": "assistant", "content": r["raw_content"]})
+            msgs.append({"role": "user", "content": BAD_FINISH_REASK})
+            continue
         if tc and tc["name"] in ("search", "open"):
             used += 1
             if tc["name"] == "search":
@@ -126,7 +136,11 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
                     msgs.append({"role": "assistant", "content": r["raw_content"] or "(empty)"})
                     tc2 = r["tool_calls"][0] if r["tool_calls"] else None
                     if tc2 and tc2["name"] == "finish":
-                        final = (tc2["args"].get("answer") or "").strip(); step["result"] = f"finish({final!r})"; break
+                        ans = (tc2["args"].get("answer") or "").strip()
+                        if valid_finish(ans): final = ans; step["result"] = f"finish({final!r})"; break
+                        step["invalid_finish"] = True
+                        if attempt == 1: break
+                        msgs.append({"role": "user", "content": BAD_FINISH_REASK}); continue
                     fa = _final_from_text(r["content"])
                     if fa: final = fa; step["result"] = f"finish({final!r})"; step["from_text"] = True; break
                     if "CONTINUE" in (r["content"] or "").upper() or attempt == 1: break
@@ -159,7 +173,10 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
                 msgs.append({"role": "assistant", "content": r["raw_content"]})
                 tc = r["tool_calls"][0] if r["tool_calls"] else None
                 if tc and tc["name"] == "finish":
-                    final = (tc["args"].get("answer") or "").strip(); break
+                    ans = (tc["args"].get("answer") or "").strip()
+                    if valid_finish(ans) or attempt == 1: final = ans; break
+                    steps[-1]["invalid_finish"] = True
+                    msgs.append({"role": "user", "content": BAD_FINISH_REASK}); continue
                 fa = _final_from_text(r["content"])
                 if fa: final = fa; break
                 msgs.append({"role": "user", "content": FINAL_REASK})
