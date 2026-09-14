@@ -11,12 +11,12 @@ import argparse, json, os, sys, traceback
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "harness"))
 sys.path.insert(0, os.path.dirname(__file__))
-from llm import TinkerChat, spend
+from llm import TinkerChat, spend, BudgetExceeded, HARD_CAP
 from tools import Corpus
 from relay import run_relay
 from judge import score
 from enhance import enhance, conditions
-from run_task import save, TRACES, DATA, load_tasks
+from run_task import save, TRACES, DATA, load_tasks, _done
 
 CONDS = ["enhanced", "original", "random", "passthrough"]
 
@@ -51,7 +51,7 @@ def run_one(task, M, chat, corpus, conds, skip_done, arm="relay", out="inj"):
         res[cond] = []
         for m in range(1, M + 1):
             rd = os.path.join(base, cond, f"run_{m}")
-            if skip_done and os.path.exists(os.path.join(rd, "run.json")):
+            if skip_done and _done(os.path.join(rd, "run.json")):
                 res[cond].append(json.load(open(os.path.join(rd, "run.json"))).get("correct")); continue
             tag = f"inj/{task['id']}/{cond}/r{m}"
             try:
@@ -59,6 +59,8 @@ def run_one(task, M, chat, corpus, conds, skip_done, arm="relay", out="inj"):
                                prefix_agents=tr["agents"][:i - 1])
                 sc = score(task["question"], task["answer"], t2["final"] or "", tag=f"judge/{tag}")
                 t2.update(score=sc, correct=sc["correct"], arm=f"inj/{cond}", run=m, error=None, condition=cond, i=i)
+            except BudgetExceeded as e:
+                return dict(id=task["id"], i=i, skipped=f"budget: {e}", results=res)     # run not saved: re-runnable
             except Exception:
                 t2 = dict(task_id=task["id"], gold=task["answer"], arm=f"inj/{cond}", run=m, agents=[], final=None,
                           correct=None, error=traceback.format_exc()[-2000:], condition=cond, i=i)
@@ -82,8 +84,11 @@ def main():
     print(f"injection: {len(ids)} tasks, M={a.m}, conds={conds}", flush=True)
     chat, corpus = TinkerChat(), Corpus.get(); spend0 = spend()
     def job(tid):
-        if spend() - spend0 > a.budget: return dict(id=tid, skipped="budget")
-        return run_one(tasks[tid], a.m, chat, corpus, conds, a.skip_done, a.arm, a.out)
+        try:
+            if spend() - spend0 > a.budget or (HARD_CAP and spend() >= HARD_CAP): return dict(id=tid, skipped="budget")
+            return run_one(tasks[tid], a.m, chat, corpus, conds, a.skip_done, a.arm, a.out)
+        except Exception:
+            return dict(id=tid, error=traceback.format_exc()[-400:])
     with ThreadPoolExecutor(a.workers) as ex:
         for r in ex.map(job, ids):
             print("  " + json.dumps(r) + f"  | total ${spend():.2f}", flush=True)

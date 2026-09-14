@@ -23,20 +23,44 @@ TINKER_BASE = "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/
 TINKER_MODEL = "Qwen/Qwen3.6-35B-A3B"
 TINKER_RATES = {"Qwen/Qwen3.6-35B-A3B": (0.36, 0.89)}   # $/M prompt, $/M completion (console, 2026-06-27)
 
+HARD_CAP = float(os.environ.get("LIP_HARD_CAP", "0") or 0)   # total logged USD; 0 = no cap
+_cache = dict(t=0.0, file=0.0, delta=0.0)   # cached file total + costs logged by this process since the last read
+_SPEND_REFRESH = 20.0
+
+class BudgetExceeded(RuntimeError):
+    pass
+
+
 def _log(rec):
     rec = dict(ts=time.time(), **rec)
     with _log_lock:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
         with open(LOG_PATH, "a") as f: f.write(json.dumps(rec) + "\n")
+        _cache["delta"] += rec.get("cost_usd", 0.0) or 0.0
 
-def spend(tag_prefix=None):
-    """Total USD in the log (optionally only tags starting with tag_prefix)."""
+def _read_log(tag_prefix=None):
     tot = 0.0
     if not os.path.exists(LOG_PATH): return 0.0
     for line in open(LOG_PATH):
-        r = json.loads(line)
+        try: r = json.loads(line)
+        except Exception: continue          # partial line from a concurrent writer
         if tag_prefix is None or str(r.get("tag", "")).startswith(tag_prefix): tot += r.get("cost_usd", 0.0)
     return tot
+
+def spend(tag_prefix=None, fresh=False):
+    """Total USD in the log (optionally only tags starting with tag_prefix). The untagged total is cached for
+    _SPEND_REFRESH seconds and advanced by this process's own logged costs in between (other processes appending
+    to the same log are picked up at the next refresh)."""
+    if tag_prefix is not None: return _read_log(tag_prefix)
+    with _log_lock:
+        if fresh or time.time() - _cache["t"] > _SPEND_REFRESH:
+            _cache.update(t=time.time(), file=_read_log(), delta=0.0)
+        return _cache["file"] + _cache["delta"]
+
+def check_cap(tag=""):
+    """Raise BudgetExceeded if the hard cap (LIP_HARD_CAP, total logged USD) is reached."""
+    if HARD_CAP and spend() >= HARD_CAP:
+        raise BudgetExceeded(f"hard cap ${HARD_CAP:.2f} reached (spend ${spend():.2f}) at {tag}")
 
 # ---------------------------------------------------------------- Qwen XML tool calls
 _TC = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.S)
@@ -69,7 +93,7 @@ def tools_to_prompt(tools):
     return "\n".join(lines)
 
 class TinkerChat:
-    def __init__(self, model=TINKER_MODEL, max_tokens=12000, timeout=150, retries=4):
+    def __init__(self, model=TINKER_MODEL, max_tokens=12000, timeout=150, retries=8):
         from openai import OpenAI
         self.c = OpenAI(api_key=os.environ["TINKER_API_KEY"], base_url=TINKER_BASE, timeout=timeout, max_retries=0)
         self.model, self.max_tokens, self.retries = model, max_tokens, retries
@@ -81,6 +105,7 @@ class TinkerChat:
         if temperature is not None: kw["temperature"] = temperature
         last = None
         for k in range(self.retries):
+            check_cap(tag)
             t0 = time.time()
             try:
                 r = self.c.chat.completions.create(**kw); break
@@ -88,7 +113,7 @@ class TinkerChat:
                 last = e
                 _log(dict(tag=tag, backend="tinker", model=self.model, prompt_tokens=0, completion_tokens=0, cost_usd=0.0,
                           latency_s=round(time.time() - t0, 2), finish="error", error=str(e)[:200], attempt=k))
-                time.sleep(2 * (k + 1))
+                time.sleep(min(60, 3 * 2 ** k))     # 3, 6, 12, 24, 48, 60, 60, 60 s (capacity / rate-limit errors)
         else:
             raise RuntimeError(f"tinker failed after {self.retries} tries: {last}")
         lat = time.time() - t0
@@ -112,7 +137,7 @@ class TinkerChat:
 class PplxResponses:
     BASE = "https://api.perplexity.ai/v1/responses"
 
-    def __init__(self, model="openai/gpt-5.5", effort="medium", max_output_tokens=4000, timeout=300, retries=4):
+    def __init__(self, model="openai/gpt-5.5", effort="medium", max_output_tokens=4000, timeout=300, retries=6):
         import requests
         self.s = requests.Session()
         self.s.headers.update({"Authorization": f"Bearer {os.environ['PERPLEXITY_API_KEY']}",
@@ -126,14 +151,19 @@ class PplxResponses:
         if eff: body["reasoning"] = dict(effort=eff)
         last = None
         for k in range(self.retries):
+            check_cap(tag)
             t0 = time.time()
             try:
                 r = self.s.post(self.BASE, json=body, timeout=self.timeout)
                 if r.status_code == 200: break
                 last = f"HTTP {r.status_code}: {r.text[:300]}"
+                _log(dict(tag=tag, backend="pplx", model=self.model, prompt_tokens=0, completion_tokens=0, cost_usd=0.0,
+                          latency_s=round(time.time() - t0, 2), status="error", error=last[:200], attempt=k))
             except Exception as e:
                 last = e
-            time.sleep(3 * (k + 1))
+                _log(dict(tag=tag, backend="pplx", model=self.model, prompt_tokens=0, completion_tokens=0, cost_usd=0.0,
+                          latency_s=round(time.time() - t0, 2), status="error", error=str(e)[:200], attempt=k))
+            time.sleep(min(60, 3 * 2 ** k))
         else:
             raise RuntimeError(f"perplexity failed after {self.retries} tries: {last}")
         lat = time.time() - t0

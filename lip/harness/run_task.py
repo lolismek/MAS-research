@@ -7,7 +7,7 @@ Traces: lip/traces/<arm>/<task_id>/run_<r>/run.json
 import argparse, json, os, sys, time, traceback
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(__file__))
-from llm import TinkerChat, spend
+from llm import TinkerChat, spend, BudgetExceeded, HARD_CAP
 from tools import Corpus
 from relay import run_relay
 from judge import score
@@ -42,11 +42,20 @@ def one(task, arm, N, K, r, chat, corpus, holder=None):
             tr["holder"] = holder; tr["original_question"] = task.get("original_question")
         sc = score(task.get("original_question") or task["question"], task["answer"], tr["final"] or "", tag=f"judge/{tag}")
         tr["score"] = sc; tr["correct"] = sc["correct"]; tr["arm"] = arm; tr["run"] = r; tr["error"] = None
+    except BudgetExceeded as e:
+        return dict(task_id=task["id"], gold=task["answer"], arm=arm, run=r, agents=[], final=None, correct=None,
+                    error=f"BudgetExceeded: {e}", N=N, K=K, unsaved=True)      # not saved: re-runnable
     except Exception as e:
         tr = dict(task_id=task["id"], gold=task["answer"], arm=arm, run=r, agents=[], final=None, correct=None,
                   error=traceback.format_exc()[-2000:], N=N, K=K)
     save(run_dir, tr)
     return tr
+
+def _done(path):
+    """run.json exists and holds a completed (error-free) run."""
+    if not os.path.exists(path): return False
+    try: return json.load(open(path)).get("error") is None
+    except Exception: return False
 
 def main():
     ap = argparse.ArgumentParser()
@@ -66,20 +75,24 @@ def main():
     ids = list(tasks) if a.all else a.ids
     if a.limit: ids = ids[:a.limit]
     jobs = [(tasks[i], r) for i in ids for r in range(1, a.runs + 1)]
-    if a.skip_done:
-        jobs = [(t, r) for t, r in jobs if not os.path.exists(os.path.join(TRACES, a.arm, t["id"], f"run_{r}", "run.json"))]
+    if a.skip_done:   # skip finished runs; errored runs (harness/API failure) are re-done
+        jobs = [(t, r) for t, r in jobs if not _done(os.path.join(TRACES, a.arm, t["id"], f"run_{r}", "run.json"))]
     print(f"{a.arm} N={a.n} K={a.k} holder={a.holder}: {len(jobs)} runs, workers={a.workers}, budget ${a.budget}", flush=True)
     chat, corpus = TinkerChat(), Corpus.get()
     t0 = time.time(); done = 0; correct = 0; spend0 = spend()
 
     def job(tr_):
         t, r = tr_
-        if spend() - spend0 > a.budget: return None
-        return one(t, a.arm, a.n, a.k, r, chat, corpus, holder=a.holder)
+        try:
+            if spend() - spend0 > a.budget or (HARD_CAP and spend() >= HARD_CAP): return None
+            return one(t, a.arm, a.n, a.k, r, chat, corpus, holder=a.holder)
+        except Exception:
+            return dict(task_id=t["id"], gold=t["answer"], run=r, error=traceback.format_exc()[-500:], unsaved=True)
 
     with ThreadPoolExecutor(a.workers) as ex:
         for tr in ex.map(job, jobs):
             if tr is None: print("budget reached, skipping remaining", flush=True); continue
+            if tr.get("unsaved"): print(f"  UNSAVED {tr['task_id']} r{tr.get('run')}: {tr['error'][-160:]!r}", flush=True); continue
             done += 1; correct += bool(tr.get("correct"))
             fb = tr.get("finished_by"); err = "ERROR " if tr.get("error") else ""
             print(f"  {err}{tr['task_id']} r{tr.get('run')} -> {str(tr.get('final'))[:40]!r} | gold {tr['gold'][:30]!r} | "
