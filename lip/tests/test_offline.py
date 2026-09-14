@@ -118,6 +118,16 @@ tr = run_relay(task, 2, 1, FakeChat(script), corpus, "test")
 rp = render_prefix(tr["agents"][:1])
 check("render_prefix has call, result, handoff", "search({" in rp and "The Dugites" in rp and "[a1.h handoff message]\nhandoff msg" in rp)
 
+# 7b. handoff that is a tool call or empty -> re-ask; malformed tool call parses
+script = [tc("search", query="q"), "CONTINUE", tc("search", query="again"), "real handoff", tc("finish", answer="Z")]
+tr = run_relay(task, 2, 1, FakeChat(script), corpus, "test")
+check("tool-call handoff re-asked", tr["agents"][0]["handoff"] == "real handoff" and tr["final"] == "Z")
+script = [tc("search", query="q"), "CONTINUE", "", "second try", tc("finish", answer="Z")]
+tr = run_relay(task, 2, 1, FakeChat(script), corpus, "test")
+check("empty handoff re-asked", tr["agents"][0]["handoff"] == "second try")
+_, calls = parse_tool_calls("<tool_call>\n<function=search\n<parameter=query>\nx\n</parameter>\n</function>\n</tool_call>")
+check("malformed <function=search (no >) still parses", calls and calls[0]["name"] == "search" and calls[0]["args"]["query"] == "x")
+
 # 8. judge normalization
 check("exact match normalizes", exact_match("The Beatles", "beatles.") and not exact_match("1990", "1991"))
 print(f"\n{n_pass} checks passed")

@@ -40,7 +40,7 @@ def spend(tag_prefix=None):
 
 # ---------------------------------------------------------------- Qwen XML tool calls
 _TC = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.S)
-_FN = re.compile(r"<function=([\w.-]+)>(.*?)</function>", re.S)
+_FN = re.compile(r"<function=([\w.-]+)>?(.*?)</function>", re.S)
 _PA = re.compile(r"<parameter=([\w.-]+)>\s*(.*?)\s*</parameter>", re.S)
 
 def parse_tool_calls(content):

@@ -50,12 +50,13 @@ def user_prompt(question, i, N, K, incoming):
 HANDOFF_PROMPT = ("Your tool budget is spent. Now write the message to the next agent. They start with a fresh context "
                   "and will see only the question and your message. Write whatever you think they need to finish the task, "
                   "in whatever form you think best. Do not call any tools.")
-FINAL_PROMPT = ("Your tool budget is spent and you are the last agent. You must now call finish(answer) with your best "
-                "answer to the question.")
-FINAL_REASK = "Call finish(answer) now: emit only the <tool_call> block."
+FINAL_PROMPT = ("Your tool budget is spent and you are the last agent. search and open are disabled now and any such call "
+                "is ignored. You must now call finish(answer) with your best answer to the question.")
+FINAL_REASK = "search/open are disabled. Call finish(answer) now: emit only the finish <tool_call> block."
 NUDGE = "You did not call a tool. Call exactly one tool now (search, open, or finish). Calls remaining: {r}."
 FREE_REASK = ("Reply with exactly one of: a finish(answer) <tool_call> block (if that is your final answer), or the single word CONTINUE.")
 CUTOFF_REASK = "Your message was cut off before it was written out. Write the complete message now, concisely, without further deliberation."
+NOTOOL_REASK = "That was not a message. Tools are disabled now. Write the message to the next agent in plain text."
 
 _ANS = re.compile(r"^\W*(?:final\s+answer|answer)\W*:\s*(.+?)\W*$", re.I)
 def _final_from_text(text):
@@ -137,8 +138,9 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
             handoff = (r["content"] or r["raw_content"] or "").strip()
             steps.append(dict(kind="handoff", reasoning=r["reasoning"], text=handoff, finish_reason=r["finish"]))
             msgs.append({"role": "assistant", "content": r["raw_content"]})
-            if r["finish"] == "length":          # thinking ate the output budget: the message is missing or cut
-                msgs.append({"role": "user", "content": CUTOFF_REASK})
+            bad = (not handoff) or ("<tool_call>" in handoff) or ("<function=" in handoff)
+            if r["finish"] == "length" or bad:   # thinking ate the output budget, or the reply was empty / a tool call
+                msgs.append({"role": "user", "content": CUTOFF_REASK if r["finish"] == "length" else NOTOOL_REASK})
                 r = call("handoff_retry")
                 if (r["content"] or "").strip():
                     handoff = r["content"].strip()
