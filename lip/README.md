@@ -26,9 +26,11 @@ full pass-through.
 ```
 python lip/data/build_corpus.py gold && python lip/data/build_corpus.py neighbors && python lip/data/build_corpus.py index
 python lip/harness/closed_book.py                                   # -> data/tasks_screened.jsonl
-python lip/harness/run_task.py --arm relay   --n 4 --k 5  --runs 3 --all --workers 8 --skip-done --budget 60
-python lip/harness/run_task.py --arm ceiling --n 1 --k 20 --runs 3 --all --workers 8 --skip-done --budget 60
-python lip/oracle/run_injection.py --all --m 3 --workers 6 --skip-done --budget 80   # --budget = this invocation's spend cap
-python lip/metrics/summarize.py ; python lip/metrics/summarize.py --inj
+# batch (decided 2026-09-14): relay N=8 K=2, ceiling N=1 K=16, injection = enhanced vs original only (single oracle-chosen edge)
+python lip/harness/run_task.py --arm relay   --n 8 --k 2  --runs 3 --all --workers 8 --skip-done --budget 60
+python lip/harness/run_task.py --arm ceiling --n 1 --k 16 --runs 3 --all --workers 8 --skip-done --budget 60
+python lip/oracle/run_injection.py --all --arm relay --out inj --conds enhanced,original --m 3 --workers 6 --skip-done --budget 80
+python lip/metrics/summarize.py --arms relay,ceiling ; python lip/metrics/summarize.py --inj --inj-dir inj
+# --budget = this invocation's spend cap; random / passthrough are smoke-only controls (--conds enhanced,original,random,passthrough)
 ```
 Spend: `python -c "import sys; sys.path.insert(0,'lip/harness'); from llm import spend; print(spend())"`.
