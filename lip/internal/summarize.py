@@ -36,7 +36,7 @@ def carries(handoff, qualifier):
 
 def main():
     tasks = {t["id"]: t for t in (json.loads(l) for l in open(TASKS))} if os.path.exists(TASKS) else {}
-    arms = [a for a in ("internal_none", "internal_first", "internal_last", "internal_all") if os.path.isdir(os.path.join(TRACES, a))]
+    arms = [a for a in ("internal_none", "internal_first", "internal_second", "internal_from_second", "internal_last", "internal_all") if os.path.isdir(os.path.join(TRACES, a))]
     R = {a: load(a) for a in arms}
     print(f"{'arm':16} {'tasks':>5} {'runs':>5} {'acc':>6}  finished_by")
     for a in arms:

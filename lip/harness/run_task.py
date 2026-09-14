@@ -29,7 +29,8 @@ def save(run_dir, tr):
             if a["final"] is not None: f.write(f"FINAL: {a['final']}\n\n")
         f.write(f"gold: {tr['gold']}\ncorrect: {tr.get('correct')} ({tr.get('score', {}).get('reason')})\n")
 
-HOLDERS = {"none": lambda N: (), "first": lambda N: (1,), "last": lambda N: (N,), "all": lambda N: tuple(range(1, N + 1))}
+HOLDERS = {"none": lambda N: (), "first": lambda N: (1,), "last": lambda N: (N,), "all": lambda N: tuple(range(1, N + 1)),
+           "second": lambda N: (2,), "from_second": lambda N: tuple(range(2, N + 1))}   # agent 1 works without the belief
 
 def one(task, arm, N, K, r, chat, corpus, holder=None):
     run_dir = os.path.join(TRACES, arm, task["id"], f"run_{r}")
