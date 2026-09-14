@@ -72,4 +72,8 @@ assert g.seen == [True, False], g.seen
 assert [a["kept"] for a in ok["addendum"]] == [True, False], ok["addendum"]
 assert spans(agents, thinking=False)["a1.h"] == "Look for the Sports singer."
 print("PASS enhance: note sentences may ground in thinking, fact sentences may not")
-print("5 checks passed")
+from enhance import _strip_cites
+assert _strip_cites("The page says X (a5.s2)") == "The page says X." and _strip_cites("Row lists Y [a1.h].") == "Row lists Y."
+assert "a1.s2" not in oo["kept_text"]
+print("PASS kept text has no span ids")
+print("6 checks passed")

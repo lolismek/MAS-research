@@ -94,7 +94,7 @@ def enhance(trace, oracle=None, grounder=None, tag="oracle"):
             rec["supported"] = bool(gj.get("supported")); rec["reason"] = gj.get("reason"); cost += g["cost"]
         rec["kept"] = bool(rec["in_prefix"] and rec["supported"])
         out.append(rec)
-    kept = [o["text"] for o in out if o["kept"]]
+    kept = [_strip_cites(o["text"]) for o in out if o["kept"]]
     words = 0; trimmed = []
     for s in kept:
         w = len(s.split())
@@ -102,6 +102,12 @@ def enhance(trace, oracle=None, grounder=None, tag="oracle"):
         trimmed.append(s); words += w
     return dict(i=i, why=j.get("why"), addendum=out, kept_text=" ".join(trimmed), n_kept=len(trimmed),
                 n_total=len(out), cost=cost, raw=r["text"])
+
+_CITE = re.compile(r"\s*[\(\[]?\ba\d+\.(?:s\d+|h)\b[\)\]]?")
+def _strip_cites(t):
+    """Remove inline span ids like (a5.s2) so the injected text reads like ordinary notes."""
+    t = _CITE.sub("", t).strip()
+    return t if t.endswith((".", "!", "?")) else t + "."
 
 def random_spans(agents, i, n_chars, rng):
     """Length-matched addendum of random sentences drawn from the prefix (agents < i) observations/thinking."""
