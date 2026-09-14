@@ -84,7 +84,7 @@ def main():
     def job(tr_):
         t, r = tr_
         try:
-            if spend() - spend0 > a.budget or (current_cap() and spend() >= current_cap()): return None
+            if spend(a.arm + "/") - spend0 > a.budget or (current_cap() and spend() >= current_cap()): return None
             return one(t, a.arm, a.n, a.k, r, chat, corpus, holder=a.holder)
         except Exception:
             return dict(task_id=t["id"], gold=t["answer"], run=r, error=traceback.format_exc()[-500:], unsaved=True)
