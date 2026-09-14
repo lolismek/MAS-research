@@ -79,7 +79,7 @@ def main():
         jobs = [(t, r) for t, r in jobs if not _done(os.path.join(TRACES, a.arm, t["id"], f"run_{r}", "run.json"))]
     print(f"{a.arm} N={a.n} K={a.k} holder={a.holder}: {len(jobs)} runs, workers={a.workers}, budget ${a.budget}", flush=True)
     chat, corpus = TinkerChat(), Corpus.get()
-    t0 = time.time(); done = 0; correct = 0; spend0 = spend()
+    t0 = time.time(); done = 0; correct = 0; spend0 = spend(a.arm + "/")   # this arm's own tags only (parallel arms share the log)
 
     def job(tr_):
         t, r = tr_
