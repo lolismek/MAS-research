@@ -6,7 +6,7 @@ open (cached). Chunking is character-based: CHUNK_CHARS ~ 1500 tokens.
 import json, os, re, threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CORPUS = os.path.abspath(os.path.join(HERE, "..", "data", "corpus"))
+CORPUS = os.environ.get("LIP_CORPUS") or os.path.abspath(os.path.join(HERE, "..", "data", "corpus"))
 CHUNK_CHARS = 6000
 SNIPPET_CHARS = 160
 TOP_K = 5
@@ -61,16 +61,21 @@ class Corpus:
         return out
 
     def snippet(self, i, query):
-        """Sentence-ish window around the first query-term hit, else the page head."""
+        """Window around the first hit of the RAREST query term in the page (most specific), tagged with the
+        chunk number that window falls in; falls back to the page head."""
         t = self.text(i)
-        terms = [w for w in re.findall(r"\w+", (query or "").lower()) if len(w) > 2]
-        low = t.lower(); best = None
+        terms = {w for w in re.findall(r"\w+", (query or "").lower()) if len(w) > 2}
+        low = t.lower(); best = None; best_cnt = None
         for w in terms:
             k = low.find(w)
-            if k >= 0 and (best is None or k < best): best = k
+            if k < 0: continue
+            cnt = low.count(w)
+            if best is None or cnt < best_cnt or (cnt == best_cnt and k < best): best, best_cnt = k, cnt
         start = 0 if best is None else max(0, best - 60)
         s = t[start:start + SNIPPET_CHARS].replace("\n", " ")
-        return ("…" if start else "") + s + "…"
+        chunk = start // CHUNK_CHARS + 1
+        n = max(1, (len(t) + CHUNK_CHARS - 1) // CHUNK_CHARS)
+        return ("…" if start else "") + s + f"… [chunk {chunk} of {n}]"
 
     def open(self, title, page=1):
         i = self.by_title.get(_norm_title(title))

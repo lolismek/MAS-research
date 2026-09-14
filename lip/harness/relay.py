@@ -53,6 +53,7 @@ FINAL_PROMPT = ("Your tool budget is spent and you are the last agent. You must 
                 "answer to the question.")
 FINAL_REASK = "Call finish(answer) now: emit only the <tool_call> block."
 NUDGE = "You did not call a tool. Call exactly one tool now (search, open, or finish). Calls remaining: {r}."
+CUTOFF_REASK = "Your message was cut off before it was written out. Write the complete message now, concisely, without further deliberation."
 
 def _final_from_text(text):
     for line in reversed((text or "").splitlines()):
@@ -113,6 +114,13 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
             handoff = (r["content"] or r["raw_content"] or "").strip()
             steps.append(dict(kind="handoff", reasoning=r["reasoning"], text=handoff, finish_reason=r["finish"]))
             msgs.append({"role": "assistant", "content": r["raw_content"]})
+            if r["finish"] == "length":          # thinking ate the output budget: the message is missing or cut
+                msgs.append({"role": "user", "content": CUTOFF_REASK})
+                r = call("handoff_retry")
+                if (r["content"] or "").strip():
+                    handoff = r["content"].strip()
+                    steps.append(dict(kind="handoff", reasoning=r["reasoning"], text=handoff, finish_reason=r["finish"], retry=True))
+                    msgs.append({"role": "assistant", "content": r["raw_content"]})
         else:
             msgs.append({"role": "user", "content": FINAL_PROMPT})
             for attempt in range(2):

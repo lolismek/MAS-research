@@ -68,15 +68,15 @@ def tools_to_prompt(tools):
     return "\n".join(lines)
 
 class TinkerChat:
-    def __init__(self, model=TINKER_MODEL, max_tokens=6000, timeout=180, retries=4):
+    def __init__(self, model=TINKER_MODEL, max_tokens=12000, timeout=300, retries=4):
         from openai import OpenAI
         self.c = OpenAI(api_key=os.environ["TINKER_API_KEY"], base_url=TINKER_BASE, timeout=timeout, max_retries=0)
         self.model, self.max_tokens, self.retries = model, max_tokens, retries
 
-    def chat(self, messages, tag="", temperature=None):
+    def chat(self, messages, tag="", temperature=None, max_tokens=None):
         """messages: plain OpenAI-style dicts (system/user/assistant text only).
         Returns dict(reasoning, content, tool_calls, finish, usage, cost, latency)."""
-        kw = dict(model=self.model, messages=messages, max_tokens=self.max_tokens)
+        kw = dict(model=self.model, messages=messages, max_tokens=max_tokens or self.max_tokens)
         if temperature is not None: kw["temperature"] = temperature
         last = None
         for k in range(self.retries):
