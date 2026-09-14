@@ -31,7 +31,8 @@ Rules:
 - Use only information obtained through the tools in this relay. Do not answer from memory or guess.
 - Respect any date qualifier in the question (e.g. "as of August 2024").
 - Call exactly one tool per turn, and nothing else in that turn.
-- When you are confident of the answer, call finish(answer) with one short answer.
+- When you are confident of the answer, call finish(answer) with one short answer. finish() does not count
+  against your tool budget; you may still call it after your last search/open.
 
 {TOOLS}"""
 
@@ -95,7 +96,9 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
             step["result"] = res; step["observation"] = obs
             msgs.append({"role": "assistant", "content": r["raw_content"]})
             remaining = K - used
-            msgs.append({"role": "user", "content": f"<tool_response>\n{obs}\n</tool_response>\n(tool calls remaining: {remaining})"})
+            tail = (f"(tool calls remaining: {remaining})" if remaining > 0 else
+                    "(tool calls remaining: 0 — you may call finish(answer) now if you are confident; otherwise reply with a short note and you will be asked for your handoff message)")
+            msgs.append({"role": "user", "content": f"<tool_response>\n{obs}\n</tool_response>\n{tail}"})
         else:
             # text only (or unknown tool): nudge, then treat as spent
             msgs.append({"role": "assistant", "content": r["raw_content"] or "(empty)"})
@@ -105,6 +108,15 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
                 continue
             used = K
         if used >= K:
+            if tc and tc["name"] in ("search", "open"):     # one finish-only turn after the last tool result
+                r = call(f"s{len(steps)}")
+                step = dict(kind="turn", reasoning=r["reasoning"], text=r["content"], raw=r["raw_content"],
+                            tool_calls=r["tool_calls"], finish_reason=r["finish"])
+                steps.append(step)
+                msgs.append({"role": "assistant", "content": r["raw_content"] or "(empty)"})
+                tc2 = r["tool_calls"][0] if r["tool_calls"] else None
+                if tc2 and tc2["name"] == "finish":
+                    final = (tc2["args"].get("answer") or "").strip(); step["result"] = f"finish({final!r})"
             break
 
     if final is None:

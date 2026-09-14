@@ -60,6 +60,7 @@ check("open bad title -> error text", "error" in corpus.open("Nonexistent"))
 # 3. budget enforced, handoff crosses, finish by agent 2
 K, N = 2, 3
 script = [tc("search", query="Dugites guitar"), tc("open", title="The Dugites"),   # agent 1: 2 calls (budget)
+          "Not confident yet.",                                                        # finish-only turn declined
           "Findings: Dugites page says Andrew Pendlebury played guitar 1982-1983.",   # agent 1 handoff
           tc("finish", answer="Andrew Pendlebury")]                                  # agent 2 finishes
 fc = FakeChat(script)
@@ -67,9 +68,9 @@ tr = run_relay(task, N, K, fc, corpus, "test")
 check("finish by agent 2, final answer", tr["final"] == "Andrew Pendlebury" and tr["finished_by"] == 2 and len(tr["agents"]) == 2)
 a1 = tr["agents"][0]
 check("agent 1 used full budget and wrote handoff", a1["tool_calls_used"] == K and a1["handoff"].startswith("Findings"))
-check("budget line shown to agent", "(tool calls remaining: 1)" in a1["messages"][3]["content"])
+check("budget line shown to agent", "(tool calls remaining: 1)" in a1["messages"][3]["content"] and "remaining: 0" in a1["messages"][5]["content"])
 check("handoff prompt asked after budget", a1["messages"][-2]["content"].startswith("Your tool budget is spent"))
-a2msgs = fc.calls[3]
+a2msgs = fc.calls[4]
 check("agent 2 sees only question + handoff", "Message from agent 1" in a2msgs[1]["content"] and "Findings" in a2msgs[1]["content"]
       and len(a2msgs) == 2 and "<tool_response>" not in a2msgs[1]["content"])
 check("opened list recorded", a1["opened"] == ["The Dugites"] and a1["searches"] == ["Dugites guitar"])
@@ -83,13 +84,16 @@ a1 = tr["agents"][0]
 check("nudged twice then handoff", a1["nudges"] == NUDGES + 1 and a1["handoff"] == "handoff text" and tr["final"] == "X")
 
 # 5. last agent forced to finish; re-ask; text fallback
-script = [tc("search", query="q"), "no tool here", "FINAL ANSWER: Pendlebury"]   # N=1,K=1: one re-ask
+script = [tc("search", query="q"), "hmm", "no tool here", "FINAL ANSWER: Pendlebury"]   # N=1,K=1: declined finish turn, one re-ask
 fc = FakeChat(script)
 tr = run_relay(task, 1, 1, fc, corpus, "test")
 check("forced final via FINAL ANSWER line after re-ask", tr["final"] == "Pendlebury" and tr["finished_by"] == 1)
 script = [tc("search", query="q"), tc("finish", answer="direct")]
 tr = run_relay(task, 1, 1, FakeChat(script), corpus, "test")
-check("forced final via finish call", tr["final"] == "direct")
+check("finish on the free turn after the last tool call", tr["final"] == "direct" and tr["agents"][0]["tool_calls_used"] == 1)
+script = [tc("search", query="q"), tc("finish", answer="early")]
+tr = run_relay(task, 3, 1, FakeChat(script), corpus, "test")
+check("agent 1 of 3 finishes on the free turn (no handoff)", tr["final"] == "early" and tr["finished_by"] == 1 and len(tr["agents"]) == 1)
 
 # 6. resume from agent 2 with an injected message; prefix copied
 prefix = [dict(agent=1, incoming=None, handoff="orig", final=None, tool_calls_used=2, nudges=0, steps=[], messages=[],
@@ -100,7 +104,7 @@ check("resume: agent 2 got injected message, prefix kept", "ADDENDUM" in fc.call
       and tr["start_agent"] == 2 and tr["final"] == "Y")
 
 # 7. render_prefix carries calls, observations, handoffs
-script = [tc("search", query="Dugites guitar"), "handoff msg", tc("finish", answer="Z")]
+script = [tc("search", query="Dugites guitar"), "no", "handoff msg", tc("finish", answer="Z")]
 tr = run_relay(task, 2, 1, FakeChat(script), corpus, "test")
 rp = render_prefix(tr["agents"][:1])
 check("render_prefix has call, result, handoff", "search({" in rp and "The Dugites" in rp and "[a1.h handoff message]\nhandoff msg" in rp)

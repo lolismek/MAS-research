@@ -76,9 +76,9 @@ def main():
     if a.limit: ids = ids[:a.limit]
     conds = a.conds.split(",")
     print(f"injection: {len(ids)} tasks, M={a.m}, conds={conds}", flush=True)
-    chat, corpus = TinkerChat(), Corpus.get()
+    chat, corpus = TinkerChat(), Corpus.get(); spend0 = spend()
     def job(tid):
-        if spend() > a.budget: return dict(id=tid, skipped="budget")
+        if spend() - spend0 > a.budget: return dict(id=tid, skipped="budget")
         return run_one(tasks[tid], a.m, chat, corpus, conds, a.skip_done)
     with ThreadPoolExecutor(a.workers) as ex:
         for r in ex.map(job, ids):

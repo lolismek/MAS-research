@@ -60,11 +60,11 @@ def main():
         jobs = [(t, r) for t, r in jobs if not os.path.exists(os.path.join(TRACES, a.arm, t["id"], f"run_{r}", "run.json"))]
     print(f"{a.arm} N={a.n} K={a.k}: {len(jobs)} runs, workers={a.workers}, budget ${a.budget}", flush=True)
     chat, corpus = TinkerChat(), Corpus.get()
-    t0 = time.time(); done = 0; correct = 0
+    t0 = time.time(); done = 0; correct = 0; spend0 = spend()
 
     def job(tr_):
         t, r = tr_
-        if spend() > a.budget: return None
+        if spend() - spend0 > a.budget: return None
         return one(t, a.arm, a.n, a.k, r, chat, corpus)
 
     with ThreadPoolExecutor(a.workers) as ex:

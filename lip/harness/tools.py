@@ -40,6 +40,14 @@ class Corpus:
         self.root = root
         self.pages = [json.loads(l) for l in open(os.path.join(root, "pages.jsonl"))]
         self.by_title = {_norm_title(p["title"]): i for i, p in enumerate(self.pages)}
+        # redirect aliases: the title FRAMES asked for -> the page Wikipedia resolved it to (gold records only)
+        import glob as _g
+        for fn in _g.glob(os.path.join(root, "gold", "*.json")):
+            try: r = json.load(open(fn))
+            except Exception: continue
+            req, res = r.get("requested"), r.get("title")
+            if req and res and not r.get("missing") and _norm_title(res) in self.by_title:
+                self.by_title.setdefault(_norm_title(req), self.by_title[_norm_title(res)])
         self.idx = bm25s.BM25.load(os.path.join(root, "index"))
         self._bm25s = bm25s
         self._text_cache = {}; self._clock = threading.Lock()
