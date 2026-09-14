@@ -125,6 +125,10 @@ check("tool-call handoff re-asked", tr["agents"][0]["handoff"] == "real handoff"
 script = [tc("search", query="q"), "CONTINUE", "", "second try", tc("finish", answer="Z")]
 tr = run_relay(task, 2, 1, FakeChat(script), corpus, "test")
 check("empty handoff re-asked", tr["agents"][0]["handoff"] == "second try")
+script = [tc("search", query="q"), "CONTINUE", tc("search", query="a"), tc("search", query="b"), tc("finish", answer="Z")]
+fc = FakeChat(script); tr = run_relay(task, 2, 1, fc, corpus, "test")
+check("tool call twice -> invalid empty handoff, next agent told", tr["agents"][0]["handoff"] == "" and tr["agents"][0]["handoff_invalid"]
+      and "sent an empty message" in fc.calls[-1][1]["content"] and tr["final"] == "Z")
 _, calls = parse_tool_calls("<tool_call>\n<function=search\n<parameter=query>\nx\n</parameter>\n</function>\n</tool_call>")
 check("malformed <function=search (no >) still parses", calls and calls[0]["name"] == "search" and calls[0]["args"]["query"] == "x")
 

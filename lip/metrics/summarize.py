@@ -69,8 +69,9 @@ def summarize_arms(arms):
         fin_by = defaultdict(int)
         for r in runs: fin_by[r.get("finished_by")] += 1
         exhausted = sum(1 for r in runs if r.get("finished_by") == r["N"] and r["agents"][-1]["tool_calls_used"] >= r["K"]) / len(runs)
+        inv = sum(a.get("handoff_invalid", False) for r in runs for a in r["agents"])
         print(f"{arm}: {len(runs)} runs ({errs} errors), {len(by_task)} tasks | acc {acc:.3f} | task-majority {maj:.3f} | any {anyc:.3f} "
-              f"| finished_by {dict(fin_by)} | last-agent-forced {exhausted:.2f} | ${cost:.2f} | {secs:.0f}s/run")
+              f"| finished_by {dict(fin_by)} | last-agent-forced {exhausted:.2f} | invalid handoffs {inv} | ${cost:.2f} | {secs:.0f}s/run")
         # found-but-lost
         n_gold = n_found = n_seen = n_lost_any = 0; tasks_all_found = tasks_fail = tasks_fail_allfound = 0
         for r in runs:
@@ -90,16 +91,17 @@ def summarize_arms(arms):
 
 def summarize_inj():
     from collections import Counter
-    rows = defaultdict(dict)
+    rows = defaultdict(dict); inv = Counter()
     for p in glob.glob(os.path.join(TRACES, "inj", "*", "*", "run_*", "run.json")):
         r = json.load(open(p))
         if r.get("error"): continue
         rows[r["task_id"]].setdefault(r["condition"], []).append(bool(r["correct"]))
+        inv[r["condition"]] += sum(a.get("handoff_invalid", False) for a in r["agents"][r["start_agent"] - 1:])
     conds = ["original", "enhanced", "random", "passthrough"]
     print(f"injection: {len(rows)} tasks")
     for c in conds:
         v = [x for t in rows.values() for x in t.get(c, [])]
-        if v: print(f"  {c:12s} runs {len(v):4d}  success {sum(v)/len(v):.3f}  tasks-any {sum(any(t.get(c, [])) for t in rows.values())/len(rows):.3f}")
+        if v: print(f"  {c:12s} runs {len(v):4d}  success {sum(v)/len(v):.3f}  tasks-any {sum(any(t.get(c, [])) for t in rows.values())/len(rows):.3f}  invalid handoffs {inv[c]}")
     # paired enhanced vs original per task (mean over resamples), bootstrap CI
     import random
     pairs = [(sum(t["enhanced"]) / len(t["enhanced"]), sum(t["original"]) / len(t["original"]))

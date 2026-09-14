@@ -43,6 +43,8 @@ def user_prompt(question, i, N, K, incoming):
     s = f"Question: {question}\n\nYou are agent {i} of {N}. You have {K} tool calls."
     if incoming is None:
         s += "\n\nYou are the first agent; there is no incoming message."
+    elif not incoming.strip():
+        s += f"\n\nAgent {i-1} sent an empty message."
     else:
         s += f"\n\nMessage from agent {i-1}:\n<<<\n{incoming}\n>>>"
     return s
@@ -70,7 +72,7 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
     """Execute one agent. Returns dict(handoff, final, steps, messages, ...)."""
     msgs = [{"role": "system", "content": system_prompt(N, K)},
             {"role": "user", "content": user_prompt(question, i, N, K, incoming)}]
-    steps, used, nudges, final, handoff, seen = [], 0, 0, None, None, set()
+    steps, used, nudges, final, handoff, seen, handoff_invalid = [], 0, 0, None, None, set(), False
     cost = tokens_in = tokens_out = 0
     t0 = time.time()
 
@@ -142,10 +144,12 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
             if r["finish"] == "length" or bad:   # thinking ate the output budget, or the reply was empty / a tool call
                 msgs.append({"role": "user", "content": CUTOFF_REASK if r["finish"] == "length" else NOTOOL_REASK})
                 r = call("handoff_retry")
+                steps.append(dict(kind="handoff", reasoning=r["reasoning"], text=(r["content"] or "").strip(), finish_reason=r["finish"], retry=True))
+                msgs.append({"role": "assistant", "content": r["raw_content"] or "(empty)"})
                 if (r["content"] or "").strip():
                     handoff = r["content"].strip()
-                    steps.append(dict(kind="handoff", reasoning=r["reasoning"], text=handoff, finish_reason=r["finish"], retry=True))
-                    msgs.append({"role": "assistant", "content": r["raw_content"]})
+            if (not handoff) or ("<tool_call>" in handoff) or ("<function=" in handoff):
+                handoff, handoff_invalid = "", True      # recorded as an empty message; the next agent is told so
         else:
             msgs.append({"role": "user", "content": FINAL_PROMPT})
             for attempt in range(2):
@@ -163,7 +167,7 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag):
                 lines = [l.strip() for l in (steps[-1]["text"] or "").splitlines() if l.strip()]
                 final = (lines[-1] if lines else "")[:300]
                 steps[-1]["fallback"] = True
-    return dict(agent=i, incoming=incoming, handoff=handoff, final=final, tool_calls_used=used, nudges=nudges,
+    return dict(agent=i, incoming=incoming, handoff=handoff, handoff_invalid=handoff_invalid, final=final, tool_calls_used=used, nudges=nudges,
                 steps=steps, messages=msgs, cost=cost, tokens_in=tokens_in, tokens_out=tokens_out,
                 seconds=round(time.time() - t0, 1),
                 opened=[s["result"]["title"] for s in steps if s.get("kind") == "turn" and s.get("tool_calls")
