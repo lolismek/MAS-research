@@ -21,7 +21,8 @@ _log_lock = threading.Lock()
 
 TINKER_BASE = "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1"
 TINKER_MODEL = "Qwen/Qwen3.6-35B-A3B"
-TINKER_RATES = {"Qwen/Qwen3.6-35B-A3B": (0.36, 0.89)}   # $/M prompt, $/M completion (console, 2026-06-27)
+TINKER_RATES = {"Qwen/Qwen3.6-35B-A3B": (0.36, 0.89),   # $/M prompt, $/M completion (console, 2026-06-27)
+                "openai/gpt-oss-120b": (0.36, 0.89)}    # judge; rate not read from the console, Qwen rate used as the estimate
 
 HARD_CAP = float(os.environ.get("LIP_HARD_CAP", "0") or 0)   # total logged USD; 0 = no cap
 _cache = dict(t=0.0, file=0.0, delta=0.0)   # cached file total + costs logged by this process since the last read
