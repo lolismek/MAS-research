@@ -34,3 +34,16 @@ python lip/metrics/summarize.py --arms relay,ceiling ; python lip/metrics/summar
 # --budget = this invocation's spend cap; random / passthrough are smoke-only controls (--conds enhanced,original,random,passthrough)
 ```
 Spend: `python -c "import sys; sys.path.insert(0,'lip/harness'); from llm import spend; print(spend())"`.
+
+## Internal-belief experiment (`lip/internal/`)
+Question qualifier stripped (gpt-5.5), kept as a one-sentence private belief about intent (`data/tasks_internal.jsonl`,
+140/155 kept; fields `question` = stripped, `original_question`, `belief`, `qualifier`, `qualifier_type`, `alt_reading`).
+Arms differ only in who holds the belief in its system prompt (`--holder none|first|all`; `last` available); every agent in
+every arm gets the briefing-aware rule line; the briefing never enters the oracle's rendered prefix. Judge sees the original question.
+```
+python lip/internal/make_tasks.py --workers 8            # generation (done); --sample 20 prints a hand-check sample
+for h in none first all; do python lip/harness/run_task.py --holder $h --tasks lip/data/tasks_internal.jsonl \
+    --n 8 --k 2 --runs 3 --all --workers 8 --skip-done --budget 40; done
+python lip/internal/summarize.py                          # accuracy per arm, interpretation-lost rate, edge-1 externalization
+python lip/tests/test_internal_offline.py
+```
