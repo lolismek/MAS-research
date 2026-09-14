@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Kill every lip API consumer once total logged spend reaches the cap. Independent of the in-process check.
-CAP=${1:-100}
+CAP=${1:-100}; [ -f lip/traces/batch/CAP ] && CAP=$(cat lip/traces/batch/CAP)
 cd /Users/alexjerpelea/MAS-memory-research
 L=lip/traces/batch; mkdir -p $L
 while true; do
@@ -19,5 +19,6 @@ print(round(t,2))")
     exit 0
   fi
   [ -f $L/DONE_MARKER ] && exit 0
+  [ -f lip/traces/batch/CAP ] && CAP=$(cat lip/traces/batch/CAP)
   sleep 30
 done

@@ -7,7 +7,7 @@ Traces: lip/traces/<arm>/<task_id>/run_<r>/run.json
 import argparse, json, os, sys, time, traceback
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(__file__))
-from llm import TinkerChat, spend, BudgetExceeded, HARD_CAP
+from llm import TinkerChat, spend, BudgetExceeded, current_cap
 from tools import Corpus
 from relay import run_relay
 from judge import score
@@ -84,7 +84,7 @@ def main():
     def job(tr_):
         t, r = tr_
         try:
-            if spend() - spend0 > a.budget or (HARD_CAP and spend() >= HARD_CAP): return None
+            if spend() - spend0 > a.budget or (current_cap() and spend() >= current_cap()): return None
             return one(t, a.arm, a.n, a.k, r, chat, corpus, holder=a.holder)
         except Exception:
             return dict(task_id=t["id"], gold=t["answer"], run=r, error=traceback.format_exc()[-500:], unsaved=True)

@@ -11,7 +11,7 @@ import argparse, json, os, sys, traceback
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "harness"))
 sys.path.insert(0, os.path.dirname(__file__))
-from llm import TinkerChat, spend, BudgetExceeded, HARD_CAP
+from llm import TinkerChat, spend, BudgetExceeded, current_cap
 from tools import Corpus
 from relay import run_relay
 from judge import score
@@ -85,7 +85,7 @@ def main():
     chat, corpus = TinkerChat(), Corpus.get(); spend0 = spend()
     def job(tid):
         try:
-            if spend() - spend0 > a.budget or (HARD_CAP and spend() >= HARD_CAP): return dict(id=tid, skipped="budget")
+            if spend() - spend0 > a.budget or (current_cap() and spend() >= current_cap()): return dict(id=tid, skipped="budget")
             return run_one(tasks[tid], a.m, chat, corpus, conds, a.skip_done, a.arm, a.out)
         except Exception:
             return dict(id=tid, error=traceback.format_exc()[-400:])

@@ -57,10 +57,17 @@ def spend(tag_prefix=None, fresh=False):
             _cache.update(t=time.time(), file=_read_log(), delta=0.0)
         return _cache["file"] + _cache["delta"]
 
+CAP_FILE = os.path.join(ROOT, "lip", "traces", "batch", "CAP")   # a number in this file overrides LIP_HARD_CAP (live)
+
+def current_cap():
+    try: return float(open(CAP_FILE).read().strip())
+    except Exception: return HARD_CAP
+
 def check_cap(tag=""):
-    """Raise BudgetExceeded if the hard cap (LIP_HARD_CAP, total logged USD) is reached."""
-    if HARD_CAP and spend() >= HARD_CAP:
-        raise BudgetExceeded(f"hard cap ${HARD_CAP:.2f} reached (spend ${spend():.2f}) at {tag}")
+    """Raise BudgetExceeded if the hard cap (total logged USD; CAP file, else LIP_HARD_CAP) is reached."""
+    cap = current_cap()
+    if cap and spend() >= cap:
+        raise BudgetExceeded(f"hard cap ${cap:.2f} reached (spend ${spend():.2f}) at {tag}")
 
 # ---------------------------------------------------------------- Qwen XML tool calls
 _TC = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.S)
