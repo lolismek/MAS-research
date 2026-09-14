@@ -24,3 +24,41 @@
   "scientific" -> common name). A constraint stated in a handoff is weighted less than the same constraint in the system
   prompt: intent is externalized but not heeded. Worth a judge-based count.
 - By type (runs): temporal none .29 / first .40 / all .44; scope .27/.38/.38; entity .50/.67/.53; unit .33/.48/.52.
+
+# Position follow-up — 2026-09-14 (belief skips agent 1; +840 runs, 0 errors, $19 Tinker incl. judge)
+
+User's concern: agent 1 is special (plans the search with the belief; finishes alone in 57/420 first-arm runs). Test: put
+the belief in agent 2 only (`second`) vs agents 2-5 (`from_second`), so agent 1 always works on the unqualified question
+and hands off an off-track framing that the holder must correct.
+
+**Judge change**: Perplexity quota ran out mid-batch -> judge switched to `openai/gpt-oss-120b` on Tinker (LIP_JUDGE=tinker,
+default). All five arms are scored by it; the three earlier arms were re-judged with `lip/internal/rejudge.py`
+(911/931 agreement with the gpt-5.4-mini verdicts, 98%; old verdict kept in `score.judge_prev`). Re-judged first-batch
+numbers: none .317 / first .440 / all .440 (was .324/.440/.448).
+
+| arm | acc (runs) | majority-correct | finished by agent 1/2 | acc when finished by 1/2 | acc when finished by 3-5 |
+|---|---|---|---|---|---|
+| none | 0.317 (133/420) | 39/140 | 154 | 0.494 | 0.214 |
+| first (agent 1) | 0.440 (185/420) | 59/140 | 183 | 0.617 | 0.304 |
+| second (agent 2) | 0.429 (180/420) | 58/140 | 193 | 0.580 | 0.300 |
+| from_second (agents 2-5) | 0.445 (187/420) | 65/140 | 173 | 0.561 | 0.364 |
+| all | 0.440 (185/420) | 61/140 | 201 | 0.592 | 0.301 |
+
+Paired bootstrap over the 140 tasks (per-task mean accuracy, 5000 resamples):
+
+| comparison | diff | 95% CI |
+|---|---|---|
+| second - none | +0.112 | [+0.062, +0.162] |
+| from_second - second | +0.017 | [-0.033, +0.069] |
+| second - first | -0.012 | [-0.055, +0.033] |
+| all - from_second | -0.005 | [-0.055, +0.043] |
+| all - first | +0.000 | [-0.055, +0.055] |
+| all - none | +0.124 | [+0.062, +0.183] |
+
+- Position does not matter: the belief in agent 2 alone is worth +11 points, the same as in agent 1 alone (-1.2 points,
+  CI includes zero). Agent 2 overrides agent 1's off-track handoff and the correction survives the remaining relays.
+- Mid-chain internal loss is again null: from_second - second = +1.7 points, CI [-3.3, +6.9]. Same size as all - first.
+- The only hint of loss is in the runs that reach agents 3-5: from_second 0.364 vs second 0.300 (about 15 runs), i.e.
+  when the chain runs long, later holders help a little. Not significant at this n.
+- Conclusion strengthened: in a 5-agent relay with K=3, private intent held by ONE agent, wherever it sits, propagates
+  about as well as intent held by everyone. The failure mode remains "stated but unheeded", not "never stated".
