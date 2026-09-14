@@ -56,8 +56,9 @@ def parse_tool_calls(content):
 
 def tools_to_prompt(tools):
     """Render tool specs for the system prompt in the Qwen-native XML calling convention."""
-    lines = ["# Tools", "You may call tools. To call one, emit exactly this XML (one call per turn):",
-             "<tool_call>", "<function=NAME>", "<parameter=ARG>value</parameter>", "</function>", "</tool_call>",
+    lines = ["# Tools", "You may call tools. To call one, emit exactly this XML (one call per turn), with the function's",
+             "real name and parameter names, for example:",
+             "<tool_call>", "<function=search>", "<parameter=query>first ladies of the United States</parameter>", "</function>", "</tool_call>",
              "", "Available functions:"]
     for t in tools:
         f = t["function"] if "function" in t else t
