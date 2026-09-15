@@ -47,4 +47,21 @@ check("holders=none: rule swapped, nobody briefed", all(BRIEFING_RULE in c[0]["c
 # externalization heuristic
 check("carries(): year match", carries("The band's 1982 line-up had Pendlebury.", "in 1982"))
 check("carries(): token match", carries("the asker wants the american football player", "the American footballer") and not carries("nothing here", "as of August 2024"))
+
+# judge failure keeps the relay trace; relaunch rescores it without rerunning the relay
+import run_task, json
+run_task.TRACES = tempfile.mkdtemp()
+def boom(*a, **k): raise RuntimeError("401 insufficient_quota")
+run_task.score = boom
+chat = FakeChat([tc("search", query="a"), "msg", tc("finish", answer="Andrew Pendlebury")])
+tr = run_task.one(task, "internal_first", 2, 1, 1, chat, corpus, holder="first")
+saved = json.load(open(os.path.join(run_task.TRACES, "internal_first", "t1", "run_1", "run.json")))
+check("judge failure: trace saved with agents, correct=None, error 'judge:'",
+      len(saved["agents"]) == 2 and saved["correct"] is None and saved["error"].startswith("judge:") and saved["final"] == "Andrew Pendlebury")
+check("judge-failed run is not 'done'", not run_task._done(os.path.join(run_task.TRACES, "internal_first", "t1", "run_1", "run.json")))
+run_task.score = lambda q, g, c, tag="judge": dict(correct=True, em=True, judge=None, reason="em")
+chat2 = FakeChat([])
+tr = run_task.one(task, "internal_first", 2, 1, 1, chat2, corpus, holder="first")
+check("relaunch rescores without rerunning the relay", tr["correct"] is True and tr["error"] is None and chat2.calls == [] and len(tr["agents"]) == 2)
+
 print(f"all {n} checks passed")

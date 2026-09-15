@@ -27,21 +27,32 @@ def save(run_dir, tr):
             f.write(f"===== agent {a['agent']} (calls {a['tool_calls_used']}, opened {a['opened']}) =====\n")
             if a["handoff"] is not None: f.write(a["handoff"] + "\n\n")
             if a["final"] is not None: f.write(f"FINAL: {a['final']}\n\n")
-        f.write(f"gold: {tr['gold']}\ncorrect: {tr.get('correct')} ({tr.get('score', {}).get('reason')})\n")
+        f.write(f"gold: {tr['gold']}\ncorrect: {tr.get('correct')} ({(tr.get('score') or {}).get('reason')})\n")
 
-HOLDERS = {"none": lambda N: (), "first": lambda N: (1,), "last": lambda N: (N,), "all": lambda N: tuple(range(1, N + 1))}
+HOLDERS = {"none": lambda N: (), "first": lambda N: (1,), "last": lambda N: (N,), "all": lambda N: tuple(range(1, N + 1)),
+           "second": lambda N: (2,), "from_second": lambda N: tuple(range(2, N + 1))}   # agent 1 works without the belief
 
 def one(task, arm, N, K, r, chat, corpus, holder=None):
     run_dir = os.path.join(TRACES, arm, task["id"], f"run_{r}")
     tag = f"{arm}/{task['id']}/r{r}"
     try:
-        if holder is None:
+        prev = _judge_pending(os.path.join(run_dir, "run.json"))
+        if prev is not None:   # relay already ran, only the judge failed: rescore, don't rerun
+            tr = prev
+        elif holder is None:
             tr = run_relay(task, N, K, chat, corpus, tag)
         else:   # internal-belief arm: stripped question in task["question"], belief in task["belief"]
             tr = run_relay(task, N, K, chat, corpus, tag, briefing=task["belief"], holders=HOLDERS[holder](N))
             tr["holder"] = holder; tr["original_question"] = task.get("original_question")
-        sc = score(task.get("original_question") or task["question"], task["answer"], tr["final"] or "", tag=f"judge/{tag}")
-        tr["score"] = sc; tr["correct"] = sc["correct"]; tr["arm"] = arm; tr["run"] = r; tr["error"] = None
+        tr["arm"] = arm; tr["run"] = r
+        try:
+            sc = score(task.get("original_question") or task["question"], task["answer"], tr["final"] or "", tag=f"judge/{tag}")
+        except BudgetExceeded:
+            raise
+        except Exception:   # judge/API failure: keep the paid-for trace, mark for rescoring
+            tr["score"] = None; tr["correct"] = None; tr["error"] = "judge: " + traceback.format_exc()[-800:]
+            save(run_dir, tr); return tr
+        tr["score"] = sc; tr["correct"] = sc["correct"]; tr["error"] = None
     except BudgetExceeded as e:
         return dict(task_id=task["id"], gold=task["answer"], arm=arm, run=r, agents=[], final=None, correct=None,
                     error=f"BudgetExceeded: {e}", N=N, K=K, unsaved=True)      # not saved: re-runnable
@@ -50,6 +61,12 @@ def one(task, arm, N, K, r, chat, corpus, holder=None):
                   error=traceback.format_exc()[-2000:], N=N, K=K)
     save(run_dir, tr)
     return tr
+
+def _judge_pending(path):
+    """saved trace whose relay finished but whose judge call failed (error 'judge: ...'), else None."""
+    try: d = json.load(open(path))
+    except Exception: return None
+    return d if d.get("agents") and str(d.get("error") or "").startswith("judge:") else None
 
 def _done(path):
     """run.json exists and holds a completed (error-free) run."""

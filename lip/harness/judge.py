@@ -1,13 +1,16 @@
-"""Answer scoring: normalized exact match + strict LLM judge (gpt-5.4-mini via Perplexity).
+"""Answer scoring: normalized exact match + strict LLM judge.
+Judge backend: LIP_JUDGE=tinker (default; openai/gpt-oss-120b on Tinker, 146/150 agreement with gpt-5.4-mini on a
+2026-09-14 sample) or LIP_JUDGE=pplx (gpt-5.4-mini via Perplexity, used for the first internal batch).
 
 score(question, gold, candidate) -> dict(correct: bool, em: bool, judge: 'CORRECT'|'INCORRECT'|None, reason)
 Rule: correct = em or judge==CORRECT. em is a pure-string check so it never needs the API.
 """
 import json, os, re, string, sys
 sys.path.insert(0, os.path.dirname(__file__))
-from llm import PplxResponses
+from llm import PplxResponses, TinkerChat
 
-JUDGE_MODEL = "openai/gpt-5.4-mini"
+JUDGE_BACKEND = os.environ.get("LIP_JUDGE", "tinker")
+JUDGE_MODEL = {"pplx": "openai/gpt-5.4-mini", "tinker": "openai/gpt-oss-120b"}[JUDGE_BACKEND]
 _judge = None
 
 def normalize(s):
@@ -38,21 +41,26 @@ Reply with JSON only: {"verdict": "CORRECT" or "INCORRECT", "reason": "<one shor
 
 def llm_judge(question, gold, cand, tag="judge"):
     global _judge
-    if _judge is None: _judge = PplxResponses(model=JUDGE_MODEL, effort="low", max_output_tokens=300)
     prompt = f"Question: {question}\n\nGold answer: {gold}\n\nCandidate answer: {cand}\n\nJSON verdict:"
-    r = _judge.ask(prompt, system=JUDGE_SYS, tag=tag)
-    m = re.search(r"\{.*\}", r["text"], re.S)
+    if JUDGE_BACKEND == "pplx":
+        if _judge is None: _judge = PplxResponses(model=JUDGE_MODEL, effort="low", max_output_tokens=300)
+        r = _judge.ask(prompt, system=JUDGE_SYS, tag=tag); text = r["text"]
+    else:
+        if _judge is None: _judge = TinkerChat(model=JUDGE_MODEL, max_tokens=1500, timeout=120)
+        r = _judge.chat([dict(role="system", content=JUDGE_SYS), dict(role="user", content=prompt)], tag=tag, temperature=0)
+        text = r["content"]
+    m = re.search(r"\{.*\}", text, re.S)
     try:
         j = json.loads(m.group(0)) if m else {}
     except Exception:
         j = {}
     v = str(j.get("verdict", "")).upper()
     return dict(judge=("CORRECT" if v == "CORRECT" else "INCORRECT" if v == "INCORRECT" else None),
-                reason=j.get("reason", r["text"][:200]), cost=r["cost"])
+                reason=j.get("reason", text[:200]), cost=r["cost"], model=JUDGE_MODEL)
 
 def score(question, gold, cand, tag="judge", use_llm=True):
     em = exact_match(gold, cand)
     if em or not use_llm or not (cand or "").strip():
         return dict(correct=em, em=em, judge=None, reason="em" if em else "empty-or-no-llm")
     j = llm_judge(question, gold, cand, tag=tag)
-    return dict(correct=(j["judge"] == "CORRECT"), em=False, judge=j["judge"], reason=j["reason"])
+    return dict(correct=(j["judge"] == "CORRECT"), em=False, judge=j["judge"], reason=j["reason"], model=j["model"])
