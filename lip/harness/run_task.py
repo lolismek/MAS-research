@@ -34,8 +34,11 @@ HOLDERS = {"none": lambda N: (), "first": lambda N: (1,), "last": lambda N: (N,)
 
 # two-atom experiment: {arm: fn(N) -> {agent: which atoms}}; "1" = the atom for the EARLIER holder (task["first_atom"]), "2" = the other
 ATOM_ARMS = {"none": lambda N: {}, "both1": lambda N: {1: "12"}, "split13": lambda N: {1: "1", 3: "2"},
-             "all": lambda N: {i: "12" for i in range(1, N + 1)}}
-ATOM_MIN_FINISH = 3   # nobody may finish before agent 3 (split13's second holder), in every two-atom arm
+             "all": lambda N: {i: "12" for i in range(1, N + 1)},
+             "split35": lambda N: {3: "1", 5: "2"}, "all5": lambda N: {i: "12" for i in range(1, N + 1)}}
+# nobody may finish before agent 3 (split13's second holder); split35 and its control all5: only agent 5 may finish
+ATOM_MIN_FINISH = {"split35": 5, "all5": 5}
+def atom_min_finish(atom_arm): return ATOM_MIN_FINISH.get(atom_arm, 3)
 
 def atom_briefings(task, atom_arm, N):
     """{agent: briefing text} for a two-atom task (beliefs of the atoms that agent holds, earlier-holder atom first)."""
@@ -51,7 +54,7 @@ def one(task, arm, N, K, r, chat, corpus, holder=None, atom_arm=None):
         if prev is not None:   # relay already ran, only the judge failed: rescore, don't rerun
             tr = prev
         elif atom_arm is not None:   # two-atom arm: both qualifiers stripped, beliefs spread per ATOM_ARMS
-            tr = run_relay(task, N, K, chat, corpus, tag, briefings=atom_briefings(task, atom_arm, N), min_finish=ATOM_MIN_FINISH)
+            tr = run_relay(task, N, K, chat, corpus, tag, briefings=atom_briefings(task, atom_arm, N), min_finish=atom_min_finish(atom_arm))
             tr["atom_arm"] = atom_arm; tr["first_atom"] = task["first_atom"]; tr["original_question"] = task.get("original_question")
         elif holder is None:
             tr = run_relay(task, N, K, chat, corpus, tag)

@@ -10,9 +10,10 @@ from collections import Counter, defaultdict
 HERE = os.path.dirname(os.path.abspath(__file__))
 TRACES = os.path.join(HERE, "..", "traces")
 TASKS = os.path.join(HERE, "..", "data", "tasks_internal_2atom.jsonl")
-ARMS = ["int2_none", "int2_both1", "int2_split13", "int2_all"]
+ARMS = ["int2_none", "int2_both1", "int2_split13", "int2_all", "int2_split35", "int2_all5"]   # last two: only agent 5 may finish
 PAIRS = [("int2_both1", "int2_none"), ("int2_split13", "int2_both1"), ("int2_all", "int2_both1"),
-         ("int2_all", "int2_split13"), ("int2_split13", "int2_none")]
+         ("int2_all", "int2_split13"), ("int2_split13", "int2_none"), ("int2_split35", "int2_all5"), ("int2_all5", "int2_all"),
+         ("int2_split35", "int2_split13")]
 
 def load(arm):
     R = defaultdict(list)

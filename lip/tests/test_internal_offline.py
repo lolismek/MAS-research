@@ -108,4 +108,13 @@ tr = run_task.one(dict(t2, id="t4"), "int2_none", 5, 1, 1, chat, corpus, atom_ar
 check("agent 2 (no finish): search at handoff, finish() at the re-ask -> its text is the message", tr["agents"][1]["handoff"] == "half")
 check("agent 3 (may finish): finish() at the re-ask is accepted as the final", tr["finished_by"] == 3 and tr["final"] == "Andrew Pendlebury")
 
+# split35 / all5: only agent 5 may finish; beliefs in agents 3 and 5
+check("split35 briefings + min_finish", run_task.atom_briefings(t2, "split35", 5) == {3: "The asker means the guitarist.", 5: "The asker means the line-up in 1982."}
+      and run_task.atom_min_finish("split35") == 5 and run_task.atom_min_finish("all5") == 5 and run_task.atom_min_finish("split13") == 3
+      and run_task.atom_min_finish("none") == 3 and len(run_task.atom_briefings(t2, "all5", 5)) == 5)
+chat = FakeChat([tc("search", query="a"), "m1", tc("search", query="b"), "m2", tc("search", query="c"), tc("finish", answer="z"), "m3",
+                 tc("search", query="d"), "m4", tc("search", query="e"), tc("finish", answer="Andrew Pendlebury")])
+tr = run_task.one(dict(t2, id="t5"), "int2_split35", 5, 1, 1, chat, corpus, atom_arm="split35")
+check("split35: agent 3's finish blocked, finished by agent 5, holders [3, 5]", tr["finished_by"] == 5 and tr["holders"] == [3, 5] and tr["min_finish"] == 5)
+
 print(f"all {n} checks passed")
