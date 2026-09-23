@@ -38,7 +38,7 @@ def run_one(task, M, chat, corpus, conds, skip_done, arm="relay", out="inj"):
     if os.path.exists(op) and skip_done:
         oo = json.load(open(op))
     else:
-        oo = enhance(tr, tag=f"oracle/{task['id']}")
+        oo = enhance(tr, tag=(f"oracle/{task['id']}" if out == "inj" else f"{out}/oracle/{task['id']}"))
         oo["source_run"] = tr.get("run"); json.dump(oo, open(op, "w"), indent=1, ensure_ascii=False)
     if oo.get("declined"):
         return dict(id=task["id"], skipped="oracle declined: " + str(oo.get("why"))[:160], cost=oo.get("cost", 0))
@@ -53,7 +53,7 @@ def run_one(task, M, chat, corpus, conds, skip_done, arm="relay", out="inj"):
             rd = os.path.join(base, cond, f"run_{m}")
             if skip_done and _done(os.path.join(rd, "run.json")):
                 res[cond].append(json.load(open(os.path.join(rd, "run.json"))).get("correct")); continue
-            tag = f"inj/{task['id']}/{cond}/r{m}"
+            tag = f"{out}/{task['id']}/{cond}/r{m}"
             try:
                 t2 = run_relay(task, tr["N"], tr["K"], chat, corpus, tag, incoming=cm[cond], start_agent=i,
                                prefix_agents=tr["agents"][:i - 1])
@@ -82,10 +82,12 @@ def main():
     if a.limit: ids = ids[:a.limit]
     conds = a.conds.split(",")
     print(f"injection: {len(ids)} tasks, M={a.m}, conds={conds}", flush=True)
-    chat, corpus = TinkerChat(), Corpus.get(); spend0 = spend()
+    chat, corpus = TinkerChat(), Corpus.get()
+    mine = lambda: spend(a.out + "/") + spend("judge/" + a.out + "/")   # this experiment's own tags (sessions share the log)
+    spend0 = mine()
     def job(tid):
         try:
-            if spend() - spend0 > a.budget or (current_cap() and spend() >= current_cap()): return dict(id=tid, skipped="budget")
+            if mine() - spend0 > a.budget or (current_cap() and spend() >= current_cap()): return dict(id=tid, skipped="budget")
             return run_one(tasks[tid], a.m, chat, corpus, conds, a.skip_done, a.arm, a.out)
         except Exception:
             return dict(id=tid, error=traceback.format_exc()[-400:])

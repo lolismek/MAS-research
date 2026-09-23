@@ -9,11 +9,14 @@ fully supported by that span. The oracle never sees the gold answer.
 """
 import json, os, random, re, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "harness"))
-from llm import PplxResponses
+from llm import PplxResponses, TinkerChat
 from relay import render_prefix, spans
 
-ORACLE_MODEL = "openai/gpt-5.5"
-GROUND_MODEL = "openai/gpt-5.4-mini"
+# LIP_ORACLE=pplx (default; gpt-5.5 oracle + gpt-5.4-mini grounder via Perplexity, the 2026-09-14 N=8 batch) or
+# tinker (Qwen3.5-397B oracle + gpt-oss-120b grounder on Tinker; Perplexity out of quota 2026-09-23)
+ORACLE_BACKEND = os.environ.get("LIP_ORACLE", "pplx")
+ORACLE_MODEL, GROUND_MODEL = {"pplx": ("openai/gpt-5.5", "openai/gpt-5.4-mini"),
+                              "tinker": ("Qwen/Qwen3.5-397B-A17B", "openai/gpt-oss-120b")}[ORACLE_BACKEND]
 MAX_WORDS = 300
 
 ORACLE_SYS = """You are analysing a failed run of a relay of LLM agents. The relay: N agents work one after another on a
@@ -57,14 +60,29 @@ For a "fact" sentence the span contains only tool results and messages (no think
 For a "note" sentence (uncertainty, discarded candidate, dead end, plan) the span may include the agent's thinking.
 Reply with JSON only: {"supported": true or false, "reason": "<short>"}"""
 
+class TinkerAsk:
+    """PplxResponses.ask() interface over TinkerChat (reasoning stays in reasoning_content; text = the answer)."""
+    def __init__(self, model, max_tokens, timeout):
+        self.c = TinkerChat(model=model, max_tokens=max_tokens, timeout=timeout)
+    def ask(self, prompt, system=None, tag="", effort=None):
+        msgs = ([dict(role="system", content=system)] if system else []) + [dict(role="user", content=prompt)]
+        r = self.c.chat(msgs, tag=tag, temperature=0 if "ground" in tag else None)
+        return dict(text=r["content"], cost=r["cost"], latency=r["latency"], finish=r["finish"])
+
+def default_clients():
+    if ORACLE_BACKEND == "tinker":
+        return TinkerAsk(ORACLE_MODEL, 20000, 600), TinkerAsk(GROUND_MODEL, 3000, 120)
+    return (PplxResponses(model=ORACLE_MODEL, effort="high", max_output_tokens=6000),
+            PplxResponses(model=GROUND_MODEL, effort="low", max_output_tokens=300))
+
 def _json(text):
     m = re.search(r"\{.*\}", text, re.S)
     try: return json.loads(m.group(0)) if m else None
     except Exception: return None
 
 def enhance(trace, oracle=None, grounder=None, tag="oracle"):
-    oracle = oracle or PplxResponses(model=ORACLE_MODEL, effort="high", max_output_tokens=6000)
-    grounder = grounder or PplxResponses(model=GROUND_MODEL, effort="low", max_output_tokens=300)
+    if oracle is None or grounder is None:
+        o, g = default_clients(); oracle = oracle or o; grounder = grounder or g
     agents = trace["agents"]
     last = agents[-1]["agent"]
     prompt = (f"Question: {trace['question']}\n\nRelay: N={trace['N']} agents, K={trace['K']} tool calls each. "
@@ -83,6 +101,8 @@ def enhance(trace, oracle=None, grounder=None, tag="oracle"):
     out = []
     for item in j.get("addendum", []):
         text, cite = str(item.get("text", "")).strip(), str(item.get("cite", "")).strip()
+        mc = re.match(r"\(?(a\d+\.(?:s\d+|h))\b", cite)     # Qwen oracle writes a1.s4.result / (a1.h): keep the span id
+        if mc: cite = mc.group(1)
         kind = "note" if str(item.get("kind", "fact")).lower().startswith("note") else "fact"
         m = re.match(r"a(\d+)\.(s\d+|h)$", cite)
         rec = dict(text=text, cite=cite, kind=kind, in_prefix=bool(m) and int(m.group(1)) < i and cite in sp, supported=None, reason=None)
@@ -101,7 +121,7 @@ def enhance(trace, oracle=None, grounder=None, tag="oracle"):
         if words + w > MAX_WORDS: break
         trimmed.append(s); words += w
     return dict(i=i, why=j.get("why"), addendum=out, kept_text=" ".join(trimmed), n_kept=len(trimmed),
-                n_total=len(out), cost=cost, raw=r["text"])
+                n_total=len(out), cost=cost, raw=r["text"], oracle_model=ORACLE_MODEL, ground_model=GROUND_MODEL)
 
 _CITE = re.compile(r"\s*[\(\[]?\ba\d+\.(?:s\d+|h)\b[\)\]]?")
 def _strip_cites(t):
