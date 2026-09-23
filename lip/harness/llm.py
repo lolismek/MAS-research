@@ -22,7 +22,8 @@ _log_lock = threading.Lock()
 TINKER_BASE = "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1"
 TINKER_MODEL = "Qwen/Qwen3.6-35B-A3B"
 TINKER_RATES = {"Qwen/Qwen3.6-35B-A3B": (0.36, 0.89),   # $/M prompt, $/M completion (console, 2026-06-27)
-                "openai/gpt-oss-120b": (0.36, 0.89)}    # judge; rate not read from the console, Qwen rate used as the estimate
+                "openai/gpt-oss-120b": (0.36, 0.89),    # judge; rate not read from the console, Qwen rate used as the estimate
+                "Qwen/Qwen3.5-397B-A17B": (2.0, 6.0)}   # two-atom task generation; rate not read from the console, deliberately high placeholder
 
 HARD_CAP = float(os.environ.get("LIP_HARD_CAP", "0") or 0)   # total logged USD; 0 = no cap
 _cache = dict(t=0.0, file=0.0, delta=0.0)   # cached file total + costs logged by this process since the last read
@@ -64,11 +65,35 @@ def current_cap():
     try: return float(open(CAP_FILE).read().strip())
     except Exception: return HARD_CAP
 
+# Per-experiment cap: LIP_EXP_PREFIX=int2 LIP_EXP_CAP=30 -> stop once calls tagged "<prefix>..." or "judge/<prefix>..." reach the cap
+EXP_PREFIX = os.environ.get("LIP_EXP_PREFIX") or None
+EXP_CAP = float(os.environ.get("LIP_EXP_CAP", "0") or 0)
+_exp_cache = dict(t=0.0, v=0.0)
+
+def exp_spend():
+    if not EXP_PREFIX or not os.path.exists(LOG_PATH): return 0.0
+    with _log_lock:
+        if time.time() - _exp_cache["t"] > _SPEND_REFRESH:
+            tot = 0.0
+            for line in open(LOG_PATH):
+                if EXP_PREFIX not in line: continue
+                try: r = json.loads(line)
+                except Exception: continue
+                tg = str(r.get("tag", ""))
+                if tg.startswith(EXP_PREFIX) or tg.startswith("judge/" + EXP_PREFIX): tot += r.get("cost_usd", 0.0) or 0.0
+            _exp_cache.update(t=time.time(), v=tot)
+        return _exp_cache["v"]
+
+def exp_spent():
+    return bool(EXP_PREFIX and EXP_CAP and exp_spend() >= EXP_CAP)
+
 def check_cap(tag=""):
-    """Raise BudgetExceeded if the hard cap (total logged USD; CAP file, else LIP_HARD_CAP) is reached."""
+    """Raise BudgetExceeded if the hard cap (total logged USD; CAP file, else LIP_HARD_CAP) or the experiment cap is reached."""
     cap = current_cap()
     if cap and spend() >= cap:
         raise BudgetExceeded(f"hard cap ${cap:.2f} reached (spend ${spend():.2f}) at {tag}")
+    if exp_spent():
+        raise BudgetExceeded(f"experiment cap ${EXP_CAP:.2f} on '{EXP_PREFIX}' reached (${exp_spend():.2f}) at {tag}")
 
 # ---------------------------------------------------------------- Qwen XML tool calls
 _TC = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.S)

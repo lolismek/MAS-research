@@ -64,4 +64,41 @@ chat2 = FakeChat([])
 tr = run_task.one(task, "internal_first", 2, 1, 1, chat2, corpus, holder="first")
 check("relaunch rescores without rerunning the relay", tr["correct"] is True and tr["error"] is None and chat2.calls == [] and len(tr["agents"]) == 2)
 
+# ---- two-atom experiment: per-agent briefings + min_finish guard
+from relay import FINISH_BLOCKED
+t2 = dict(id="t2", question="Who played for the band?", original_question="Who played guitar for the Dugites in 1982?", answer="Andrew Pendlebury",
+          atoms=[dict(key="A", qualifier="in 1982", belief="The asker means the line-up in 1982."),
+                 dict(key="B", qualifier="guitar", belief="The asker means the guitarist.")], first_atom="B")
+run_task.score = lambda q, g, c, tag="judge": dict(correct=True, em=True, judge=None, reason="em")
+b = run_task.atom_briefings(t2, "split_far", 5)
+check("split_far: earlier holder (agent 1) gets first_atom=B, agent 4 gets A", b == {1: "The asker means the guitarist.", 4: "The asker means the line-up in 1982."})
+check("both1 / all / none briefings", run_task.atom_briefings(t2, "both1", 5) == {1: "The asker means the guitarist.\nThe asker means the line-up in 1982."}
+      and len(run_task.atom_briefings(t2, "all", 5)) == 5 and run_task.atom_briefings(t2, "none", 5) == {})
+sp = system_prompt(5, 1, briefing_mode=True, min_finish=4)
+check("min_finish rule text in every prompt", "agents 1 to 3 may NOT call finish()" in sp and "From agent 4 on" in sp)
+# agent 1 tries to finish (blocked twice -> handoff), agents 2,3 hand off, agent 4 finishes
+script = [tc("finish", answer="x"), tc("search", query="a"), "msg1",
+          tc("search", query="b"), "msg2", tc("search", query="c"), tc("finish", answer="nope"),
+          tc("search", query="d"), tc("finish", answer="Andrew Pendlebury")]
+chat = FakeChat(script)
+tr = run_task.one(t2, "int2_split_far", 5, 1, 1, chat, corpus, atom_arm="split_far")
+sysp = {}
+for c in chat.calls:
+    ag = int(c[1]["content"].split("You are agent ")[1].split()[0]); sysp.setdefault(ag, c[0]["content"])
+check("split_far: agent 1 briefed with B only, agent 4 with A only, 2/3 none",
+      "guitarist" in sysp[1] and "1982" not in sysp[1].split("# Briefing")[-1] and "line-up in 1982" in sysp[4] and "guitarist" not in sysp[4]
+      and "# Briefing" not in sysp[2] and "# Briefing" not in sysp[3])
+check("early finish blocked with FINISH_BLOCKED, finished by agent 4", tr["finished_by"] == 4 and tr["final"] == "Andrew Pendlebury"
+      and any("finish() is not available to you: you are agent 1" in m["content"] for m in chat.calls[1] if m["role"] == "user"))
+check("finish() at agent 3's handoff prompt becomes its message", tr["agents"][2]["handoff"] == "nope" and tr["agents"][2]["final"] is None)
+check("trace records atom_arm/briefings/min_finish", tr["atom_arm"] == "split_far" and tr["min_finish"] == 4 and tr["holders"] == [1, 4])
+check("briefing never in the oracle view", "The asker means" not in render_prefix(tr["agents"]))
+# finish() at a no-finish handoff prompt becomes the message
+chat = FakeChat([tc("search", query="a"), tc("finish", answer="Pendlebury, check 1982"), tc("search", query="b"), "m2", tc("search", query="c"), "m3",
+                 tc("search", query="d"), tc("finish", answer="Andrew Pendlebury")])
+tr = run_task.one(dict(t2, id="t3"), "int2_none", 5, 1, 1, chat, corpus, atom_arm="none")
+check("finish() at the no-finish handoff is used as the message", tr["agents"][0]["handoff"] == "Pendlebury, check 1982" and tr["finished_by"] == 4)
+check("int2_none: briefing-aware rule, nobody briefed", all(BRIEFING_RULE in c[0]["content"] and "# Briefing" not in c[0]["content"] for c in chat.calls))
+check("vanilla prompt keeps 'Any agent may submit'", "Any agent may submit the final answer with finish() as soon as" in system_prompt(3, 1))
+
 print(f"all {n} checks passed")

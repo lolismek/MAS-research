@@ -7,7 +7,7 @@ Traces: lip/traces/<arm>/<task_id>/run_<r>/run.json
 import argparse, json, os, sys, time, traceback
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(__file__))
-from llm import TinkerChat, spend, BudgetExceeded, current_cap
+from llm import TinkerChat, spend, BudgetExceeded, current_cap, exp_spent
 from tools import Corpus
 from relay import run_relay
 from judge import score
@@ -32,13 +32,27 @@ def save(run_dir, tr):
 HOLDERS = {"none": lambda N: (), "first": lambda N: (1,), "last": lambda N: (N,), "all": lambda N: tuple(range(1, N + 1)),
            "second": lambda N: (2,), "from_second": lambda N: tuple(range(2, N + 1))}   # agent 1 works without the belief
 
-def one(task, arm, N, K, r, chat, corpus, holder=None):
+# two-atom experiment: {arm: fn(N) -> {agent: which atoms}}; "1" = the atom for the EARLIER holder (task["first_atom"]), "2" = the other
+ATOM_ARMS = {"none": lambda N: {}, "both1": lambda N: {1: "12"}, "split_adj": lambda N: {1: "1", 2: "2"},
+             "split_far": lambda N: {1: "1", 4: "2"}, "all": lambda N: {i: "12" for i in range(1, N + 1)}}
+ATOM_MIN_FINISH = 4   # nobody may finish before agent 4 (split_far's second holder), in every two-atom arm
+
+def atom_briefings(task, atom_arm, N):
+    """{agent: briefing text} for a two-atom task (beliefs of the atoms that agent holds, earlier-holder atom first)."""
+    by_key = {a["key"]: a["belief"] for a in task["atoms"]}
+    order = {"1": task["first_atom"], "2": "B" if task["first_atom"] == "A" else "A"}
+    return {i: "\n".join(by_key[order[c]] for c in cs) for i, cs in ATOM_ARMS[atom_arm](N).items()}
+
+def one(task, arm, N, K, r, chat, corpus, holder=None, atom_arm=None):
     run_dir = os.path.join(TRACES, arm, task["id"], f"run_{r}")
     tag = f"{arm}/{task['id']}/r{r}"
     try:
         prev = _judge_pending(os.path.join(run_dir, "run.json"))
         if prev is not None:   # relay already ran, only the judge failed: rescore, don't rerun
             tr = prev
+        elif atom_arm is not None:   # two-atom arm: both qualifiers stripped, beliefs spread per ATOM_ARMS
+            tr = run_relay(task, N, K, chat, corpus, tag, briefings=atom_briefings(task, atom_arm, N), min_finish=ATOM_MIN_FINISH)
+            tr["atom_arm"] = atom_arm; tr["first_atom"] = task["first_atom"]; tr["original_question"] = task.get("original_question")
         elif holder is None:
             tr = run_relay(task, N, K, chat, corpus, tag)
         else:   # internal-belief arm: stripped question in task["question"], belief in task["belief"]
@@ -83,18 +97,22 @@ def main():
     ap.add_argument("--limit", type=int, default=0); ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--holder", choices=sorted(HOLDERS), default=None,
                     help="internal-belief experiment: who gets the task's belief as a private briefing (needs --tasks tasks_internal.jsonl)")
+    ap.add_argument("--atom-arm", choices=sorted(ATOM_ARMS), default=None,
+                    help="two-atom experiment: who holds which belief (needs --tasks tasks_internal_2atom.jsonl); arm dir int2_<atom-arm>")
     ap.add_argument("--skip-done", action="store_true"); ap.add_argument("--budget", type=float, default=5.0,
                     help="stop launching new runs once total logged spend exceeds this many USD")
     a = ap.parse_args()
     if a.holder and a.arm == "relay": a.arm = f"internal_{a.holder}"
+    if a.atom_arm and a.arm == "relay": a.arm = f"int2_{a.atom_arm}"
     tasks = load_tasks(a.tasks)
+    if a.atom_arm: assert all("atoms" in t for t in tasks.values()), "--atom-arm needs tasks_internal_2atom.jsonl"
     if a.holder: assert all("belief" in t for t in tasks.values()), "--holder needs a tasks file with a `belief` field"
     ids = list(tasks) if a.all else a.ids
     if a.limit: ids = ids[:a.limit]
     jobs = [(tasks[i], r) for i in ids for r in range(1, a.runs + 1)]
     if a.skip_done:   # skip finished runs; errored runs (harness/API failure) are re-done
         jobs = [(t, r) for t, r in jobs if not _done(os.path.join(TRACES, a.arm, t["id"], f"run_{r}", "run.json"))]
-    print(f"{a.arm} N={a.n} K={a.k} holder={a.holder}: {len(jobs)} runs, workers={a.workers}, budget ${a.budget}", flush=True)
+    print(f"{a.arm} N={a.n} K={a.k} holder={a.holder} atom_arm={a.atom_arm}: {len(jobs)} runs, workers={a.workers}, budget ${a.budget}", flush=True)
     chat, corpus = TinkerChat(), Corpus.get()
     t0 = time.time(); done = 0; correct = 0; spend0 = spend(a.arm + "/")   # this arm's own tags only (parallel arms share the log)
 
@@ -102,7 +120,8 @@ def main():
         t, r = tr_
         try:
             if spend(a.arm + "/") - spend0 > a.budget or (current_cap() and spend() >= current_cap()): return None
-            return one(t, a.arm, a.n, a.k, r, chat, corpus, holder=a.holder)
+            if exp_spent(): return None
+            return one(t, a.arm, a.n, a.k, r, chat, corpus, holder=a.holder, atom_arm=a.atom_arm)
         except Exception:
             return dict(task_id=t["id"], gold=t["answer"], run=r, error=traceback.format_exc()[-500:], unsaved=True)
 

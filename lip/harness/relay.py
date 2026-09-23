@@ -40,10 +40,17 @@ BRIEFING_RULE = ("- Use only information obtained through the tools in this rela
                  "Do not answer from memory or guess.")
 BRIEFING = "\n\n# Briefing\n{B}"
 
-def system_prompt(N, K, briefing=None, briefing_mode=False):
+MIN_FINISH_RULE = ("agent may submit the final answer with finish() as soon as it is confident, except that agents 1 to {m1} may "
+                   "NOT call finish(): they always hand off. From agent {m} on, any agent may finish.")
+
+def system_prompt(N, K, briefing=None, briefing_mode=False, min_finish=1):
     """briefing_mode: internal-belief experiment (rule line admits a briefing; same wording for every agent in every arm).
-    briefing: this agent's private briefing text (None = this agent holds nothing)."""
+    briefing: this agent's private briefing text (None = this agent holds nothing).
+    min_finish: agents before this index may not finish (two-atom experiment); 1 = the original rule."""
     s = RULES.format(N=N, K=K, TOOLS=tools_to_prompt(TOOL_SPECS))
+    if min_finish > 1:
+        s = s.replace("agent may submit the final answer with finish() as soon as\nit is confident.",
+                      MIN_FINISH_RULE.format(m1=min_finish - 1, m=min_finish))
     if briefing_mode or briefing:
         s = s.replace("- Use only information obtained through the tools in this relay. Do not answer from memory or guess.", BRIEFING_RULE)
     if briefing:
@@ -74,6 +81,11 @@ BAD_FINISH_REASK = ("finish(answer) must contain only a short answer to the ques
 _BAD_FINISH = re.compile(r"next agent|agent \d|I (found|could not|couldn't|need)|please", re.I)
 def valid_finish(ans):
     return bool(ans) and len(ans) <= 200 and len(ans.split()) <= 25 and not _BAD_FINISH.search(ans)
+HANDOFF_PROMPT_NOFINISH = ("Your tool budget is spent. Write the message to the next agent: they start with a fresh context and will "
+                           "see only the question and your message, so write whatever you think they need to finish the task, in "
+                           "whatever form you think best. Plain text only; search, open and finish are disabled.")
+FINISH_BLOCKED = ("finish() is not available to you: you are agent {i}, and only agents {m} to {N} may finish. Continue with "
+                  "search or open (calls remaining: {r}); your findings go to the next agent in your handoff message.")
 NOTOOL_REASK = "That was not a message. Tools are disabled now. Write the message to the next agent in plain text."
 
 _ANS = re.compile(r"^\W*(?:final\s+answer|answer)\W*:\s*(.+?)\W*$", re.I)
@@ -96,9 +108,10 @@ def _final_from_text(text):
         if m and m.group(1).strip(): return m.group(1).strip().strip("*").strip()
     return None
 
-def run_agent(i, N, K, question, incoming, chat, corpus, tag, briefing=None, briefing_mode=False):
+def run_agent(i, N, K, question, incoming, chat, corpus, tag, briefing=None, briefing_mode=False, min_finish=1):
     """Execute one agent. Returns dict(handoff, final, steps, messages, ...)."""
-    msgs = [{"role": "system", "content": system_prompt(N, K, briefing=briefing, briefing_mode=briefing_mode)},
+    may_finish = i >= min_finish; blocked = 0
+    msgs = [{"role": "system", "content": system_prompt(N, K, briefing=briefing, briefing_mode=briefing_mode, min_finish=min_finish)},
             {"role": "user", "content": user_prompt(question, i, N, K, incoming)}]
     steps, used, nudges, final, handoff, seen, handoff_invalid, bad_finishes = [], 0, 0, None, None, set(), False, 0
     cost = tokens_in = tokens_out = 0
@@ -116,6 +129,13 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag, briefing=None, bri
                     tool_calls=r["tool_calls"], finish_reason=r["finish"])
         steps.append(step)
         tc = r["tool_calls"][0] if r["tool_calls"] else None
+        if tc and tc["name"] == "finish" and not may_finish:   # early finish not allowed: bounce, twice at most
+            blocked += 1; step["finish_blocked"] = True
+            msgs.append({"role": "assistant", "content": r["raw_content"]})
+            if blocked <= 2 and used < K:
+                msgs.append({"role": "user", "content": FINISH_BLOCKED.format(i=i, m=min_finish, N=N, r=K - used)})
+                continue
+            break                                    # budget treated as spent -> handoff
         if tc and tc["name"] == "finish":
             ans = (tc["args"].get("answer") or "").strip()
             if valid_finish(ans) or bad_finishes >= 1:
@@ -156,10 +176,12 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag, briefing=None, bri
 
     if final is None:
         if i < N:
-            msgs.append({"role": "user", "content": HANDOFF_PROMPT})
+            msgs.append({"role": "user", "content": HANDOFF_PROMPT if may_finish else HANDOFF_PROMPT_NOFINISH})
             r = call("handoff")
             tcf = r["tool_calls"][0] if r["tool_calls"] else None
-            if tcf and tcf["name"] == "finish":
+            if tcf and tcf["name"] == "finish" and not may_finish:
+                r["content"] = (tcf["args"].get("answer") or "").strip()   # finish() at the handoff: its text is the message
+            elif tcf and tcf["name"] == "finish":
                 ans = (tcf["args"].get("answer") or "").strip()
                 if valid_finish(ans):
                     final = ans
@@ -213,23 +235,28 @@ def _agent_record(i, incoming, handoff, handoff_invalid, final, used, nudges, st
                 searches=[s["tool_calls"][0]["args"].get("query", "") for s in steps if s.get("kind") == "turn"
                           and s.get("tool_calls") and s["tool_calls"][0]["name"] == "search"])
 
-def run_relay(task, N, K, chat, corpus, tag, incoming=None, start_agent=1, prefix_agents=None, briefing=None, holders=()):
+def run_relay(task, N, K, chat, corpus, tag, incoming=None, start_agent=1, prefix_agents=None, briefing=None, holders=(),
+              briefings=None, min_finish=1):
     """briefing/holders: internal-belief experiment. Agents whose index is in `holders` get `briefing` in their
     system prompt; every agent gets the briefing-aware rule line (briefing_mode) so arms differ only in who holds it.
-    The briefing never enters steps, so render_prefix/spans (the oracle's view) do not contain it."""
+    The briefing never enters steps, so render_prefix/spans (the oracle's view) do not contain it.
+    briefings: {agent index: briefing text} (two-atom experiment; overrides briefing/holders; briefing_mode for everyone).
+    min_finish: agents before this index may not finish."""
     agents = list(prefix_agents or [])
     assert len(agents) == start_agent - 1
-    holders = set(holders or ()); briefing_mode = briefing is not None
+    holders = set(holders or ()); briefing_mode = briefing is not None or briefings is not None
+    if briefings is not None: holders = {i for i, b in briefings.items() if b}
     t0 = time.time(); final = None
     for i in range(start_agent, N + 1):
         a = run_agent(i, N, K, task["question"], incoming, chat, corpus, tag,
-                      briefing=(briefing if i in holders else None), briefing_mode=briefing_mode)
+                      briefing=((briefings or {}).get(i) if briefings is not None else briefing if i in holders else None),
+                      briefing_mode=briefing_mode, min_finish=min_finish)
         agents.append(a)
         if a["final"] is not None:
             final = a["final"]; break
         incoming = a["handoff"]
     return dict(task_id=task["id"], question=task["question"], gold=task["answer"], N=N, K=K,
-                briefing=briefing, holders=sorted(holders),
+                briefing=briefing, holders=sorted(holders), briefings=briefings, min_finish=min_finish,
                 start_agent=start_agent, final=final, finished_by=agents[-1]["agent"] if final is not None else None,
                 agents=agents, cost=sum(a["cost"] for a in agents[start_agent - 1:]),
                 tokens_in=sum(a["tokens_in"] for a in agents[start_agent - 1:]),
