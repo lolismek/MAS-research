@@ -33,9 +33,9 @@ HOLDERS = {"none": lambda N: (), "first": lambda N: (1,), "last": lambda N: (N,)
            "second": lambda N: (2,), "from_second": lambda N: tuple(range(2, N + 1))}   # agent 1 works without the belief
 
 # two-atom experiment: {arm: fn(N) -> {agent: which atoms}}; "1" = the atom for the EARLIER holder (task["first_atom"]), "2" = the other
-ATOM_ARMS = {"none": lambda N: {}, "both1": lambda N: {1: "12"}, "split_adj": lambda N: {1: "1", 2: "2"},
-             "split_far": lambda N: {1: "1", 4: "2"}, "all": lambda N: {i: "12" for i in range(1, N + 1)}}
-ATOM_MIN_FINISH = 4   # nobody may finish before agent 4 (split_far's second holder), in every two-atom arm
+ATOM_ARMS = {"none": lambda N: {}, "both1": lambda N: {1: "12"}, "split13": lambda N: {1: "1", 3: "2"},
+             "all": lambda N: {i: "12" for i in range(1, N + 1)}}
+ATOM_MIN_FINISH = 3   # nobody may finish before agent 3 (split13's second holder), in every two-atom arm
 
 def atom_briefings(task, atom_arm, N):
     """{agent: briefing text} for a two-atom task (beliefs of the atoms that agent holds, earlier-holder atom first)."""
