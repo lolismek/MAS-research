@@ -32,7 +32,7 @@ def main():
     runs = {arm: [r for r in load_runs(arm) if not r.get("error")] for arm, _, _ in ARMS}
     accs = {arm: task_acc(v) for arm, v in runs.items() if v}
     common = set.intersection(*(set(v) for v in accs.values())) if accs else set()
-    judges = {arm: sorted({(r.get("score") or {}).get("model") or ("em" if (r.get("score") or {}).get("em") else "gpt-5.4-mini?")
+    judges = {arm: sorted({(r.get("score") or {}).get("model") or ("em" if (r.get("score") or {}).get("em") else "empty-answer")
                            for r in v}) for arm, v in runs.items()}
     print(f"tasks with runs in every arm: {len(common)}")
     rows = []
