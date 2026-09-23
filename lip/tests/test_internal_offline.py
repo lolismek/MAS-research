@@ -101,4 +101,11 @@ check("finish() at the no-finish handoff is used as the message", tr["agents"][0
 check("int2_none: briefing-aware rule, nobody briefed", all(BRIEFING_RULE in c[0]["content"] and "# Briefing" not in c[0]["content"] for c in chat.calls))
 check("vanilla prompt keeps 'Any agent may submit'", "Any agent may submit the final answer with finish() as soon as" in system_prompt(3, 1))
 
+# re-ask after a bad handoff: agent 3 (may finish) answers with finish() -> accepted as the final answer
+chat = FakeChat([tc("search", query="a"), "m1", tc("search", query="b"), tc("search", query="again"), tc("finish", answer="half"),
+                 tc("search", query="c"), tc("search", query="x"), tc("finish", answer="Andrew Pendlebury")])
+tr = run_task.one(dict(t2, id="t4"), "int2_none", 5, 1, 1, chat, corpus, atom_arm="none")
+check("agent 2 (no finish): search at handoff, finish() at the re-ask -> its text is the message", tr["agents"][1]["handoff"] == "half")
+check("agent 3 (may finish): finish() at the re-ask is accepted as the final", tr["finished_by"] == 3 and tr["final"] == "Andrew Pendlebury")
+
 print(f"all {n} checks passed")

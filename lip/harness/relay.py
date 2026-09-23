@@ -201,6 +201,13 @@ def run_agent(i, N, K, question, incoming, chat, corpus, tag, briefing=None, bri
                 msgs.append({"role": "assistant", "content": r["raw_content"] or "(empty)"})
                 if (r["content"] or "").strip():
                     handoff = _strip_delims(r["content"].strip())
+                tcr = r["tool_calls"][0] if r["tool_calls"] else None
+                if min_finish > 1 and tcr and tcr["name"] == "finish":   # two-atom experiment only (others keep the old behaviour)
+                    ans = (tcr["args"].get("answer") or "").strip()
+                    if may_finish and valid_finish(ans):         # a real answer at the re-ask: accept it instead of an empty message
+                        final = ans; steps[-1]["result"] = f"finish({final!r})"
+                        return _agent_record(i, incoming, None, handoff_invalid, final, used, nudges, steps, msgs, cost, tokens_in, tokens_out, t0, briefing)
+                    if not may_finish and ans: handoff = ans      # same rule as the first attempt: its text is the message
             if _bad_handoff(handoff):
                 handoff, handoff_invalid = "", True      # recorded as an empty message; the next agent is told so
         else:
