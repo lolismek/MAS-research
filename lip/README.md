@@ -49,3 +49,11 @@ python lip/harness/run_task.py --holder first --tasks lip/data/tasks_internal.js
 python lip/internal/summarize.py                          # accuracy per arm, interpretation-lost rate, edge-1 externalization
 python lip/tests/test_internal_offline.py
 ```
+
+## Fixed-budget N sweep (N*K = 16)
+Arms ceiling (1x16), relay_2x8, relay_4x4, relay (8x2), relay_16x1 on the 155 screened tasks, 3 runs; the old relay/ceiling
+arms are re-judged with gpt-oss-120b so every point shares one judge.
+```
+WORKERS=28 nohup zsh lip/run_sweep.sh &      # logs lip/traces/batch_sweep/; shares the CAP file + lip/watchdog.sh
+python lip/metrics/sweep.py --plot lip/results/sweep/acc_vs_n.png
+```
