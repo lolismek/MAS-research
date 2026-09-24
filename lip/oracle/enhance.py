@@ -9,7 +9,7 @@ fully supported by that span. The oracle never sees the gold answer.
 """
 import json, os, random, re, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "harness"))
-from llm import PplxResponses, TinkerChat
+from llm import PplxResponses, TinkerChat, ContextTooLong
 from relay import render_prefix, spans
 
 # LIP_ORACLE=pplx (default; gpt-5.5 oracle + gpt-5.4-mini grounder via Perplexity, the 2026-09-14 N=8 batch) or
@@ -17,8 +17,11 @@ from relay import render_prefix, spans
 ORACLE_BACKEND = os.environ.get("LIP_ORACLE", "pplx")
 ORACLE_MODEL, GROUND_MODEL = {"pplx": ("openai/gpt-5.5", "openai/gpt-5.4-mini"),
                               "tinker": ("Qwen/Qwen3.5-397B-A17B:peft:262144", "Qwen/Qwen3.5-397B-A17B")}[ORACLE_BACKEND]
-# tinker: the 256K-context variant fits every relay trace untrimmed (longest ~125K tokens); the grounder sees one cited
-# span per call, so it runs the same model at 64K (cheaper list price)
+# tinker: the 256K-context variant fits every relay trace untrimmed (longest ~125K tokens). Same weights at 64K cost 25%
+# less, so a prompt that fits 64K goes there (ORACLE_SHORT) and only longer ones use 256K; the grounder sees one cited
+# span per call, so it always runs at 64K
+ORACLE_SHORT = "Qwen/Qwen3.5-397B-A17B" if ORACLE_BACKEND == "tinker" else None
+ORACLE_MAX_TOKENS = 20000
 MAX_WORDS = 300
 
 ORACLE_SYS = """You are analysing a failed run of a relay of LLM agents. The relay: N agents work one after another on a
@@ -73,7 +76,7 @@ class TinkerAsk:
 
 def default_clients():
     if ORACLE_BACKEND == "tinker":
-        return TinkerAsk(ORACLE_MODEL, 20000, 600), TinkerAsk(GROUND_MODEL, 8000, 300)
+        return TinkerAsk(ORACLE_MODEL, ORACLE_MAX_TOKENS, 600), TinkerAsk(GROUND_MODEL, 8000, 300)
     return (PplxResponses(model=ORACLE_MODEL, effort="high", max_output_tokens=6000),
             PplxResponses(model=GROUND_MODEL, effort="low", max_output_tokens=300))
 
@@ -90,13 +93,20 @@ def enhance(trace, oracle=None, grounder=None, tag="oracle"):
     prompt = (f"Question: {trace['question']}\n\nRelay: N={trace['N']} agents, K={trace['K']} tool calls each. "
               f"Agents that ran: 1..{last}. Final answer given: {trace['final']!r} (wrong).\n\n"
               f"FULL TRACE:\n{render_prefix(agents)}\n\nNow produce the JSON.")
-    r = oracle.ask(prompt, system=ORACLE_SYS, tag=f"{tag}/pick")
+    oracle_model = getattr(getattr(oracle, "c", None), "model", ORACLE_MODEL)
+    if ORACLE_SHORT and isinstance(oracle, TinkerAsk) and len(prompt) / 3 + ORACLE_MAX_TOKENS < 65536 - 2000:
+        short = TinkerAsk(ORACLE_SHORT, ORACLE_MAX_TOKENS, 600)   # ~3 chars/token is a conservative estimate
+        try: r = short.ask(prompt, system=ORACLE_SYS, tag=f"{tag}/pick"); oracle_model = ORACLE_SHORT
+        except ContextTooLong: r = oracle.ask(prompt, system=ORACLE_SYS, tag=f"{tag}/pick")
+    else:
+        r = oracle.ask(prompt, system=ORACLE_SYS, tag=f"{tag}/pick")
     j = _json(r["text"]) or {}
     cost = r["cost"]
     try: i = int(j.get("i"))
     except Exception: i = None
     if j.get("i") is None and "why" in j:
-        return dict(i=None, why=j.get("why"), addendum=[], kept_text="", n_kept=0, n_total=0, cost=cost, raw=r["text"], declined=True)
+        return dict(i=None, why=j.get("why"), addendum=[], kept_text="", n_kept=0, n_total=0, cost=cost, raw=r["text"], declined=True,
+                    oracle_model=oracle_model, oracle_finish=r.get("finish"))
     if i is None or i < 2 or i > last:
         return dict(i=None, why=j.get("why"), addendum=[], kept_text="", n_kept=0, n_total=0, cost=cost, raw=r["text"], error="bad i")
     sp = spans(agents); sp_fact = spans(agents, thinking=False)
@@ -123,7 +133,8 @@ def enhance(trace, oracle=None, grounder=None, tag="oracle"):
         if words + w > MAX_WORDS: break
         trimmed.append(s); words += w
     return dict(i=i, why=j.get("why"), addendum=out, kept_text=" ".join(trimmed), n_kept=len(trimmed),
-                n_total=len(out), cost=cost, raw=r["text"], oracle_model=ORACLE_MODEL, ground_model=GROUND_MODEL)
+                n_total=len(out), cost=cost, raw=r["text"], oracle_model=oracle_model, ground_model=GROUND_MODEL,
+                oracle_finish=r.get("finish"))
 
 _CITE = re.compile(r"\s*[\(\[]?\ba\d+\.(?:s\d+|h)\b[\)\]]?")
 def _strip_cites(t):

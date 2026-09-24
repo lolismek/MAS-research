@@ -1,6 +1,7 @@
 """Oracle patching across N (fixed budget N*K = 16): loss score L(N), paired gain, and where the patch helps.
 
-  python lip/metrics/inj_sweep.py [--plot lip/results/inj_sweep/loss_vs_n.png]
+  python lip/metrics/inj_sweep.py [--tasks lip/data/tasks_injN50.jsonl] [--plot lip/results/inj_sweep/loss_vs_n.png]
+--tasks: the task set L is averaged over (default: all 155 screened; tasks_injN<n>.jsonl = first n of a seed-0 shuffle)
 
 Per task t of the 155 screened tasks, with source arm runs r (3 per task):
   w(t)  = share of t's source runs that failed AND crossed at least one handoff (only those can be patched)
@@ -69,8 +70,9 @@ def arm_stats(src, inj, N, tasks, rng):
                 mean_w=sum(w.values()) / len(tasks))
 
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("--plot", default=None); a = ap.parse_args()
-    tasks = [json.loads(l)["id"] for l in open(os.path.join(DATA, "tasks_screened.jsonl"))]
+    ap = argparse.ArgumentParser(); ap.add_argument("--plot", default=None)
+    ap.add_argument("--tasks", default=os.path.join(DATA, "tasks_screened.jsonl")); a = ap.parse_args()
+    tasks = [json.loads(l)["id"] for l in open(a.tasks)]
     rng = random.Random(0); rows = []
     print(f"{len(tasks)} tasks; L = mean_t w(t)*d(t), w = share of runs failed after >=1 handoff\n")
     for src, inj, N, K in ARMS + [REF]:

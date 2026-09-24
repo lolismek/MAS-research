@@ -45,6 +45,9 @@ _SPEND_REFRESH = 20.0
 class BudgetExceeded(RuntimeError):
     pass
 
+class ContextTooLong(RuntimeError):
+    pass
+
 
 def _log(rec):
     rec = dict(ts=time.time(), **rec)
@@ -141,8 +144,9 @@ def tools_to_prompt(tools):
     return "\n".join(lines)
 
 class TinkerChat:
-    def __init__(self, model=TINKER_MODEL, max_tokens=12000, timeout=150, retries=8):
+    def __init__(self, model=TINKER_MODEL, max_tokens=12000, timeout=150, retries=None):
         from openai import OpenAI
+        retries = retries or int(os.environ.get("LIP_TINKER_RETRIES", "8"))   # 429s are account-wide (shared lab account)
         self.c = OpenAI(api_key=os.environ["TINKER_API_KEY"], base_url=TINKER_BASE, timeout=timeout, max_retries=0)
         self.model, self.max_tokens, self.retries = model, max_tokens, retries
 
@@ -159,9 +163,10 @@ class TinkerChat:
                 r = self.c.chat.completions.create(**kw); break
             except Exception as e:
                 last = e
+                if "context window" in str(e): raise ContextTooLong(str(e)[:300])   # retrying can't help
                 _log(dict(tag=tag, backend="tinker", model=self.model, prompt_tokens=0, completion_tokens=0, cost_usd=0.0,
                           latency_s=round(time.time() - t0, 2), finish="error", error=str(e)[:200], attempt=k))
-                time.sleep(min(60, 3 * 2 ** k))     # 3, 6, 12, 24, 48, 60, 60, 60 s (capacity / rate-limit errors)
+                time.sleep(min(60, 3 * 2 ** k))     # 3, 6, 12, 24, 48, then 60 s per try (capacity / rate-limit errors)
         else:
             raise RuntimeError(f"tinker failed after {self.retries} tries: {last}")
         lat = time.time() - t0
