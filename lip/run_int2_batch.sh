@@ -25,8 +25,10 @@ stage "retry pass 1"
 run_arms 3 1 "_retry1"
 stage "retry pass 2"
 run_arms 2 0.5 "_retry2"
-stage "atom judge"
-$PY lip/internal/atom_judge.py --arms $(for h in ${=ARMS}; do echo -n "int2_$h "; done) --workers 12 > $L/atom_judge.log 2>&1
+if [[ ${SKIP_JUDGE:-0} == 1 ]]; then stage "atom judge SKIPPED (SKIP_JUDGE=1)"; else
+  stage "atom judge"
+  $PY lip/internal/atom_judge.py --arms $(for h in ${=ARMS}; do echo -n "int2_$h "; done) --workers 12 > $L/atom_judge.log 2>&1
+fi
 stage "summarize"
 $PY lip/internal/summarize_2atom.py > $L/summary.txt 2>&1
 cat $L/summary.txt >> $L/batch.log
