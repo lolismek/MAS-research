@@ -13,10 +13,12 @@ from llm import PplxResponses, TinkerChat
 from relay import render_prefix, spans
 
 # LIP_ORACLE=pplx (default; gpt-5.5 oracle + gpt-5.4-mini grounder via Perplexity, the 2026-09-14 N=8 batch) or
-# tinker (Qwen3.5-397B oracle + gpt-oss-120b grounder on Tinker; Perplexity out of quota 2026-09-23)
+# tinker (Qwen3.5-397B oracle + grounder on Tinker; Perplexity out of quota 2026-09-23)
 ORACLE_BACKEND = os.environ.get("LIP_ORACLE", "pplx")
 ORACLE_MODEL, GROUND_MODEL = {"pplx": ("openai/gpt-5.5", "openai/gpt-5.4-mini"),
-                              "tinker": ("Qwen/Qwen3.5-397B-A17B", "openai/gpt-oss-120b")}[ORACLE_BACKEND]
+                              "tinker": ("Qwen/Qwen3.5-397B-A17B:peft:262144", "Qwen/Qwen3.5-397B-A17B")}[ORACLE_BACKEND]
+# tinker: the 256K-context variant fits every relay trace untrimmed (longest ~125K tokens); the grounder sees one cited
+# span per call, so it runs the same model at 64K (cheaper list price)
 MAX_WORDS = 300
 
 ORACLE_SYS = """You are analysing a failed run of a relay of LLM agents. The relay: N agents work one after another on a
@@ -71,7 +73,7 @@ class TinkerAsk:
 
 def default_clients():
     if ORACLE_BACKEND == "tinker":
-        return TinkerAsk(ORACLE_MODEL, 20000, 600), TinkerAsk(GROUND_MODEL, 3000, 120)
+        return TinkerAsk(ORACLE_MODEL, 20000, 600), TinkerAsk(GROUND_MODEL, 8000, 300)
     return (PplxResponses(model=ORACLE_MODEL, effort="high", max_output_tokens=6000),
             PplxResponses(model=GROUND_MODEL, effort="low", max_output_tokens=300))
 

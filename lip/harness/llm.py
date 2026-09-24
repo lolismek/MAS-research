@@ -21,9 +21,22 @@ _log_lock = threading.Lock()
 
 TINKER_BASE = "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1"
 TINKER_MODEL = "Qwen/Qwen3.6-35B-A3B"
-TINKER_RATES = {"Qwen/Qwen3.6-35B-A3B": (0.36, 0.89),   # $/M prompt, $/M completion (console, 2026-06-27)
-                "openai/gpt-oss-120b": (0.36, 0.89),    # judge; rate not read from the console, Qwen rate used as the estimate
-                "Qwen/Qwen3.5-397B-A17B": (2.0, 6.0)}   # two-atom task generation; rate not read from the console, deliberately high placeholder
+# $/M prompt, $/M completion: Tinker list prices (tinker-docs .../tinker/models/, read 2026-09-24). Cached prefill is
+# billed at 20% of prefill, which we can't see in the API response, so logged costs are an upper bound on the bill.
+# Calls logged before 2026-09-24 used older rates (Qwen3.6 0.36/0.89, Qwen3.5-397B 2/6); list_cost() re-prices them.
+TINKER_RATES = {"Qwen/Qwen3.6-35B-A3B": (0.54, 1.335),
+                "openai/gpt-oss-120b": (0.33, 0.84),
+                "openai/gpt-oss-120b:peft:131072": (0.78, 1.94),
+                "Qwen/Qwen3.5-397B-A17B": (3.00, 7.50),
+                "Qwen/Qwen3.5-397B-A17B:peft:262144": (4.00, 10.00)}
+TINKER_RATE_UNKNOWN = (7.48, 18.72)   # unlisted model: the priciest listed rate (Inkling 256K), so caps err on the safe side
+
+def list_cost(rec):
+    """a logged call's cost re-priced at the current TINKER_RATES (tinker calls with token counts), else its logged cost."""
+    if rec.get("backend") != "tinker" or not (rec.get("prompt_tokens") or rec.get("completion_tokens")):
+        return rec.get("cost_usd", 0.0) or 0.0
+    pr, cr = TINKER_RATES.get(rec.get("model"), TINKER_RATE_UNKNOWN)
+    return ((rec.get("prompt_tokens") or 0) * pr + (rec.get("completion_tokens") or 0) * cr) / 1e6
 
 HARD_CAP = float(os.environ.get("LIP_HARD_CAP", "0") or 0)   # total logged USD; 0 = no cap
 _cache = dict(t=0.0, file=0.0, delta=0.0)   # cached file total + costs logged by this process since the last read
@@ -46,7 +59,9 @@ def _read_log(tag_prefix=None):
     for line in open(LOG_PATH):
         try: r = json.loads(line)
         except Exception: continue          # partial line from a concurrent writer
-        if tag_prefix is None or str(r.get("tag", "")).startswith(tag_prefix): tot += r.get("cost_usd", 0.0)
+        # per-experiment totals are re-priced at current rates; the global total (shared CAP file) keeps logged costs
+        if tag_prefix is None: tot += r.get("cost_usd", 0.0) or 0.0
+        elif str(r.get("tag", "")).startswith(tag_prefix): tot += list_cost(r)
     return tot
 
 def spend(tag_prefix=None, fresh=False):
@@ -80,7 +95,7 @@ def exp_spend():
                 try: r = json.loads(line)
                 except Exception: continue
                 tg = str(r.get("tag", ""))
-                if tg.startswith(EXP_PREFIX) or tg.startswith("judge/" + EXP_PREFIX): tot += r.get("cost_usd", 0.0) or 0.0
+                if tg.startswith(EXP_PREFIX) or tg.startswith("judge/" + EXP_PREFIX): tot += list_cost(r)
             _exp_cache.update(t=time.time(), v=tot)
         return _exp_cache["v"]
 
@@ -159,7 +174,7 @@ class TinkerChat:
         clean, calls = parse_tool_calls(content)
         u = r.usage
         pt, ct = (u.prompt_tokens, u.completion_tokens) if u else (0, 0)
-        pr, cr = TINKER_RATES.get(self.model, (0.36, 0.89))
+        pr, cr = TINKER_RATES.get(self.model, TINKER_RATE_UNKNOWN)
         cost = (pt * pr + ct * cr) / 1e6
         _log(dict(tag=tag, backend="tinker", model=self.model, prompt_tokens=pt, completion_tokens=ct,
                   cost_usd=cost, latency_s=round(lat, 2), finish=r.choices[0].finish_reason))
