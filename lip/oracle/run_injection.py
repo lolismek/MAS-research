@@ -17,6 +17,7 @@ from relay import run_relay
 from judge import score
 from enhance import enhance, conditions
 from run_task import save, TRACES, DATA, load_tasks, _done
+from bench import CFG as BENCH_CFG
 
 CONDS = ["enhanced", "original", "random", "passthrough"]
 
@@ -72,7 +73,7 @@ def main():
     ap.add_argument("ids", nargs="*"); ap.add_argument("--all", action="store_true")
     ap.add_argument("--m", type=int, default=3); ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--conds", default=",".join(CONDS)); ap.add_argument("--skip-done", action="store_true")
-    ap.add_argument("--tasks", default=os.path.join(DATA, "tasks_screened.jsonl")); ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--tasks", default=BENCH_CFG["tasks"]); ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--budget", type=float, default=5.0)
     ap.add_argument("--arm", default="relay", help="arm whose failed runs are the source traces")
     ap.add_argument("--out", default="inj", help="traces subdir for this injection experiment")

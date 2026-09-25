@@ -19,6 +19,7 @@ import json, os, re, sys, time
 sys.path.insert(0, os.path.dirname(__file__))
 from llm import tools_to_prompt
 from tools import TOOL_SPECS, render
+from bench import CFG as BENCH_CFG
 
 NUDGES = 2
 
@@ -80,7 +81,8 @@ BAD_FINISH_REASK = ("finish(answer) must contain only a short answer to the ques
                     "not a message or explanation. If you have the answer, call finish with just the answer; otherwise keep working.")
 _BAD_FINISH = re.compile(r"next agent|agent \d|I (found|could not|couldn't|need)|please", re.I)
 def valid_finish(ans):
-    return bool(ans) and len(ans) <= 200 and len(ans.split()) <= 25 and not _BAD_FINISH.search(ans)
+    return (bool(ans) and len(ans) <= BENCH_CFG["finish_chars"] and len(ans.split()) <= BENCH_CFG["finish_words"]
+            and not _BAD_FINISH.search(ans))
 HANDOFF_PROMPT_NOFINISH = ("Your tool budget is spent. Write the message to the next agent: they start with a fresh context and will "
                            "see only the question and your message, so write whatever you think they need to finish the task, in "
                            "whatever form you think best. Plain text only; search, open and finish are disabled.")

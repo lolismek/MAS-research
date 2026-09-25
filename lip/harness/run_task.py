@@ -11,6 +11,7 @@ from llm import TinkerChat, spend, BudgetExceeded, current_cap, exp_spent
 from tools import Corpus
 from relay import run_relay
 from judge import score
+from bench import CFG as BENCH_CFG
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 TRACES = os.path.join(ROOT, "lip", "traces")
@@ -96,7 +97,7 @@ def main():
     ap.add_argument("ids", nargs="*")
     ap.add_argument("--arm", default="relay"); ap.add_argument("--n", type=int, default=4); ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--runs", type=int, default=1); ap.add_argument("--all", action="store_true")
-    ap.add_argument("--tasks", default=os.path.join(DATA, "tasks_screened.jsonl"))
+    ap.add_argument("--tasks", default=BENCH_CFG["tasks"])
     ap.add_argument("--limit", type=int, default=0); ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--holder", choices=sorted(HOLDERS), default=None,
                     help="internal-belief experiment: who gets the task's belief as a private briefing (needs --tasks tasks_internal.jsonl)")

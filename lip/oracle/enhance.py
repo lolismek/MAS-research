@@ -11,6 +11,7 @@ import json, os, random, re, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "harness"))
 from llm import PplxResponses, TinkerChat, ContextTooLong
 from relay import render_prefix, spans
+from bench import CFG as BENCH_CFG
 
 # LIP_ORACLE=pplx (default; gpt-5.5 oracle + gpt-5.4-mini grounder via Perplexity, the 2026-09-14 N=8 batch) or
 # tinker (Qwen3.5-397B oracle + grounder on Tinker; Perplexity out of quota 2026-09-23)
@@ -26,7 +27,7 @@ MAX_WORDS = 300
 
 ORACLE_SYS = """You are analysing a failed run of a relay of LLM agents. The relay: N agents work one after another on a
 single question. Each agent starts with a fresh context, sees only the question and the written message from
-the previous agent, has a small budget of tool calls (search / open over an offline Wikipedia snapshot), and
+the previous agent, has a small budget of tool calls (search / open over """ + BENCH_CFG["oracle_desc"] + """), and
 then writes a message to the next agent. The relay's final answer was wrong.
 
 Your job is NOT to solve the question. Your job is to find information that was LOST IN PROPAGATION: information

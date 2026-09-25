@@ -3,17 +3,19 @@
 Corpus() loads lip/data/corpus/{pages.jsonl,index/} lazily; page texts are read from disk on
 open (cached). Chunking is character-based: CHUNK_CHARS ~ 1500 tokens.
 """
-import json, os, re, threading
+import json, os, re, sys, threading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from bench import CFG as BENCH_CFG
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CORPUS = os.environ.get("LIP_CORPUS") or os.path.abspath(os.path.join(HERE, "..", "data", "corpus"))
+CORPUS = os.environ.get("LIP_CORPUS") or BENCH_CFG["corpus"]
 CHUNK_CHARS = 6000
 SNIPPET_CHARS = 160
 TOP_K = 5
 
 TOOL_SPECS = [
     {"name": "search",
-     "description": f"Keyword search over an offline snapshot of English Wikipedia. Returns the top {TOP_K} page titles with a short snippet each.",
+     "description": f"Keyword search over {BENCH_CFG['search_desc']}. Returns the top {TOP_K} page titles with a short snippet each.",
      "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "keywords to search for"}}, "required": ["query"]}},
     {"name": "open",
      "description": "Open a page by its exact title (as returned by search). Returns one chunk of the page text; use page=2,3,... for later chunks.",

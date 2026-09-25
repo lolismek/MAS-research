@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(__file__))
 from llm import TinkerChat, spend
 from judge import score
+from bench import CFG as BENCH_CFG
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DATA = os.path.join(ROOT, "lip", "data")
@@ -36,8 +37,8 @@ def run_task(t, c):
 def rerun_truncated(max_tokens=20000):
     """Re-sample, with a larger output cap, every truncated (finish=length) sample of tasks currently kept,
     so a task is not kept merely because the model ran out of thinking room."""
-    tasks = {t["id"]: t for t in (json.loads(l) for l in open(os.path.join(DATA, "tasks.jsonl")))}
-    outp = os.path.join(DATA, "closed_book.jsonl")
+    tasks = {t["id"]: t for t in (json.loads(l) for l in open(BENCH_CFG["tasks_all"]))}
+    outp = BENCH_CFG["closed_book"]
     recs = [json.loads(l) for l in open(outp)]
     c = TinkerChat(max_tokens=max_tokens)
     def fix(rec):
@@ -63,7 +64,7 @@ def rerun_truncated(max_tokens=20000):
 
 def write_screened(tasks, recs):
     keep = {r["id"] for r in recs if r["n_correct"] < 2}
-    with open(os.path.join(DATA, "tasks_screened.jsonl"), "w") as f:
+    with open(BENCH_CFG["tasks"], "w") as f:
         for tid, t in tasks.items():
             if tid in keep: f.write(json.dumps(t) + "\n")
     from collections import Counter
@@ -72,8 +73,8 @@ def write_screened(tasks, recs):
 
 def main():
     if "--rerun-truncated" in sys.argv: return rerun_truncated()
-    tasks = [json.loads(l) for l in open(os.path.join(DATA, "tasks.jsonl"))]
-    outp = os.path.join(DATA, "closed_book.jsonl")
+    tasks = [json.loads(l) for l in open(BENCH_CFG["tasks_all"])]
+    outp = BENCH_CFG["closed_book"]
     done = {json.loads(l)["id"] for l in open(outp)} if os.path.exists(outp) else set()
     todo = [t for t in tasks if t["id"] not in done]
     print(f"closed-book: {len(tasks)} tasks, {len(todo)} to run", flush=True)
