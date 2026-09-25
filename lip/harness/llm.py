@@ -51,10 +51,12 @@ class ContextTooLong(RuntimeError):
 
 def _log(rec):
     rec = dict(ts=time.time(), **rec)
+    if SESSION: rec["session"] = SESSION
     with _log_lock:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
         with open(LOG_PATH, "a") as f: f.write(json.dumps(rec) + "\n")
         _cache["delta"] += rec.get("cost_usd", 0.0) or 0.0
+        if SESSION: _sess_cache["delta"] += rec.get("cost_usd", 0.0) or 0.0
 
 def _read_log(tag_prefix=None):
     tot = 0.0
@@ -105,9 +107,48 @@ def exp_spend():
 def exp_spent():
     return bool(EXP_PREFIX and EXP_CAP and exp_spend() >= EXP_CAP)
 
+# Per-session cap: LIP_SESSION=<id> LIP_SESSION_CAP=200 -> every call logged by a process with this LIP_SESSION carries
+# session=<id>; once those calls reach the cap, traces/sessions/<id>.STOP is written and every later call (any process
+# of the session) raises BudgetExceeded. Calls from other sessions never count. session_watchdog.sh is the backstop.
+SESSION = os.environ.get("LIP_SESSION") or None
+SESSION_CAP = float(os.environ.get("LIP_SESSION_CAP", "0") or 0)
+SESSION_DIR = os.path.join(ROOT, "lip", "traces", "sessions")
+_sess_cache = dict(t=0.0, file=0.0, delta=0.0)
+if SESSION:
+    os.makedirs(SESSION_DIR, exist_ok=True)
+    with open(os.path.join(SESSION_DIR, f"{SESSION}.pids"), "a") as f: f.write(f"{os.getpid()}\n")
+
+def session_stop_path(session=None):
+    return os.path.join(SESSION_DIR, f"{session or SESSION}.STOP")
+
+def session_spend(session=None, fresh=False):
+    """USD logged by calls tagged with this session (cached 10 s, advanced by this process's own calls in between)."""
+    s = session or SESSION
+    if not s or not os.path.exists(LOG_PATH): return 0.0
+    def read():
+        tot = 0.0
+        for line in open(LOG_PATH):
+            if s not in line: continue
+            try: r = json.loads(line)
+            except Exception: continue
+            if r.get("session") == s: tot += r.get("cost_usd", 0.0) or 0.0
+        return tot
+    if session and session != SESSION: return read()
+    with _log_lock:
+        if fresh or time.time() - _sess_cache["t"] > 10.0:
+            _sess_cache.update(t=time.time(), file=read(), delta=0.0)
+        return _sess_cache["file"] + _sess_cache["delta"]
+
 def check_cap(tag=""):
-    """Raise BudgetExceeded if the hard cap (total logged USD; CAP file, else LIP_HARD_CAP) or the experiment cap is reached."""
-    cap = current_cap()
+    """Raise BudgetExceeded if the session cap, the hard cap (total logged USD; CAP file, else LIP_HARD_CAP) or the
+    experiment cap is reached."""
+    if SESSION:
+        if os.path.exists(session_stop_path()):
+            raise BudgetExceeded(f"session '{SESSION}' stopped ({session_stop_path()} exists) at {tag}")
+        if SESSION_CAP and session_spend() >= SESSION_CAP:
+            with open(session_stop_path(), "w") as f: f.write(f"{session_spend():.2f} >= {SESSION_CAP:.2f} at {time.ctime()}\n")
+            raise BudgetExceeded(f"session cap ${SESSION_CAP:.2f} on '{SESSION}' reached (${session_spend():.2f}) at {tag}")
+    cap = None if SESSION else current_cap()   # a session counts only its own calls, not the shared-log total
     if cap and spend() >= cap:
         raise BudgetExceeded(f"hard cap ${cap:.2f} reached (spend ${spend():.2f}) at {tag}")
     if exp_spent():
